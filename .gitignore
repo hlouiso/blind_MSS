@@ -1,0 +1,9 @@
+*.o
+commitment_gen
+sign
+prover
+verifier
+proof.bin
+signature.txt
+public_key.txt
+*.bin
