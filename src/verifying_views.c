@@ -70,10 +70,11 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
     for (int j = 0; j < 2; j++)
     {
         memcpy(final_digest[j], results[j], 32);
-        for (int i2 = 0; i2 < 32; i2++)
-            final_digest[j][32 + i2] = ~results[j][i2];
+        for (int i = 0; i < 32; i++)
+            final_digest[j][32 + i] = ~results[j][i];
     }
 
+    // WOTS leaf extraction
     uint32_t t0[2], t1[2], t2[2];
     uint32_t tmp1[8][2];
     uint32_t tmp2[8][2];
@@ -156,6 +157,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         return;
     }
 
+    // Path verification
     unsigned char shared_index[2][4];
     memcpy(shared_index[0], vx[0] + leaf_index_index, 4);
     memcpy(shared_index[1], vx[1] + leaf_index_index, 4);
@@ -256,6 +258,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         }
     }
 
+    // Verify announced outputs
     for (int i = 0; i < 8; i++)
     {
         uint32_t v0, v1;
@@ -275,14 +278,14 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         }
     }
 
-    free(inputs[0]);
-    free(inputs[1]);
-    free(results[0]);
-    free(results[1]);
-    free(sigma_i[0]);
-    free(sigma_i[1]);
-    free(giga_input[0]);
-    free(giga_input[1]);
+    // Free allocated memory
+    for (int i = 0; i < 2; i++)
+    {
+        free(inputs[i]);
+        free(results[i]);
+        free(sigma_i[i]);
+        free(giga_input[i]);
+    }
     free(randCount);
     free(countY);
 }
