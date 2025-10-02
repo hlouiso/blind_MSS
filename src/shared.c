@@ -14,7 +14,7 @@ const int nb_leaves = (1u << H);
 // ZKBoo parameters & needed values
 bool first = true;
 const int COMMIT_KEY_LEN = 32;
-const int NUM_ROUNDS = 137; // Usually 137
+const int NUM_ROUNDS = 1; // Usually 137
 const int mpc_sha256_size = 736;
 const int mpc_sha256_runs = 512 + 1 + H;
 const int sha256_extended_blocks_runs = 259;
@@ -107,8 +107,8 @@ uint32_t getRandom32(unsigned char *randomness, int randCount)
     return ret;
 }
 
-int alloc_structures(unsigned char *shares[NUM_ROUNDS][3], a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS],
-                     unsigned char *randomness[NUM_ROUNDS][3], View *localViews[NUM_ROUNDS][3])
+int alloc_structures_prove(unsigned char *shares[NUM_ROUNDS][3], a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS],
+                           unsigned char *randomness[NUM_ROUNDS][3], View *localViews[NUM_ROUNDS][3])
 {
     for (int i = 0; i < NUM_ROUNDS; i++)
     {
@@ -180,8 +180,8 @@ alloc_error:
     return -1;
 }
 
-void free_structures(unsigned char *shares[NUM_ROUNDS][3], a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS],
-                     unsigned char *randomness[NUM_ROUNDS][3], View *localViews[NUM_ROUNDS][3])
+void free_structures_prove(unsigned char *shares[NUM_ROUNDS][3], a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS],
+                           unsigned char *randomness[NUM_ROUNDS][3], View *localViews[NUM_ROUNDS][3])
 {
     for (int k = 0; k < NUM_ROUNDS; k++)
     {
@@ -224,7 +224,12 @@ void H3(uint32_t y[8], a *as[NUM_ROUNDS], int s, int *es)
 
     EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
     EVP_DigestUpdate(ctx, y, 32);
-    EVP_DigestUpdate(ctx, as, sizeof(a) * s);
+
+    for (int i = 0; i < s; i++)
+    {
+        EVP_DigestUpdate(ctx, as[i], sizeof(a));
+    }
+
     EVP_DigestFinal_ex(ctx, hash, &outl);
 
     int i = 0;
@@ -331,7 +336,7 @@ alloc_error:
 
 void free_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
 {
-    for (int i = 0; i <= NUM_ROUNDS; i++)
+    for (int i = 0; i < NUM_ROUNDS; i++)
     {
         free(zs[i]->ve.y);
         free(zs[i]->ve.x);

@@ -33,7 +33,7 @@ void building_views(a *a, unsigned char message_digest[32], unsigned char *share
     results[1] = malloc(32);
     results[2] = malloc(32);
 
-    mpc_sha256_extended(inputs, 64 * 8, randomness, results, views, countY, randCount);
+    mpc_sha256(inputs, 64 * 8, randomness, results, views, countY, randCount);
 
     unsigned char final_digest[3][64];
     for (int i = 0; i < 3; i++)
@@ -125,7 +125,7 @@ void building_views(a *a, unsigned char message_digest[32], unsigned char *share
     }
     // Problem here
     // Computing the leaf
-    mpc_sha256_extended(giga_input, WOTS_len * SHA256_DIGEST_LENGTH * 8, randomness, results, views, countY, randCount);
+    mpc_sha256(giga_input, WOTS_len * SHA256_DIGEST_LENGTH * 8, randomness, results, views, countY, randCount);
 
     /* =============================== root compting =============================== */
     unsigned char *shared_index[3];
@@ -223,7 +223,7 @@ void building_views(a *a, unsigned char message_digest[32], unsigned char *share
             }
         }
 
-        mpc_sha256_extended(inputs, 64 * 8, randomness, results, views, countY, randCount);
+        mpc_sha256(inputs, 64 * 8, randomness, results, views, countY, randCount);
     }
 
     for (int i = 0; i < 8; i++)

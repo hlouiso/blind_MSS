@@ -41,6 +41,8 @@ int main(int argc, char *argv[])
         return 0;
     }
 
+    setbuf(stdout, NULL);
+
     // Getting m
     char *message = NULL;
     size_t bufferSize = 0;
@@ -231,13 +233,11 @@ int main(int argc, char *argv[])
     uint32_t t0;
 
     printf("\n===========================================================================\n");
-    printf("\nChosen number of ZKBoo rounds: %d (can be changed in 'src/shared.c')", NUM_ROUNDS);
-    printf("\nCurrently running ZKBoo round number ");
+    printf("\nChosen number of ZKBoo rounds: %d (can be changed in 'src/shared.c')\n", NUM_ROUNDS);
 
     for (int k = 0; k < NUM_ROUNDS; k++)
     {
-        printf("%d", k + 1);
-        fflush(stdout);
+        printf("Currently running ZKBoo round number %d/%d\r", k + 1, NUM_ROUNDS);
 
         for (int j = 0; j < 3; j++)
         {
@@ -267,13 +267,13 @@ int main(int argc, char *argv[])
             printf("\b");
         if (k > 98)
             printf("\b");
-        fflush(stdout);
     }
+    printf("Currently running ZKBoo round number %d/%d\n\n", NUM_ROUNDS, NUM_ROUNDS);
 
     if (error)
     {
         free_structures_prove(shares, as, zs, randomness, localViews);
-        fprintf(stderr, "\nError somewhere, signature not generated.\nThe MSS signature is not valid for the "
+        fprintf(stderr, "Error somewhere, signature not generated.\nThe MSS signature is not valid for the "
                         "message or the blinding-key r.\n\n");
         exit(EXIT_FAILURE);
     }
@@ -295,23 +295,49 @@ int main(int argc, char *argv[])
 
     for (int i = 0; i < NUM_ROUNDS; i++)
     {
-        fwrite(as[i], sizeof(a), 1, file);
-    }
-
-    for (int i = 0; i < NUM_ROUNDS; i++)
-    {
-        fwrite(zs[i], sizeof(z), 1, file);
-        fwrite(zs[i]->ve.y, sizeof(uint32_t), ySize, file);
-        fwrite(zs[i]->ve.x, sizeof(unsigned char), INPUT_LEN, file);
-        fwrite(zs[i]->ve1.y, sizeof(uint32_t), ySize, file);
-        fwrite(zs[i]->ve1.x, sizeof(unsigned char), INPUT_LEN, file);
+        if (fwrite(as[i], sizeof(a), 1, file) != 1)
+        {
+            fprintf(stderr, "Erreur fwrite as[%d]\n", i);
+        }
+        if (fwrite(zs[i]->ke, sizeof(unsigned char), 32, file) != 32)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ke\n", i);
+        }
+        if (fwrite(zs[i]->ke1, sizeof(unsigned char), 32, file) != 32)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ke1\n", i);
+        }
+        if (fwrite(zs[i]->re, sizeof(unsigned char), 32, file) != 32)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->re\n", i);
+        }
+        if (fwrite(zs[i]->re1, sizeof(unsigned char), 32, file) != 32)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->re1\n", i);
+        }
+        if (fwrite(zs[i]->ve.y, sizeof(uint32_t), ySize, file) != ySize)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ve.y\n", i);
+        }
+        if (fwrite(zs[i]->ve.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ve.x\n", i);
+        }
+        if (fwrite(zs[i]->ve1.y, sizeof(uint32_t), ySize, file) != ySize)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ve1.y\n", i);
+        }
+        if (fwrite(zs[i]->ve1.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ve1.x\n", i);
+        }
     }
 
     // free memory
     free_structures_prove(shares, as, zs, randomness, localViews);
     fclose(file);
 
-    printf("\n\n===========================================================================\n");
+    printf("===========================================================================\n");
     printf("\nSignature-Proof generated successfully in 'signature_proof.bin'.\n\n");
     return EXIT_SUCCESS;
 }

@@ -47,7 +47,7 @@ int main(int argc, char *argv[])
     FILE *file;
     int c1;
     int c2;
-    file = fopen("public_key.txt", "r");
+    file = fopen("MSS_public_key.txt", "r");
     if (file == NULL)
     {
         perror("Error opening file");
@@ -90,29 +90,35 @@ int main(int argc, char *argv[])
     z *zs[NUM_ROUNDS];
 
     int alloc = alloc_structures_verify(as, zs);
+    if (alloc == -1)
+    {
+        fprintf(stderr, "Error in allocating structures for verification\n");
+        fclose(file);
+        return EXIT_FAILURE;
+    }
 
     size_t items_read;
     bool read_error = false;
 
     for (int i = 0; i < NUM_ROUNDS; i++)
     {
-        items_read = fread(as[i], sizeof(a), 1, file);
-        if (items_read != 1)
+        if (fread(as[i], sizeof(a), 1, file) != 1)
             read_error = true;
-        items_read = fread(zs[i], sizeof(z), 1, file);
-        if (items_read != 1)
+        if (fread(zs[i]->ke, sizeof(unsigned char), 32, file) != 32)
             read_error = true;
-        items_read = fread(zs[i]->ve.y, sizeof(uint32_t), ySize, file);
-        if (items_read != ySize)
+        if (fread(zs[i]->ke1, sizeof(unsigned char), 32, file) != 32)
             read_error = true;
-        items_read = fread(zs[i]->ve.x, sizeof(unsigned char), INPUT_LEN, file);
-        if (items_read != INPUT_LEN)
+        if (fread(zs[i]->re, sizeof(unsigned char), 32, file) != 32)
             read_error = true;
-        items_read = fread(zs[i]->ve1.y, sizeof(uint32_t), ySize, file);
-        if (items_read != ySize)
+        if (fread(zs[i]->re1, sizeof(unsigned char), 32, file) != 32)
             read_error = true;
-        items_read = fread(zs[i]->ve1.x, sizeof(unsigned char), INPUT_LEN, file);
-        if (items_read != INPUT_LEN)
+        if (fread(zs[i]->ve.y, sizeof(uint32_t), ySize, file) != ySize)
+            read_error = true;
+        if (fread(zs[i]->ve.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
+            read_error = true;
+        if (fread(zs[i]->ve1.y, sizeof(uint32_t), ySize, file) != ySize)
+            read_error = true;
+        if (fread(zs[i]->ve1.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
             read_error = true;
     }
 
@@ -129,13 +135,15 @@ int main(int argc, char *argv[])
 
     // Verifying Circuit Output
 
-    for (int i = 0; i < NUM_ROUNDS; i++)
+    uint32_t t0;
+    for (int k = 0; k < NUM_ROUNDS; k++)
     {
         for (int j = 0; j < 8; j++)
         {
-            if (public_key[i] != (as[i]->yp[0][j] ^ as[i]->yp[1][j] ^ as[i]->yp[2][j]))
+            memcpy(&t0, public_key + j * 4, 4);
+            if ((as[k]->yp[0][j] ^ as[k]->yp[1][j] ^ as[k]->yp[2][j]) != t0)
             {
-                fprintf(stderr, "Outputs XOR != public-key at round %d\n", i);
+                fprintf(stderr, "Outputs XOR != public-key at round %d\n", k + 1);
                 free_structures_verify(as, zs);
                 exit(EXIT_FAILURE);
             }
@@ -147,28 +155,30 @@ int main(int argc, char *argv[])
     uint32_t y[8];
     memcpy(y, public_key, 32);
     H3(y, as, NUM_ROUNDS, es);
-    bool verify_error = false;
 
+    bool verify_error = false;
+    printf("===========================================================================\n\n");
     for (int i = 0; i < NUM_ROUNDS; i++)
     {
         printf("Verifying round %d/%d\r", i + 1, NUM_ROUNDS);
-        fflush(stdout);
         verify(digest, &verify_error, as[i], es[i], zs[i]);
     }
+    printf("Verifying round %d/%d", NUM_ROUNDS, NUM_ROUNDS);
+    printf("\n\nDone verifying all rounds.\n\n");
 
     /* ============================================================================================================= */
 
     free_structures_verify(as, zs);
 
-    printf("===========================================================================\n");
+    printf("===========================================================================\n\n");
 
     if (verify_error)
     {
-        fprintf(stderr, "\nError: invalid signature-proof\n\n");
+        fprintf(stderr, "Error: invalid signature-proof\n\n");
         exit(EXIT_FAILURE);
     }
 
-    printf("\nSignature proof verified successfully.\n\n");
+    printf("Signature proof verified successfully. The signature is valid.\n\n");
 
     return EXIT_SUCCESS;
 }

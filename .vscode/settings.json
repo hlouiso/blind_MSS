@@ -1,0 +1,22 @@
+{
+  "clang-format.executable": "clang-format",
+  "clang-format.style": "file",
+  "editor.defaultFormatter": "xaver.clang-format",
+  "[cpp]": {
+    "editor.defaultFormatter": "xaver.clang-format"
+  },
+  "editor.formatOnSave": true,
+  "files.associations": {
+    "rand.h": "c",
+    "stdio.h": "c",
+    "stdint.h": "c",
+    "shared.h": "c",
+    "building_views.h": "c",
+    "mpc_prove_functions.h": "c",
+    "string.h": "c",
+    "evp.h": "c",
+    "sha.h": "c",
+    "stdbool.h": "c",
+    "verifying_views.h": "c"
+  }
+}

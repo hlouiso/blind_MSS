@@ -29,10 +29,7 @@ void mpc_XOR2(uint32_t x[2], uint32_t y[2], uint32_t z[2]);
 
 void mpc_NEGATE2(uint32_t x[2], uint32_t z[2]);
 
-int mpc_sha256_verify(uint32_t w[64][2], unsigned char *results[2], int numBits, int *randCount, int *countY,
-                      unsigned char randomness[2][Random_Bytes_Needed], z z);
-
-int mpc_sha256_extended_verify(unsigned char *inputs[2], int numBits, unsigned char *results[2], int *randCount,
-                               int *countY, unsigned char randomness[2][Random_Bytes_Needed], View ve, View ve1);
+int mpc_ADD_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve1,
+                   unsigned char randomness[2][Random_Bytes_Needed], int *randCount, int *countY);
 
 #endif // MPC_VERIFY_FUNCTIONS_H

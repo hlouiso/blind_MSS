@@ -4,10 +4,10 @@ all:
 	mv src/SIGNER_MSS_keygen .
 	mv src/SIGNER_MSS_sign .
 	mv src/CLIENT_blind_sign .
-# 	mv src/VERIFIER_verify .
+	mv src/VERIFIER_verify .
 
 clean:
-	rm -f CLIENT_blinding_message SIGNER_MSS_keygen SIGNER_MSS_sign CLIENT_blind_sign VERIFIER_verify MSS*.txt signature-proof.bin
+	rm -f CLIENT_blinding_message SIGNER_MSS_keygen SIGNER_MSS_sign CLIENT_blind_sign VERIFIER_verify MSS*.txt *.bin
 
 help:
 	@echo "\nUsage:\n"
