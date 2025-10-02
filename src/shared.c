@@ -14,12 +14,14 @@ const int nb_leaves = (1u << H);
 // ZKBoo parameters & needed values
 bool first = true;
 const int COMMIT_KEY_LEN = 32;
-const int NUM_ROUNDS = 1; // Usually 137
+const int NUM_ROUNDS = 137; // Usually 137
 const int mpc_sha256_size = 736;
 const int mpc_sha256_runs = 512 + 1 + H;
 const int sha256_extended_blocks_runs = 259;
 const int ySize = 588552;
 const int Random_Bytes_Needed = 2337440;
+
+bool debugging = true;
 
 /* 16740 bytes = COMMIT_KEY_LEN (32 bytes) + leaf_index (4 bytes) + Sigma_size (512 * 32 bytes) + PATH (10*32 bytes) */
 const int INPUT_LEN = 16740;

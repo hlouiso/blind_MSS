@@ -113,36 +113,31 @@ void mpc_NEGATE2(uint32_t x[2], uint32_t z[2])
     z[1] = ~x[1];
 }
 
-int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *results[2], int *randCount,
-                               int *countY, unsigned char randomness[2][Random_Bytes_Needed], View ve, View ve1)
+int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *results[2], int *randCount, int *countY,
+                      unsigned char randomness[2][Random_Bytes_Needed], View ve, View ve1)
 {
-    // Compute SHA-256 padding for an arbitrary bit-length message (numBits)
     const uint64_t bitlen64 = (uint64_t)((numBits < 0) ? 0 : numBits);
     const size_t fullBytes = (size_t)(bitlen64 >> 3);
     const int remBits = (int)(bitlen64 & 7);
     const size_t srcBytes = fullBytes + (remBits ? 1 : 0);
-    const size_t bytesBeforeLen = fullBytes + 1; // +1 for the 0x80 bit (or partial 1-bit in the same byte)
+    const size_t bytesBeforeLen = fullBytes + 1;
     const size_t padZeroBytes = (size_t)((56 - (bytesBeforeLen % 64) + 64) % 64);
-    const size_t totalLen = bytesBeforeLen + padZeroBytes + 8; // final 8 bytes store bit length (big endian)
+    const size_t totalLen = bytesBeforeLen + padZeroBytes + 8;
     const size_t nBlocks = totalLen / 64;
 
-    // Build padded messages for the two opened views
     unsigned char *padded[2] = {NULL, NULL};
     for (int i = 0; i < 2; i++)
     {
         padded[i] = (unsigned char *)calloc(totalLen, 1);
         if (!padded[i])
         {
-            // Allocation failure -> reject
             return 1;
         }
         if (srcBytes)
             memcpy(padded[i], inputs[i], srcBytes);
 
-        // Append the 1 bit
         if (remBits)
         {
-            // Keep the existing remBits and append a single '1' bit immediately after
             padded[i][fullBytes] &= (unsigned char)(0xFFu << (8 - remBits));
             padded[i][fullBytes] |= (unsigned char)(0x80u >> remBits);
         }
@@ -151,7 +146,6 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
             padded[i][fullBytes] = 0x80u;
         }
 
-        // Append 64-bit big-endian length (in bits)
         uint64_t L = bitlen64;
         padded[i][totalLen - 1] = (unsigned char)(L & 0xFFu);
         padded[i][totalLen - 2] = (unsigned char)((L >> 8) & 0xFFu);
@@ -163,18 +157,15 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
         padded[i][totalLen - 8] = (unsigned char)((L >> 56) & 0xFFu);
     }
 
-    // Initial hash value H0..H7 (replicated for the two opened views)
     uint32_t H[8][2] = {{hA[0], hA[0]}, {hA[1], hA[1]}, {hA[2], hA[2]}, {hA[3], hA[3]},
                         {hA[4], hA[4]}, {hA[5], hA[5]}, {hA[6], hA[6]}, {hA[7], hA[7]}};
 
-    // Working buffers
     uint32_t w[64][2];
     uint32_t a[2], b[2], c[2], d[2], e[2], f[2], g[2], h[2];
     uint32_t s0[2], s1[2], t0[2], t1[2], maj[2], temp1[2], temp2[2];
 
     for (size_t blk = 0; blk < nBlocks; blk++)
     {
-        // Load message schedule w[0..15] from the padded message (big-endian bytes)
         for (int i = 0; i < 2; i++)
         {
             const unsigned char *base = padded[i] + blk * 64;
@@ -185,7 +176,6 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
             }
         }
 
-        // Expand the message schedule
         for (int j = 16; j < 64; j++)
         {
             mpc_RIGHTROTATE2(w[j - 15], 7, t0);
@@ -220,7 +210,6 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
             }
         }
 
-        // Initialize working variables from current hash value
         memcpy(a, H[0], sizeof(a));
         memcpy(b, H[1], sizeof(b));
         memcpy(c, H[2], sizeof(c));
@@ -230,17 +219,14 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
         memcpy(g, H[6], sizeof(g));
         memcpy(h, H[7], sizeof(h));
 
-        // Main compression loop
         for (int i = 0; i < 64; i++)
         {
-            // Σ1(e)
             mpc_RIGHTROTATE2(e, 6, t0);
             mpc_RIGHTROTATE2(e, 11, t1);
             mpc_XOR2(t0, t1, t0);
             mpc_RIGHTROTATE2(e, 25, t1);
             mpc_XOR2(t0, t1, s1);
 
-            // temp1 = h + Σ1(e)
             if (mpc_ADD_verify(h, s1, t0, ve, ve1, randomness, randCount, countY) == 1)
             {
                 for (int ii = 0; ii < 2; ii++)
@@ -248,7 +234,6 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
                 return 1;
             }
 
-            // temp1 += Ch(e,f,g)
             if (mpc_CH_verify(e, f, g, t1, ve, ve1, randomness, randCount, countY) == 1)
             {
                 for (int ii = 0; ii < 2; ii++)
@@ -262,7 +247,6 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
                 return 1;
             }
 
-            // temp1 += K[i]  (public constant injected as {k[i], k[i]} share)
             uint32_t Kpair[2] = {k[i], k[i]};
             if (mpc_ADD_verify(t1, Kpair, t1, ve, ve1, randomness, randCount, countY) == 1)
             {
@@ -271,7 +255,6 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
                 return 1;
             }
 
-            // temp1 += w[i]
             if (mpc_ADD_verify(t1, w[i], temp1, ve, ve1, randomness, randCount, countY) == 1)
             {
                 for (int ii = 0; ii < 2; ii++)
@@ -279,14 +262,12 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
                 return 1;
             }
 
-            // Σ0(a)
             mpc_RIGHTROTATE2(a, 2, t0);
             mpc_RIGHTROTATE2(a, 13, t1);
             mpc_XOR2(t0, t1, t0);
             mpc_RIGHTROTATE2(a, 22, t1);
             mpc_XOR2(t0, t1, s0);
 
-            // temp2 = Σ0(a) + Maj(a,b,c)
             if (mpc_MAJ_verify(a, b, c, maj, ve, ve1, randomness, randCount, countY) == 1)
             {
                 for (int ii = 0; ii < 2; ii++)
@@ -300,7 +281,6 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
                 return 1;
             }
 
-            // Rotate the working variables
             memcpy(h, g, sizeof(uint32_t) * 2);
             memcpy(g, f, sizeof(uint32_t) * 2);
             memcpy(f, e, sizeof(uint32_t) * 2);
@@ -321,7 +301,6 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
             }
         }
 
-        // Add the compressed chunk to the current hash value
         if (mpc_ADD_verify(H[0], a, H[0], ve, ve1, randomness, randCount, countY) == 1 ||
             mpc_ADD_verify(H[1], b, H[1], ve, ve1, randomness, randCount, countY) == 1 ||
             mpc_ADD_verify(H[2], c, H[2], ve, ve1, randomness, randCount, countY) == 1 ||
@@ -337,11 +316,9 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
         }
     }
 
-    // Free temporary padded messages
     for (int i = 0; i < 2; i++)
         free(padded[i]);
 
-    // Write the final digest into results[0] and results[1] as big-endian bytes
     for (int i = 0; i < 8; i++)
     {
         mpc_RIGHTSHIFT2(H[i], 24, t0);
@@ -358,6 +335,8 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
 
         results[0][i * 4 + 3] = (unsigned char)H[i][0];
         results[1][i * 4 + 3] = (unsigned char)H[i][1];
+
+        (*countY)++;
     }
 
     return 0;

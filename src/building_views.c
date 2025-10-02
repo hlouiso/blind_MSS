@@ -63,6 +63,7 @@ void building_views(a *a, unsigned char message_digest[32], unsigned char *share
     giga_input[1] = malloc(WOTS_len * SHA256_DIGEST_LENGTH);
     giga_input[2] = malloc(WOTS_len * SHA256_DIGEST_LENGTH);
 
+    bool error = true;
     for (int i = 0; i < WOTS_len; i++)
     {
         // tmp1 = sigma_i & MASK
@@ -83,7 +84,6 @@ void building_views(a *a, unsigned char message_digest[32], unsigned char *share
             {
                 memcpy(&t0[k], &sigma_i[k][j * 4], 4);
             }
-
             mpc_AND(t0, MASK, tmp1[j], randomness, randCount, views, countY);
         }
 

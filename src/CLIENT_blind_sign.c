@@ -270,14 +270,6 @@ int main(int argc, char *argv[])
     }
     printf("Currently running ZKBoo round number %d/%d\n\n", NUM_ROUNDS, NUM_ROUNDS);
 
-    if (error)
-    {
-        free_structures_prove(shares, as, zs, randomness, localViews);
-        fprintf(stderr, "Error somewhere, signature not generated.\nThe MSS signature is not valid for the "
-                        "message or the blinding-key r.\n\n");
-        exit(EXIT_FAILURE);
-    }
-
     // Generating e
     int es[NUM_ROUNDS];
     uint32_t y[8];
@@ -336,6 +328,13 @@ int main(int argc, char *argv[])
     // free memory
     free_structures_prove(shares, as, zs, randomness, localViews);
     fclose(file);
+
+    if (error)
+    {
+        fprintf(stderr, "Error somewhere, the MSS signature is not valid for the "
+                        "message or the blinding-key r. The generated proof is invalid.\n\n");
+        exit(EXIT_FAILURE);
+    }
 
     printf("===========================================================================\n");
     printf("\nSignature-Proof generated successfully in 'signature_proof.bin'.\n\n");

@@ -18,7 +18,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
     H_com(z->ke, &z->ve, &z->re, hash);
     if (memcmp(a->h[e], hash, 32) != 0)
     {
-        printf("[DEBUG] Erreur: hash e\n");
+        printf("[DEBUG][round %d] Error: hash e\n", e);
         *error = true;
         return;
     }
@@ -26,7 +26,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
     H_com(z->ke1, &z->ve1, &z->re1, hash);
     if (memcmp(a->h[(e + 1) % 3], hash, 32) != 0)
     {
-        printf("[DEBUG] Erreur: hash e+1\n");
+        printf("[DEBUG][round %d] Error: hash e+1\n", e);
         *error = true;
         return;
     }
@@ -61,7 +61,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
 
     if (mpc_sha256_verify(inputs, 64 * 8, results, randCount, countY, randomness, z->ve, z->ve1) == 1)
     {
-        printf("[DEBUG] Erreur: mpc_sha256_verify (inputs)\n");
+        printf("[DEBUG][round %d] Error: mpc_sha256_verify (inputs)\n", e);
         *error = true;
         return;
     }
@@ -99,16 +99,17 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         for (int j = 0; j < 2; j++)
         {
             bit[j] = (final_digest[j][i / 8] >> (7 - (i % 8))) & 1;
-            MASK[j] = (uint32_t) - (bit[j]);
+            MASK[j] = -bit[j];
         }
 
         for (int j = 0; j < 8; j++)
         {
             memcpy(&t0[0], sigma_i[0] + j * 4, 4);
             memcpy(&t0[1], sigma_i[1] + j * 4, 4);
+
             if (mpc_AND_verify(t0, MASK, tmp1[j], z->ve, z->ve1, randomness, randCount, countY) == 1)
             {
-                printf("[DEBUG] Erreur: mpc_AND_verify (tmp1, WOTS)\n");
+                printf("[DEBUG][round %d] Error: mpc_AND_verify (tmp1, WOTS)\n", e);
                 *error = true;
                 return;
             }
@@ -116,13 +117,13 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
 
         for (int j = 0; j < 2; j++)
         {
-            MASK[j] = (uint32_t) - ((bit[j]) ^ 1);
+            MASK[j] = -((bit[j]) ^ 1);
         }
 
         if (mpc_sha256_verify(sigma_i, SHA256_DIGEST_LENGTH * 8, results, randCount, countY, randomness, z->ve,
                               z->ve1) == 1)
         {
-            printf("[DEBUG] Erreur: mpc_sha256_verify (sigma_i)\n");
+            printf("[DEBUG][round %d] Error: mpc_sha256_verify (sigma_i)\n", e);
             *error = true;
             return;
         }
@@ -133,7 +134,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
             memcpy(&t0[1], results[1] + j * 4, 4);
             if (mpc_AND_verify(t0, MASK, tmp2[j], z->ve, z->ve1, randomness, randCount, countY) == 1)
             {
-                printf("[DEBUG] Erreur: mpc_AND_verify (tmp2, WOTS)\n");
+                printf("[DEBUG][round %d] Error: mpc_AND_verify (tmp2, WOTS)\n", e);
                 *error = true;
                 return;
             }
@@ -150,7 +151,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
     if (mpc_sha256_verify(giga_input, WOTS_len * SHA256_DIGEST_LENGTH * 8, results, randCount, countY, randomness,
                           z->ve, z->ve1) == 1)
     {
-        printf("[DEBUG] Erreur: mpc_sha256_verify (giga_input)\n");
+        printf("[DEBUG][round %d] Error: mpc_sha256_verify (giga_input)\n", e);
         *error = true;
         return;
     }
@@ -165,7 +166,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         {
             int b = (shared_index[j][3 - (i / 8)] >> (i % 8)) & 1;
             bit[j] = b;
-            MASK[j] = (uint32_t) - (b ^ 1);
+            MASK[j] = -(b ^ 1);
         }
 
         for (int j = 0; j < 8; j++)
@@ -174,7 +175,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
             memcpy(&t0[1], results[1] + j * 4, 4);
             if (mpc_AND_verify(t0, MASK, tmp1[j], z->ve, z->ve1, randomness, randCount, countY) == 1)
             {
-                printf("[DEBUG] Erreur: mpc_AND_verify (tmp1, PATH)\n");
+                printf("[DEBUG][round %d] Error: mpc_AND_verify (tmp1, PATH)\n", e);
                 *error = true;
                 return;
             }
@@ -182,7 +183,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
 
         for (int j = 0; j < 2; j++)
         {
-            MASK[j] = (uint32_t) - (bit[j]);
+            MASK[j] = -bit[j];
         }
 
         for (int j = 0; j < 8; j++)
@@ -191,7 +192,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
             memcpy(&t0[1], vx[1] + path_index + i * SHA256_DIGEST_LENGTH + j * 4, 4);
             if (mpc_AND_verify(t0, MASK, tmp2[j], z->ve, z->ve1, randomness, randCount, countY) == 1)
             {
-                printf("[DEBUG] Erreur: mpc_AND_verify (tmp2, PATH)\n");
+                printf("[DEBUG][round %d] Error: mpc_AND_verify (tmp2, PATH)\n", e);
                 *error = true;
                 return;
             }
@@ -212,7 +213,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         {
             int b = (shared_index[j][3 - (i / 8)] >> (i % 8)) & 1;
             bit[j] = b;
-            MASK[j] = (uint32_t) - (b);
+            MASK[j] = -b;
         }
 
         for (int j = 0; j < 8; j++)
@@ -225,7 +226,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
 
         for (int j = 0; j < 2; j++)
         {
-            MASK[j] = (uint32_t) - (bit[j] ^ 1);
+            MASK[j] = -(bit[j] ^ 1);
         }
 
         for (int j = 0; j < 8; j++)
@@ -249,7 +250,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
 
         if (mpc_sha256_verify(inputs, 64 * 8, results, randCount, countY, randomness, z->ve, z->ve1) == 1)
         {
-            printf("[DEBUG] Erreur: mpc_sha256_verify (inputs, PATH)\n");
+            printf("[DEBUG][round %d] Error: mpc_sha256_verify (inputs, PATH)\n", e);
             *error = true;
             return;
         }
@@ -262,13 +263,13 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         memcpy(&v1, results[1] + i * 4, 4);
         if (v0 != a->yp[e][i])
         {
-            printf("[DEBUG] Erreur: yp[e][%d]\n", i);
+            printf("[DEBUG][round %d] Error: yp[e][%d]\n", e, i);
             *error = true;
             return;
         }
         if (v1 != a->yp[(e + 1) % 3][i])
         {
-            printf("[DEBUG] Erreur: yp[e+1][%d]\n", i);
+            printf("[DEBUG][round %d] Error: yp[e+1][%d]\n", e, i);
             *error = true;
             return;
         }

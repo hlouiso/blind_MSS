@@ -22,6 +22,8 @@ extern const int output_nb_in_uint32;
 extern const int Random_Bytes_Needed;
 extern const int sha256_extened_blocks_runs;
 
+extern bool debug;
+
 /* 16740 bytes = COMMIT_KEY_LEN (32 bytes) + leaf_index (4 bytes) + Sigma_size (512*32 bytes) + PATH (10*32 bytes) */
 extern const int INPUT_LEN;
 
