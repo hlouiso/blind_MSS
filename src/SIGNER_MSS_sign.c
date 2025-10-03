@@ -184,6 +184,21 @@ int main(int argc, char *argv[])
     fclose(f);
     free(message);
 
+    /* ============================== Mise à jour MSS_secret_key.txt ============================== */
+    leaf_idx++;
+    FILE *fkey = fopen("MSS_secret_key.txt", "w");
+    if (fkey == NULL)
+    {
+        fprintf(stderr, "Error updating MSS_secret_key.txt\n");
+        return EXIT_FAILURE;
+    }
+    for (int i = 0; i < 32; i++)
+    {
+        fprintf(fkey, "%02X", sk_seed[i]);
+    }
+    fprintf(fkey, "\n%u\n", leaf_idx);
+    fclose(fkey);
+
     printf("\nMSS_signature.txt generated\n\n");
     printf("Reminder: MSS_signature = (leaf_index, WOTS signature, PATH)\n\n");
 
