@@ -14,11 +14,13 @@ void pk_extract(unsigned char sk_seed[32])
     unsigned char *level = malloc(nb_leaves * N);
     unsigned char *leafbuf = malloc(WOTS_len * N);
 
-    for (uint32_t leaf = 0; leaf < nb_leaves; leaf++)
+    uint32_t n_leaves = (uint32_t)nb_leaves;
+    uint32_t wots_len = (uint32_t)WOTS_len;
+    for (uint32_t leaf = 0; leaf < n_leaves; leaf++)
     {
         unsigned char sk[N], pk[N];
         unsigned char *w = leafbuf;
-        for (uint32_t i = 0; i < WOTS_len; i++)
+        for (uint32_t i = 0; i < wots_len; i++)
         {
             prf_aes256_ctr_32(sk_seed, leaf, i, sk);
             sha256_once(sk, N, pk);
@@ -49,13 +51,14 @@ void pk_extract(unsigned char sk_seed[32])
 
     /* Public key writing */
     FILE *f = fopen("MSS_public_key.txt", "w");
-    for (size_t i = 0; i < N; i++)
+
+    for (size_t i = 0; i < 32; i++)
         fprintf(f, "%02X", level[i]);
     fprintf(f, "\n");
     fclose(f);
 
     printf("Your public key is:\n");
-    for (size_t i = 0; i < N; i++)
+    for (size_t i = 0; i < 32; i++)
     {
         printf("%02X", level[i]);
     }

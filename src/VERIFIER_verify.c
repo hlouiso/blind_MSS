@@ -107,6 +107,8 @@ int main(int argc, char *argv[])
 
     bool read_error = false;
 
+    uint32_t ysize = (uint32_t)ySize;
+    uint32_t input_len = (uint32_t)INPUT_LEN;
     for (int i = 0; i < NUM_ROUNDS; i++)
     {
         if (fread(as[i], sizeof(a), 1, file) != 1)
@@ -119,13 +121,13 @@ int main(int argc, char *argv[])
             read_error = true;
         if (fread(zs[i]->re1, sizeof(unsigned char), 32, file) != 32)
             read_error = true;
-        if (fread(zs[i]->ve.y, sizeof(uint32_t), ySize, file) != ySize)
+        if (fread(zs[i]->ve.y, sizeof(uint32_t), ysize, file) != ysize)
             read_error = true;
-        if (fread(zs[i]->ve.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
+        if (fread(zs[i]->ve.x, sizeof(unsigned char), input_len, file) != input_len)
             read_error = true;
-        if (fread(zs[i]->ve1.y, sizeof(uint32_t), ySize, file) != ySize)
+        if (fread(zs[i]->ve1.y, sizeof(uint32_t), ysize, file) != ysize)
             read_error = true;
-        if (fread(zs[i]->ve1.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
+        if (fread(zs[i]->ve1.x, sizeof(unsigned char), input_len, file) != input_len)
             read_error = true;
     }
 

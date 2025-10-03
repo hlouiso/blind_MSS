@@ -11,12 +11,14 @@ void build_path(unsigned char sk_seed[32], uint32_t leaf_idx, FILE *f)
 {
     unsigned char *level = (unsigned char *)malloc(nb_leaves * SHA256_DIGEST_LENGTH);
 
-    for (uint32_t leaf = 0; leaf < nb_leaves; leaf++)
+    uint32_t n_leaves = (uint32_t)nb_leaves;
+    uint32_t wots_len = (uint32_t)WOTS_len;
+    for (uint32_t leaf = 0; leaf < n_leaves; leaf++)
     {
-        unsigned char leaf_buf[WOTS_len * SHA256_DIGEST_LENGTH];
+        unsigned char leaf_buf[wots_len * SHA256_DIGEST_LENGTH];
         unsigned char sigma[SHA256_DIGEST_LENGTH];
 
-        for (uint32_t i = 0; i < WOTS_len; ++i)
+        for (uint32_t i = 0; i < wots_len; ++i)
         {
             prf_aes256_ctr_32(sk_seed, leaf, i, sigma);
             sha256_once(sigma, SHA256_DIGEST_LENGTH, leaf_buf + i * SHA256_DIGEST_LENGTH);

@@ -9,7 +9,7 @@ all:
 	mv src/VERIFIER_verify .
 
 clean:
-	rm -f $(PROGS) *.o MSS*.txt *.bin src/*.o
+	rm -f $(PROGS) *.o *.txt *.bin src/*.o
 
 help:
 	@echo "Usage: make <target>"

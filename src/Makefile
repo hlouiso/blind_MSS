@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O2 -Wall
+CFLAGS = -O2 -Wall -Wextra -Werror
 LDLIBS = -lcrypto
 
 PROGS = CLIENT_blinding_message SIGNER_MSS_keygen SIGNER_MSS_sign CLIENT_blind_sign VERIFIER_verify
@@ -25,5 +25,5 @@ VERIFIER_verify: VERIFIER_verify.o shared.o circuits.o MPC_verify_functions.o MP
 	$(CC) $(CFLAGS) -c $<
 
 clean:
-	rm -f $(PROGS) *.o MSS*.txt *.bin
+	rm -f $(PROGS) *.o *.txt *.bin
 
