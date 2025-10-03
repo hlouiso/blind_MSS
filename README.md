@@ -6,7 +6,7 @@ This project implements a **blind signature**  over an **MSS (Merkle Signature S
 
 ## Context
 
-This work was carried out during the final internship for the Master's degree in **Cryptology and Computer Security** at the [University of Bordeaux](https://mastercsi.labri.fr/). The internship took place in the first half of 2025 at [UPC (Barcelona)](https://www.upc.edu/ca), supervised by [Javier Herranz Sotoca](https://web.mat.upc.edu/javier.herranz/).
+This work was carried out during my final internship for the Master's degree in **Cryptology and Computer Security** at the [University of Bordeaux](https://mastercsi.labri.fr/). The internship took place in the first half of 2025 at [UPC (Barcelona)](https://www.upc.edu/ca), supervised by [Javier Herranz Sotoca](https://web.mat.upc.edu/javier.herranz/).
 
 ## Build
 
@@ -132,10 +132,6 @@ All hex in files is **UPPERCASE** without spaces.
   - Input: message `m` (stdin)
   - Reads: `MSS_public_key.txt`, `signature_proof.bin`
   - Output: success/failure (stdout)
-
-## Third-Party Notes
-
-The previous iteration of this project bundled OpenSSL 1.0.2 for compatibility with historical code. This version links against the system **libcrypto** by default. If you need strict compatibility with the Aarhus implementation, you may still build against OpenSSL 1.0.2; otherwise a modern libcrypto should work.
 
 ## References
 
