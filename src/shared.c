@@ -4,24 +4,20 @@
 #include <openssl/sha.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
+// MSS parameters
 const int H = 10;
 const int N = 32;
 const int WOTS_len = 512;
 const int nb_leaves = (1u << H);
 
 // ZKBoo parameters & needed values
-bool first = true;
 const int COMMIT_KEY_LEN = 32;
 const int NUM_ROUNDS = 137; // Usually 137
-const int mpc_sha256_size = 736;
-const int mpc_sha256_runs = 512 + 1 + H;
-const int sha256_extended_blocks_runs = 259;
-const int ySize = 588552;
+const int ySize = 584360;
 const int Random_Bytes_Needed = 2337440;
-
-bool debugging = true;
 
 /* 16740 bytes = COMMIT_KEY_LEN (32 bytes) + leaf_index (4 bytes) + Sigma_size (512 * 32 bytes) + PATH (10*32 bytes) */
 const int INPUT_LEN = 16740;
@@ -349,4 +345,58 @@ void free_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
         free(as[i]);
     }
     return;
+}
+
+bool write_to_file(FILE *file, a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
+{
+    bool write_success = true;
+    for (int i = 0; i < NUM_ROUNDS; i++)
+    {
+        if (fwrite(as[i], sizeof(a), 1, file) != 1)
+        {
+            fprintf(stderr, "Erreur fwrite as[%d]\n", i);
+            write_success = false;
+        }
+        if (fwrite(zs[i]->ke, sizeof(unsigned char), 32, file) != 32)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ke\n", i);
+            write_success = false;
+        }
+        if (fwrite(zs[i]->ke1, sizeof(unsigned char), 32, file) != 32)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ke1\n", i);
+            write_success = false;
+        }
+        if (fwrite(zs[i]->re, sizeof(unsigned char), 32, file) != 32)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->re\n", i);
+            write_success = false;
+        }
+        if (fwrite(zs[i]->re1, sizeof(unsigned char), 32, file) != 32)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->re1\n", i);
+            write_success = false;
+        }
+        if (fwrite(zs[i]->ve.y, sizeof(uint32_t), ySize, file) != ySize)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ve.y\n", i);
+            write_success = false;
+        }
+        if (fwrite(zs[i]->ve.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ve.x\n", i);
+            write_success = false;
+        }
+        if (fwrite(zs[i]->ve1.y, sizeof(uint32_t), ySize, file) != ySize)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ve1.y\n", i);
+            write_success = false;
+        }
+        if (fwrite(zs[i]->ve1.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
+        {
+            fprintf(stderr, "Erreur fwrite zs[%d]->ve1.x\n", i);
+            write_success = false;
+        }
+    }
+    return write_success;
 }

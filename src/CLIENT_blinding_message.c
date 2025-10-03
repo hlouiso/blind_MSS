@@ -20,11 +20,21 @@ int main(int argc, char *argv[])
     // help display
     if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))
     {
-        printf("\nThis binary is on the CLIENT side\n"
-               "It will get a random commitment key 'r' and print it in UPPERCASE hexadecimal (64 "
-               "characters).\nAfter that, it will compute the commitment = SHA256(SHA256(m) || r) and print it in "
-               "UPPERCASE hexadecimal (64 characters).\n"
-               "No file.txt will be generated, you have to copy the output manually.\n");
+        printf("CLIENT_blinding_message\n"
+               "\n"
+               "Usage:\n"
+               "  ./CLIENT_blinding_message [-h|--help]\n"
+               "\n"
+               "Description:\n"
+               "  Prompts for a plaintext message, generates a random 32-byte blinding key r,\n"
+               "  and prints the 64-byte blinded message = commitment || ~commitment,\n"
+               "  with commitment = SHA256( SHA256(m) || r ).\n"
+               "\n"
+               "Input:\n"
+               "  - message m from stdin (one line)\n"
+               "Output (stdout):\n"
+               "  - r (32 bytes, 64 hex uppercase)\n"
+               "  - blinded message (64 bytes, 128 hex uppercase)\n");
         return 0;
     }
 

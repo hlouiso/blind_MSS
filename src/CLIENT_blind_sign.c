@@ -1,5 +1,4 @@
-#include "MPC_prove_functions.h"
-#include "building_views.h"
+#include "circuits.h"
 #include "shared.h"
 
 #include <stdbool.h>
@@ -33,11 +32,23 @@ int main(int argc, char *argv[])
     // help display
     if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))
     {
-        printf("\nThis binary is on the CLIENT side.\n"
-               "It builds a ZKBoo-based zero-knowledge proof of knowledge of a MSS signature of a secretly known "
-               "512 bits message commitment, which one we know secretly the key.\n"
-               "The result will be saved in 'proof.bin'.\n"
-               "You will need to run the MPC verifier to verify the proof.\n");
+        printf("CLIENT_blind_sign\n"
+               "\n"
+               "Usage:\n"
+               "  ./CLIENT_blind_sign [-h|--help]\n"
+               "\n"
+               "Description:\n"
+               "  Builds a ZKBoo/MPC-in-the-head proof that you know a valid MSS signature\n"
+               "  for the commitment of message m with blinding key r.\n"
+               "\n"
+               "Prompts:\n"
+               "  - message m (stdin)\n"
+               "  - blinding key r (32 bytes as 64 hex uppercase)\n"
+               "Reads:\n"
+               "  - MSS_signature.txt\n"
+               "  - MSS_public_key.txt\n"
+               "Output file:\n"
+               "  - signature_proof.bin\n");
         return 0;
     }
 
@@ -181,7 +192,7 @@ int main(int argc, char *argv[])
     }
     fclose(f);
 
-    /* ======================================== Allocating memory ======================================== */
+    /* ========================================== Allocating memory ========================================= */
 
     unsigned char *shares[NUM_ROUNDS][3];
     a *as[NUM_ROUNDS];
@@ -195,6 +206,8 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Error allocating memory\n");
         return EXIT_FAILURE;
     }
+
+    /* =========================================== Sharing inputs =========================================== */
 
     for (int k = 0; k < NUM_ROUNDS; k++)
     {
@@ -218,7 +231,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* ============================================== Running Circuit ============================================== */
+    /* ========================================== Running Circuit ========================================== */
 
     unsigned char hash1[SHA256_DIGEST_LENGTH];
     bool error = false;
@@ -285,49 +298,17 @@ int main(int argc, char *argv[])
     // Writing to file
     FILE *file = fopen("signature_proof.bin", "wb");
 
-    for (int i = 0; i < NUM_ROUNDS; i++)
-    {
-        if (fwrite(as[i], sizeof(a), 1, file) != 1)
-        {
-            fprintf(stderr, "Erreur fwrite as[%d]\n", i);
-        }
-        if (fwrite(zs[i]->ke, sizeof(unsigned char), 32, file) != 32)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ke\n", i);
-        }
-        if (fwrite(zs[i]->ke1, sizeof(unsigned char), 32, file) != 32)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ke1\n", i);
-        }
-        if (fwrite(zs[i]->re, sizeof(unsigned char), 32, file) != 32)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->re\n", i);
-        }
-        if (fwrite(zs[i]->re1, sizeof(unsigned char), 32, file) != 32)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->re1\n", i);
-        }
-        if (fwrite(zs[i]->ve.y, sizeof(uint32_t), ySize, file) != ySize)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ve.y\n", i);
-        }
-        if (fwrite(zs[i]->ve.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ve.x\n", i);
-        }
-        if (fwrite(zs[i]->ve1.y, sizeof(uint32_t), ySize, file) != ySize)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ve1.y\n", i);
-        }
-        if (fwrite(zs[i]->ve1.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ve1.x\n", i);
-        }
-    }
+    bool write_success = write_to_file(file, as, zs);
 
     // free memory
     free_structures_prove(shares, as, zs, randomness, localViews);
     fclose(file);
+
+    if (!write_success)
+    {
+        fprintf(stderr, "Error in writing signature_proof.bin\n\n");
+        return EXIT_FAILURE;
+    }
 
     if (error)
     {

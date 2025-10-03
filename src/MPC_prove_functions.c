@@ -307,15 +307,4 @@ void mpc_sha256(unsigned char *inputs[3], int numBits, unsigned char *randomness
         results[1][i * 4 + 3] = (unsigned char)H[i][1];
         results[2][i * 4 + 3] = (unsigned char)H[i][2];
     }
-
-    for (int i = 0; i < 8; i++)
-    {
-        views[0]->y[*countY] = (results[0][i * 4] << 24) | (results[0][i * 4 + 1] << 16) |
-                               (results[0][i * 4 + 2] << 8) | results[0][i * 4 + 3];
-        views[1]->y[*countY] = (results[1][i * 4] << 24) | (results[1][i * 4 + 1] << 16) |
-                               (results[1][i * 4 + 2] << 8) | results[1][i * 4 + 3];
-        views[2]->y[*countY] = (results[2][i * 4] << 24) | (results[2][i * 4 + 1] << 16) |
-                               (results[2][i * 4 + 2] << 8) | results[2][i * 4 + 3];
-        (*countY)++;
-    }
 }

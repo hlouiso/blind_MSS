@@ -1,5 +1,5 @@
+#include "circuits.h"
 #include "shared.h"
-#include "verifying_views.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -12,11 +12,19 @@ int main(int argc, char *argv[])
     // help display
     if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))
     {
-        printf(
-            "\nThis binary is used by anyone to verify the zero-knowledge proof of knowledge stored in 'proof.bin'.\n"
-            "This proof is used as a blind signature for a WOTS signature of a secretly known 256 bits message "
-            "commitment.\n"
-            "To verify the proof, we need the public key, stored in 'public_key.txt'.\n");
+        printf("VERIFIER_verify\n"
+               "\n"
+               "Usage:\n"
+               "  ./VERIFIER_verify [-h|--help]\n"
+               "\n"
+               "Description:\n"
+               "  Verifies signature_proof.bin against MSS_public_key.txt for a given message m.\n"
+               "\n"
+               "Prompts:\n"
+               "  - message m (stdin)\n"
+               "Reads:\n"
+               "  - MSS_public_key.txt\n"
+               "  - signature_proof.bin\n");
         return 0;
     }
 
@@ -97,7 +105,6 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    size_t items_read;
     bool read_error = false;
 
     for (int i = 0; i < NUM_ROUNDS; i++)
@@ -156,12 +163,19 @@ int main(int argc, char *argv[])
     memcpy(y, public_key, 32);
     H3(y, as, NUM_ROUNDS, es);
 
-    bool verify_error = false;
     printf("===========================================================================\n\n");
+    bool verify_error = false;
+    bool error = false;
     for (int i = 0; i < NUM_ROUNDS; i++)
     {
+        verify_error = false;
         printf("Verifying round %d/%d\r", i + 1, NUM_ROUNDS);
         verify(digest, &verify_error, as[i], es[i], zs[i]);
+        if (verify_error)
+        {
+            error = true;
+            printf("\nError verifying round %d\n", i + 1);
+        }
     }
     printf("Verifying round %d/%d", NUM_ROUNDS, NUM_ROUNDS);
     printf("\n\nDone verifying all rounds.\n\n");
@@ -172,7 +186,7 @@ int main(int argc, char *argv[])
 
     printf("===========================================================================\n\n");
 
-    if (verify_error)
+    if (error)
     {
         fprintf(stderr, "Error: invalid signature-proof\n\n");
         exit(EXIT_FAILURE);

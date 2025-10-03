@@ -57,8 +57,34 @@ void build_path(unsigned char sk_seed[32], uint32_t leaf_idx, FILE *f)
     free(cur);
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+    // help display
+    if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))
+    {
+        printf("SIGNER_MSS_sign\n"
+               "\n"
+               "Usage:\n"
+               "  ./SIGNER_MSS_sign [-h|--help]\n"
+               "\n"
+               "Description:\n"
+               "  Reads MSS_secret_key.txt and prompts for the blinded message (128 hex chars),\n"
+               "  then writes MSS_signature.txt.\n"
+               "\n"
+               "Input:\n"
+               "  - blinded message (64 bytes, 128 hex uppercase) from stdin\n"
+               "Reads:\n"
+               "  - MSS_secret_key.txt\n"
+               "Output file:\n"
+               "  - MSS_signature.txt with:\n"
+               "    * line1: leaf_index (decimal)\n"
+               "    * line2: empty\n"
+               "    * next WOTS_len (=512) lines: 32-byte chunks (64 hex uppercase)\n"
+               "    * empty line\n"
+               "    * next H (=10) lines: authentication path nodes (32 bytes each)\n");
+        return 0;
+    }
+
     /* ============================== Getting keys ============================== */
     FILE *f = fopen("MSS_secret_key.txt", "r");
     if (f == NULL)

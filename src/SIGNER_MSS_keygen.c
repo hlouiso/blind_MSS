@@ -68,6 +68,24 @@ void pk_extract(unsigned char sk_seed[32])
 
 int main(int argc, char *argv[])
 {
+    // help display
+    if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))
+    {
+        printf("SIGNER_MSS_keygen\n"
+               "\n"
+               "Usage:\n"
+               "  ./SIGNER_MSS_keygen [-h|--help]\n"
+               "\n"
+               "Description:\n"
+               "  Generates an MSS keypair (WOTS as OTS).\n"
+               "  Writes MSS_secret_key.txt and MSS_public_key.txt.\n"
+               "\n"
+               "Files:\n"
+               "  - MSS_secret_key.txt: line1=sk_seed (32 bytes, 64 hex uppercase), line2=leaf_index (decimal)\n"
+               "  - MSS_public_key.txt: Merkle root (32 bytes, 64 hex uppercase)\n");
+        return 0;
+    }
+
     unsigned char sk_seed[32] = {0};
 
     if (RAND_bytes(sk_seed, 32) != 1)

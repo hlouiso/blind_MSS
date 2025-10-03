@@ -4,6 +4,7 @@
 #include <openssl/sha.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 extern const int H;
@@ -78,5 +79,7 @@ void H3(uint32_t y[8], a *as[NUM_ROUNDS], int s, int *es);
 int alloc_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
 
 void free_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
+
+bool write_to_file(FILE *file, a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
 
 #endif

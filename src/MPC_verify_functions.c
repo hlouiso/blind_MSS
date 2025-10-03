@@ -7,8 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-int mpc_AND_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve1,
-                   unsigned char randomness[2][Random_Bytes_Needed], int *randCount, int *countY)
+int mpc_AND_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve1, unsigned char *randomness[2],
+                   int *randCount, int *countY)
 {
     uint32_t r[2] = {getRandom32(randomness[0], *randCount), getRandom32(randomness[1], *randCount)};
     *randCount += 4;
@@ -27,8 +27,8 @@ int mpc_AND_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve
     return 0;
 }
 
-int mpc_ADD_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve1,
-                   unsigned char randomness[2][Random_Bytes_Needed], int *randCount, int *countY)
+int mpc_ADD_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve1, unsigned char *randomness[2],
+                   int *randCount, int *countY)
 {
     uint32_t r[2] = {getRandom32(randomness[0], *randCount), getRandom32(randomness[1], *randCount)};
     *randCount += 4;
@@ -71,7 +71,7 @@ void mpc_RIGHTSHIFT2(uint32_t x[2], int i, uint32_t z[2])
 }
 
 int mpc_MAJ_verify(uint32_t a[2], uint32_t b[2], uint32_t c[2], uint32_t z[3], View ve, View ve1,
-                   unsigned char randomness[2][Random_Bytes_Needed], int *randCount, int *countY)
+                   unsigned char *randomness[2], int *randCount, int *countY)
 {
     uint32_t t0[3];
     uint32_t t1[3];
@@ -87,7 +87,7 @@ int mpc_MAJ_verify(uint32_t a[2], uint32_t b[2], uint32_t c[2], uint32_t z[3], V
 }
 
 int mpc_CH_verify(uint32_t e[2], uint32_t f[2], uint32_t g[2], uint32_t z[2], View ve, View ve1,
-                  unsigned char randomness[2][Random_Bytes_Needed], int *randCount, int *countY)
+                  unsigned char *randomness[2], int *randCount, int *countY)
 {
 
     uint32_t t0[3];
@@ -114,7 +114,7 @@ void mpc_NEGATE2(uint32_t x[2], uint32_t z[2])
 }
 
 int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *results[2], int *randCount, int *countY,
-                      unsigned char randomness[2][Random_Bytes_Needed], View ve, View ve1)
+                      unsigned char *randomness[2], View ve, View ve1)
 {
     const uint64_t bitlen64 = (uint64_t)((numBits < 0) ? 0 : numBits);
     const size_t fullBytes = (size_t)(bitlen64 >> 3);
@@ -335,8 +335,6 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
 
         results[0][i * 4 + 3] = (unsigned char)H[i][0];
         results[1][i * 4 + 3] = (unsigned char)H[i][1];
-
-        (*countY)++;
     }
 
     return 0;

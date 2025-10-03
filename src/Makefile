@@ -1,21 +1,29 @@
-CC = gcc -O2 -Wall
+CC = gcc
+CFLAGS = -O2 -Wall
+LDLIBS = -lcrypto
 
-all: CLIENT_blinding_message SIGNER_MSS_keygen SIGNER_MSS_sign CLIENT_blind_sign VERIFIER_verify
+PROGS = CLIENT_blinding_message SIGNER_MSS_keygen SIGNER_MSS_sign CLIENT_blind_sign VERIFIER_verify
 
-CLIENT_blinding_message: CLIENT_blinding_message.c
-	$(CC) CLIENT_blinding_message.c -o CLIENT_blinding_message -lcrypto
+all: $(PROGS)
 
-SIGNER_MSS_keygen: SIGNER_MSS_keygen.c shared.c
-	$(CC) SIGNER_MSS_keygen.c shared.c -o SIGNER_MSS_keygen -lcrypto
+CLIENT_blinding_message: CLIENT_blinding_message.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-SIGNER_MSS_sign: SIGNER_MSS_sign.c shared.c
-	$(CC) SIGNER_MSS_sign.c shared.c -o SIGNER_MSS_sign -lcrypto
+SIGNER_MSS_keygen: SIGNER_MSS_keygen.o shared.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-CLIENT_blind_sign: CLIENT_blind_sign.c shared.c building_views.c MPC_prove_functions.c
-	$(CC) CLIENT_blind_sign.c shared.c building_views.c MPC_prove_functions.c -o CLIENT_blind_sign -lcrypto
+SIGNER_MSS_sign: SIGNER_MSS_sign.o shared.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-VERIFIER_verify: VERIFIER_verify.c shared.c verifying_views.c MPC_verify_functions.c
-	$(CC) VERIFIER_verify.c shared.c verifying_views.c MPC_verify_functions.c -o VERIFIER_verify -lcrypto
+CLIENT_blind_sign: CLIENT_blind_sign.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+VERIFIER_verify: VERIFIER_verify.o shared.o circuits.o MPC_verify_functions.o MPC_prove_functions.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $<
 
 clean:
-	rm -f CLIENT_blinding_message SIGNER_MSS_keygen SIGNER_MSS_sign CLIENT_blind_sign MSS*.txt VERIFIER_verify *.bin
+	rm -f $(PROGS) *.o MSS*.txt *.bin
+
