@@ -53,7 +53,7 @@ All hex in files is **UPPERCASE** without spaces.
 - **`blinding_key.txt`** (created by `CLIENT_blinding_message`)
   - Blinding key **r** - 32 bytes (64 hex chars)
 
-- **blinded_message.txt** (created by `CLIENT_blinding_message`)
+- **`blinded_message.txt`** (created by `CLIENT_blinding_message`)
   - Blinded message - 64 bytes (128 hex chars) defined as **blinded = commitment || ~commitment** with **commitment = SHA256( SHA256(m) || r )**
 
 - **`MSS_signature.txt`** (created by `SIGNER_MSS_sign`)
