@@ -50,6 +50,12 @@ All hex in files is **UPPERCASE** without spaces.
 - **`MSS_public_key.txt`** (created by `SIGNER_MSS_keygen`)
   - Merkle-tree root — 32 bytes as 64 hex chars, newline-terminated
 
+- **`blinding_key.txt`** (created by `CLIENT_blinding_message`)
+  - Blinding key **r** - 32 bytes (64 hex chars)
+
+- **blinded_message.txt** (created by `CLIENT_blinding_message`)
+  - Blinded message - 64 bytes (128 hex chars) defined as **blinded = commitment || ~commitment** with **commitment = SHA256( SHA256(m) || r )**
+
 - **`MSS_signature.txt`** (created by `SIGNER_MSS_sign`)
   - **Line 1:** `leaf_index` — decimal
   - **Line 2:** empty line
@@ -96,7 +102,7 @@ All hex in files is **UPPERCASE** without spaces.
      - plaintext message `m` (stdin)
 
    - Reads: `blinding_key.txt`, `MSS_signature.txt`, `MSS_public_key.txt`
-   - Verifies internal consistency; on success writes **`signature_proof.bin`**.  
+   - Writes **`signature_proof.bin`**.  
      If anything is inconsistent (message or `r` doesn’t match, signature invalid, etc.), it prints an error and exits.
 
 5) **Verifier** checks the proof against the public key and message
@@ -111,20 +117,18 @@ All hex in files is **UPPERCASE** without spaces.
 
 - **CLIENT_blinding_message**
   - Input: message `m` from stdin
-  - Output (stdout): blinding key `r` (32 bytes), and the 64-byte **blinded message**
-  - Files: none
+  - Output file: `blinding_key.txt`, `blinded_message.txt`
 
 - **SIGNER_MSS_keygen**
   - Output files: `MSS_secret_key.txt`, `MSS_public_key.txt`
 
 - **SIGNER_MSS_sign**
-  - Input: blinded message (128 hex chars) from stdin
-  - Reads: `MSS_secret_key.txt`
+  - Reads: `blinded_message.txt`, `MSS_secret_key.txt`
   - Output file: `MSS_signature.txt`
 
 - **CLIENT_blind_sign**
-  - Inputs: message `m` (stdin), blinding key `r` (64 hex chars)
-  - Reads: `MSS_signature.txt`, `MSS_public_key.txt`
+  - Inputs: message `m` (stdin)
+  - Reads: `blinding_key.txt`, `MSS_signature.txt`, `MSS_public_key.txt`
   - Output file: `signature_proof.bin`
 
 - **VERIFIER_verify**
