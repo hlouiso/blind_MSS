@@ -32,9 +32,9 @@ int main(int argc, char *argv[])
                "\n"
                "Input:\n"
                "  - message m from stdin (one line)\n"
-               "Output (stdout):\n"
-               "  - r (32 bytes, 64 hex uppercase)\n"
-               "  - blinded message (64 bytes, 128 hex uppercase)\n");
+               "Files:\n"
+               "  - blinding_key.txt: r (32 bytes, 64 hex uppercase)\n"
+               "  - blinded_message.txt: blinded message (64 bytes, 128 hex uppercase)\n");
         return 0;
     }
 
@@ -66,8 +66,24 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    printf("\n===========================================================================\n");
     printf("\nBlinding-key r (32 bytes):\n\n");
     print_hex(r, BLIND_KEY_LEN);
+
+    FILE *fr = fopen("blinding_key.txt", "w");
+    if (fr)
+    {
+        for (int i = 0; i < BLIND_KEY_LEN; i++)
+            fprintf(fr, "%02X", r[i]);
+        fprintf(fr, "\n");
+        fclose(fr);
+    }
+    else
+    {
+        fprintf(stderr, "Error writing blinding_key.txt\n");
+        free(message);
+        return EXIT_FAILURE;
+    }
 
     SHA256((unsigned char *)message, strlen(message), digest1);
 
@@ -89,7 +105,26 @@ int main(int argc, char *argv[])
     printf("\n\n===========================================================================\n");
     printf("\nBlinded message (64 bytes):\n\n");
     print_hex(final_commitment, 2 * SHA256_DIGEST_LENGTH);
-    printf("\n");
+
+    FILE *fm = fopen("blinded_message.txt", "w");
+    if (fm)
+    {
+        for (int i = 0; i < 2 * SHA256_DIGEST_LENGTH; i++)
+            fprintf(fm, "%02X", final_commitment[i]);
+        fprintf(fm, "\n");
+        fclose(fm);
+    }
+    else
+    {
+        fprintf(stderr, "Error writing blinded_message.txt\n");
+        free(message);
+        return EXIT_FAILURE;
+    }
+
+    printf("\n===========================================================================\n\n");
+    printf("Blinding-key r and blinded message also written to files:\n"
+           "  - blinding_key.txt\n"
+           "  - blinded_message.txt\n\n");
 
     free(message);
 

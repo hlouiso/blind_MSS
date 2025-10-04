@@ -43,8 +43,8 @@ int main(int argc, char *argv[])
                "\n"
                "Prompts:\n"
                "  - message m (stdin)\n"
-               "  - blinding key r (32 bytes as 64 hex uppercase)\n"
                "Reads:\n"
+               "  - blinding_key.txt\n"
                "  - MSS_signature.txt\n"
                "  - MSS_public_key.txt\n"
                "Output file:\n"
@@ -74,27 +74,36 @@ int main(int argc, char *argv[])
     free(message);
 
     // Getting commitment key
-    char hexInput[2 * COMMIT_KEY_LEN + 2];
+    char hexInput[2 * COMMIT_KEY_LEN + 1];
     unsigned char commitment_key[COMMIT_KEY_LEN];
 
-    printf("\nEnter your blinding-key r in UPPERCASE hexadecimal (32 bytes = 64 hex chars):\n");
-    if (fgets(hexInput, sizeof(hexInput), stdin) == NULL)
+    FILE *f = fopen("blinding_key.txt", "r");
+    if (f == NULL)
     {
-        perror("Error reading commitment key");
+        fprintf(stderr, "Error opening blinding_key.txt\n");
         return EXIT_FAILURE;
     }
+
+    if (!fgets(hexInput, sizeof(hexInput), f))
+    {
+        fclose(f);
+        fprintf(stderr, "Error reading blinding_key.txt\n");
+        return EXIT_FAILURE;
+    }
+
+    fclose(f);
 
     for (int i = 0; i < COMMIT_KEY_LEN; i++)
     {
         unsigned int byte;
-        sscanf(&hexInput[i * 2], "%2x", &byte);
+        sscanf(&hexInput[i * 2], "%2X", &byte);
         commitment_key[i] = (unsigned char)byte;
     }
 
     // Getting MSS signature
     int c1;
     int c2;
-    FILE *f = fopen("MSS_signature.txt", "r");
+    f = fopen("MSS_signature.txt", "r");
 
     // getting leaf index
     unsigned char leaf_index_bytes[4];

@@ -176,7 +176,6 @@ int main(int argc, char *argv[])
         if (verify_error)
         {
             error = true;
-            printf("\nError verifying round %d\n", i + 1);
         }
     }
     printf("Verifying round %d/%d", NUM_ROUNDS, NUM_ROUNDS);

@@ -70,13 +70,12 @@ int main(int argc, char *argv[])
                "  ./SIGNER_MSS_sign [-h|--help]\n"
                "\n"
                "Description:\n"
-               "  Reads MSS_secret_key.txt and prompts for the blinded message (128 hex chars),\n"
+               "  Reads MSS_secret_key.txt and blinded_message.txt (128 hex chars),\n"
                "  then writes MSS_signature.txt.\n"
                "\n"
-               "Input:\n"
-               "  - blinded message (64 bytes, 128 hex uppercase) from stdin\n"
                "Reads:\n"
                "  - MSS_secret_key.txt\n"
+               "  - blinded_message.txt\n"
                "Output file:\n"
                "  - MSS_signature.txt with:\n"
                "    * line1: leaf_index (decimal)\n"
@@ -137,23 +136,26 @@ int main(int argc, char *argv[])
     }
     fprintf(f, "%d\n\n", leaf_idx);
 
-    // Getting blinded_message
-    char *message = NULL;
-    size_t bufferSize = 0;
-
-    printf("\nPlease enter the blinded message sent by the CLIENT (64 bytes long = 128 hex chars):\n");
-    int length = getline(&message, &bufferSize, stdin);
-    printf("\n===========================================================================\n");
-    if (length != 129)
+    // Reading blinded_message.txt
+    FILE *fbm = fopen("blinded_message.txt", "r");
+    if (!fbm)
     {
-        fprintf(stderr, "\nError: blinded message should be 64 bytes long = 128 hex chars\n\n");
-        free(message);
+        fprintf(stderr, "Error opening blinded_message.txt\n");
         fclose(f);
         return EXIT_FAILURE;
     }
+    char message[4 * SHA256_DIGEST_LENGTH + 1];
+    if (!fgets(message, sizeof(message), fbm))
+    {
+        fprintf(stderr, "Error reading blinded_message.txt\n");
+        fclose(fbm);
+        fclose(f);
+        return EXIT_FAILURE;
+    }
+    fclose(fbm);
 
+    // Converting hex to bytes
     unsigned char message_bits[2 * SHA256_DIGEST_LENGTH];
-
     for (int i = 0; i < 2 * SHA256_DIGEST_LENGTH; i++)
     {
         unsigned int byte;
@@ -184,7 +186,6 @@ int main(int argc, char *argv[])
     build_path(sk_seed, leaf_idx, f);
 
     fclose(f);
-    free(message);
 
     /* ============================== Mise à jour MSS_secret_key.txt ============================== */
     leaf_idx++;

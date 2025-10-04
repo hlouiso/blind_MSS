@@ -73,11 +73,10 @@ All hex in files is **UPPERCASE** without spaces.
    ./CLIENT_blinding_message
    ```
    - Prompts: plaintext message `m` (one line from stdin).
-   - Outputs to stdout:
-     - **Blinding key `r`** (32 bytes, 64 hex chars)
-     - **Blinded message** (64 bytes, 128 hex chars) defined as  
-       `commitment || ~commitment`, where  
-       `commitment = SHA256( SHA256(m) || r )`.
+
+   - Produces: 
+   - `blinding_key.txt` with **Blinding key `r`** (32 bytes, 64 hex chars)
+   - `blinded_messge.txt` with **Blinded message** (64 bytes, 128 hex chars) defined as `commitment || ~commitment`, where `commitment = SHA256( SHA256(m) || r )`.
 
    Client keeps `r` secret and sends the **blinded message** to the signer.
 
@@ -85,8 +84,8 @@ All hex in files is **UPPERCASE** without spaces.
    ```bash
    ./SIGNER_MSS_sign
    ```
-   - Reads `MSS_secret_key.txt`.
-   - Prompts for the **blinded message** (128 hex chars).
+   - Reads `MSS_secret_key.txt`, `blinded_messge.txt`
+
    - Produces `MSS_signature.txt` with: `leaf_index`, the WOTS signature (512 × 32-byte lines), and the Merkle authentication path (10 × 32-byte lines).
 
 4) **Client** produces a zero-knowledge **signature proof**
@@ -95,8 +94,8 @@ All hex in files is **UPPERCASE** without spaces.
    ```
    - Prompts for:
      - plaintext message `m` (stdin)
-     - blinding key `r` as 64 hex chars
-   - Reads: `MSS_signature.txt`, `MSS_public_key.txt`
+
+   - Reads: `blinding_key.txt`, `MSS_signature.txt`, `MSS_public_key.txt`
    - Verifies internal consistency; on success writes **`signature_proof.bin`**.  
      If anything is inconsistent (message or `r` doesn’t match, signature invalid, etc.), it prints an error and exits.
 
