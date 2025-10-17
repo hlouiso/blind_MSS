@@ -17,7 +17,7 @@ void mpc_AND(uint32_t x[3], uint32_t y[3], uint32_t z[3], unsigned char *randomn
 {
     uint32_t r[3] = {getRandom32(randomness[0], *randCount), getRandom32(randomness[1], *randCount),
                      getRandom32(randomness[2], *randCount)};
-    *randCount += 4; // Because 32 bits = 4 octets
+    *randCount += 4;
     uint32_t t[3] = {0};
 
     t[0] = (x[0] & y[1]) ^ (x[1] & y[0]) ^ (x[0] & y[0]) ^ r[0] ^ r[1];

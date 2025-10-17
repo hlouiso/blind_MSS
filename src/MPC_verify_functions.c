@@ -7,8 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-int mpc_AND_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve1, unsigned char *randomness[2],
-                   int *randCount, int *countY)
+void mpc_AND_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve1, unsigned char *randomness[2],
+                    int *randCount, int *countY)
 {
     uint32_t r[2] = {getRandom32(randomness[0], *randCount), getRandom32(randomness[1], *randCount)};
     *randCount += 4;
@@ -16,20 +16,19 @@ int mpc_AND_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve
     uint32_t t = 0;
 
     t = (x[0] & y[1]) ^ (x[1] & y[0]) ^ (x[0] & y[0]) ^ r[0] ^ r[1];
-    if (ve.y[*countY] != t)
-    {
-        return 1;
-    }
+
+    ve.y[*countY] = t;
     z[0] = t;
     z[1] = ve1.y[*countY];
 
     (*countY)++;
-    return 0;
+    return;
 }
 
-int mpc_ADD_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve1, unsigned char *randomness[2],
-                   int *randCount, int *countY)
+void mpc_ADD_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve1, unsigned char *randomness[2],
+                    int *randCount, int *countY)
 {
+    uint32_t c[2] = {0};
     uint32_t r[2] = {getRandom32(randomness[0], *randCount), getRandom32(randomness[1], *randCount)};
     *randCount += 4;
 
@@ -55,66 +54,65 @@ int mpc_ADD_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve
     z[0] = x[0] ^ y[0] ^ ve.y[*countY];
     z[1] = x[1] ^ y[1] ^ ve1.y[*countY];
     (*countY)++;
-    return 0;
+    return;
 }
 
 void mpc_RIGHTROTATE2(uint32_t x[], int i, uint32_t z[])
 {
     z[0] = RIGHTROTATE(x[0], i);
     z[1] = RIGHTROTATE(x[1], i);
+    return;
 }
 
 void mpc_RIGHTSHIFT2(uint32_t x[2], int i, uint32_t z[2])
 {
     z[0] = x[0] >> i;
     z[1] = x[1] >> i;
+    return;
 }
 
-int mpc_MAJ_verify(uint32_t a[2], uint32_t b[2], uint32_t c[2], uint32_t z[2], View ve, View ve1,
-                   unsigned char *randomness[2], int *randCount, int *countY)
+void mpc_MAJ_verify(uint32_t a[2], uint32_t b[2], uint32_t c[2], uint32_t z[2], View ve, View ve1,
+                    unsigned char *randomness[2], int *randCount, int *countY)
 {
     uint32_t t0[2];
     uint32_t t1[2];
 
     mpc_XOR2(a, b, t0);
     mpc_XOR2(a, c, t1);
-    if (mpc_AND_verify(t0, t1, z, ve, ve1, randomness, randCount, countY) == 1)
-    {
-        return 1;
-    }
+    mpc_AND_verify(t0, t1, z, ve, ve1, randomness, randCount, countY);
+
     mpc_XOR2(z, a, z);
-    return 0;
+    return;
 }
 
-int mpc_CH_verify(uint32_t e[2], uint32_t f[2], uint32_t g[2], uint32_t z[2], View ve, View ve1,
-                  unsigned char *randomness[2], int *randCount, int *countY)
+void mpc_CH_verify(uint32_t e[2], uint32_t f[2], uint32_t g[2], uint32_t z[2], View ve, View ve1,
+                   unsigned char *randomness[2], int *randCount, int *countY)
 {
 
     uint32_t t0[3];
     mpc_XOR2(f, g, t0);
-    if (mpc_AND_verify(e, t0, t0, ve, ve1, randomness, randCount, countY) == 1)
-    {
-        return 1;
-    }
+    mpc_AND_verify(e, t0, t0, ve, ve1, randomness, randCount, countY);
     mpc_XOR2(t0, g, z);
 
-    return 0;
+    return;
 }
 
 void mpc_XOR2(uint32_t x[2], uint32_t y[2], uint32_t z[2])
 {
     z[0] = x[0] ^ y[0];
     z[1] = x[1] ^ y[1];
+    return;
 }
 
 void mpc_NEGATE2(uint32_t x[2], uint32_t z[2])
 {
     z[0] = ~x[0];
     z[1] = ~x[1];
+    return;
 }
 
-int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *results[2], int *randCount, int *countY,
-                      unsigned char *randomness[2], View ve, View ve1)
+void mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *results[2], int *randCount, int *countY,
+                       unsigned char *randomness[2], View ve, View ve1)
 {
     const uint64_t bitlen64 = (uint64_t)((numBits < 0) ? 0 : numBits);
     const size_t fullBytes = (size_t)(bitlen64 >> 3);
@@ -190,24 +188,11 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
             mpc_RIGHTSHIFT2(w[j - 2], 10, t1);
             mpc_XOR2(t0, t1, s1);
 
-            if (mpc_ADD_verify(w[j - 16], s0, t1, ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int i = 0; i < 2; i++)
-                    free(padded[i]);
-                return 1;
-            }
-            if (mpc_ADD_verify(w[j - 7], t1, t1, ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int i = 0; i < 2; i++)
-                    free(padded[i]);
-                return 1;
-            }
-            if (mpc_ADD_verify(t1, s1, w[j], ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int i = 0; i < 2; i++)
-                    free(padded[i]);
-                return 1;
-            }
+            mpc_ADD_verify(w[j - 16], s0, t1, ve, ve1, randomness, randCount, countY);
+
+            mpc_ADD_verify(w[j - 7], t1, t1, ve, ve1, randomness, randCount, countY);
+
+            mpc_ADD_verify(t1, s1, w[j], ve, ve1, randomness, randCount, countY);
         }
 
         memcpy(a, H[0], sizeof(a));
@@ -227,40 +212,17 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
             mpc_RIGHTROTATE2(e, 25, t1);
             mpc_XOR2(t0, t1, s1);
 
-            if (mpc_ADD_verify(h, s1, t0, ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int j = 0; j < 2; j++)
-                    free(padded[j]);
-                return 1;
-            }
+            mpc_ADD_verify(h, s1, t0, ve, ve1, randomness, randCount, countY);
 
-            if (mpc_CH_verify(e, f, g, t1, ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int j = 0; j < 2; j++)
-                    free(padded[j]);
-                return 1;
-            }
-            if (mpc_ADD_verify(t0, t1, t1, ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int j = 0; j < 2; j++)
-                    free(padded[j]);
-                return 1;
-            }
+            mpc_CH_verify(e, f, g, t1, ve, ve1, randomness, randCount, countY);
+
+            mpc_ADD_verify(t0, t1, t1, ve, ve1, randomness, randCount, countY);
 
             uint32_t Kpair[2] = {k[i], k[i]};
-            if (mpc_ADD_verify(t1, Kpair, t1, ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int j = 0; j < 2; j++)
-                    free(padded[j]);
-                return 1;
-            }
 
-            if (mpc_ADD_verify(t1, w[i], temp1, ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int j = 0; j < 2; j++)
-                    free(padded[j]);
-                return 1;
-            }
+            mpc_ADD_verify(t1, Kpair, t1, ve, ve1, randomness, randCount, countY);
+
+            mpc_ADD_verify(t1, w[i], temp1, ve, ve1, randomness, randCount, countY);
 
             mpc_RIGHTROTATE2(a, 2, t0);
             mpc_RIGHTROTATE2(a, 13, t1);
@@ -268,52 +230,30 @@ int mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *resu
             mpc_RIGHTROTATE2(a, 22, t1);
             mpc_XOR2(t0, t1, s0);
 
-            if (mpc_MAJ_verify(a, b, c, maj, ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int j = 0; j < 2; j++)
-                    free(padded[j]);
-                return 1;
-            }
-            if (mpc_ADD_verify(s0, maj, temp2, ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int j = 0; j < 2; j++)
-                    free(padded[j]);
-                return 1;
-            }
+            mpc_MAJ_verify(a, b, c, maj, ve, ve1, randomness, randCount, countY);
+
+            mpc_ADD_verify(s0, maj, temp2, ve, ve1, randomness, randCount, countY);
 
             memcpy(h, g, sizeof(uint32_t) * 2);
             memcpy(g, f, sizeof(uint32_t) * 2);
             memcpy(f, e, sizeof(uint32_t) * 2);
-            if (mpc_ADD_verify(d, temp1, e, ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int j = 0; j < 2; j++)
-                    free(padded[j]);
-                return 1;
-            }
+
+            mpc_ADD_verify(d, temp1, e, ve, ve1, randomness, randCount, countY);
+
             memcpy(d, c, sizeof(uint32_t) * 2);
             memcpy(c, b, sizeof(uint32_t) * 2);
             memcpy(b, a, sizeof(uint32_t) * 2);
-            if (mpc_ADD_verify(temp1, temp2, a, ve, ve1, randomness, randCount, countY) == 1)
-            {
-                for (int j = 0; j < 2; j++)
-                    free(padded[j]);
-                return 1;
-            }
+            mpc_ADD_verify(temp1, temp2, a, ve, ve1, randomness, randCount, countY);
         }
 
-        if (mpc_ADD_verify(H[0], a, H[0], ve, ve1, randomness, randCount, countY) == 1 ||
-            mpc_ADD_verify(H[1], b, H[1], ve, ve1, randomness, randCount, countY) == 1 ||
-            mpc_ADD_verify(H[2], c, H[2], ve, ve1, randomness, randCount, countY) == 1 ||
-            mpc_ADD_verify(H[3], d, H[3], ve, ve1, randomness, randCount, countY) == 1 ||
-            mpc_ADD_verify(H[4], e, H[4], ve, ve1, randomness, randCount, countY) == 1 ||
-            mpc_ADD_verify(H[5], f, H[5], ve, ve1, randomness, randCount, countY) == 1 ||
-            mpc_ADD_verify(H[6], g, H[6], ve, ve1, randomness, randCount, countY) == 1 ||
-            mpc_ADD_verify(H[7], h, H[7], ve, ve1, randomness, randCount, countY) == 1)
-        {
-            for (int j = 0; j < 2; j++)
-                free(padded[j]);
-            return 1;
-        }
+        mpc_ADD_verify(H[0], a, H[0], ve, ve1, randomness, randCount, countY);
+        mpc_ADD_verify(H[1], b, H[1], ve, ve1, randomness, randCount, countY);
+        mpc_ADD_verify(H[2], c, H[2], ve, ve1, randomness, randCount, countY);
+        mpc_ADD_verify(H[3], d, H[3], ve, ve1, randomness, randCount, countY);
+        mpc_ADD_verify(H[4], e, H[4], ve, ve1, randomness, randCount, countY);
+        mpc_ADD_verify(H[5], f, H[5], ve, ve1, randomness, randCount, countY);
+        mpc_ADD_verify(H[6], g, H[6], ve, ve1, randomness, randCount, countY);
+        mpc_ADD_verify(H[7], h, H[7], ve, ve1, randomness, randCount, countY);
     }
 
     for (int i = 0; i < 2; i++)

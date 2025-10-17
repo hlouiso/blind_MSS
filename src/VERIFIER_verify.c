@@ -121,8 +121,6 @@ int main(int argc, char *argv[])
             read_error = true;
         if (fread(zs[i]->re1, sizeof(unsigned char), 32, file) != 32)
             read_error = true;
-        if (fread(zs[i]->ve.y, sizeof(uint32_t), ysize, file) != ysize)
-            read_error = true;
         if (fread(zs[i]->ve.x, sizeof(unsigned char), input_len, file) != input_len)
             read_error = true;
         if (fread(zs[i]->ve1.y, sizeof(uint32_t), ysize, file) != ysize)

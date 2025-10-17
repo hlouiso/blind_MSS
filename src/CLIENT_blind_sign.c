@@ -19,7 +19,6 @@ void prove(z *z, int e, unsigned char keys[3][32], unsigned char rs[3][32], View
 
     z->ve.x = views[e]->x;
     z->ve1.x = views[(e + 1) % 3]->x;
-    z->ve.y = views[e]->y;
     z->ve1.y = views[(e + 1) % 3]->y;
 
     memcpy(&z->re, rs[e], 32);

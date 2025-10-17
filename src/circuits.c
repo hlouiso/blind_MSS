@@ -301,11 +301,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
             memcpy(inputs[j], message_digest, 32);
     }
 
-    if (mpc_sha256_verify(inputs, 64 * 8, results, randCount, countY, randomness, z->ve, z->ve1) == 1)
-    {
-        *error = true;
-        return;
-    }
+    mpc_sha256_verify(inputs, 64 * 8, results, randCount, countY, randomness, z->ve, z->ve1);
 
     unsigned char final_digest[2][64];
     for (int j = 0; j < 2; j++)
@@ -349,11 +345,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
             memcpy(&t0[0], sigma_i[0] + j * 4, 4);
             memcpy(&t0[1], sigma_i[1] + j * 4, 4);
 
-            if (mpc_AND_verify(t0, MASK, tmp1[j], z->ve, z->ve1, randomness, randCount, countY) == 1)
-            {
-                *error = true;
-                return;
-            }
+            mpc_AND_verify(t0, MASK, tmp1[j], z->ve, z->ve1, randomness, randCount, countY);
         }
 
         for (int j = 0; j < 2; j++)
@@ -361,22 +353,13 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
             MASK[j] = -((bit[j]) ^ 1);
         }
 
-        if (mpc_sha256_verify(sigma_i, SHA256_DIGEST_LENGTH * 8, results, randCount, countY, randomness, z->ve,
-                              z->ve1) == 1)
-        {
-            *error = true;
-            return;
-        }
+        mpc_sha256_verify(sigma_i, SHA256_DIGEST_LENGTH * 8, results, randCount, countY, randomness, z->ve, z->ve1);
 
         for (int j = 0; j < 8; j++)
         {
             memcpy(&t0[0], results[0] + j * 4, 4);
             memcpy(&t0[1], results[1] + j * 4, 4);
-            if (mpc_AND_verify(t0, MASK, tmp2[j], z->ve, z->ve1, randomness, randCount, countY) == 1)
-            {
-                *error = true;
-                return;
-            }
+            mpc_AND_verify(t0, MASK, tmp2[j], z->ve, z->ve1, randomness, randCount, countY);
         }
 
         for (int j = 0; j < 8; j++)
@@ -387,12 +370,8 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         }
     }
 
-    if (mpc_sha256_verify(giga_input, WOTS_len * SHA256_DIGEST_LENGTH * 8, results, randCount, countY, randomness,
-                          z->ve, z->ve1) == 1)
-    {
-        *error = true;
-        return;
-    }
+    mpc_sha256_verify(giga_input, WOTS_len * SHA256_DIGEST_LENGTH * 8, results, randCount, countY, randomness, z->ve,
+                      z->ve1);
 
     // Path verification
     unsigned char shared_index[2][4];
@@ -412,11 +391,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         {
             memcpy(&t0[0], results[0] + j * 4, 4);
             memcpy(&t0[1], results[1] + j * 4, 4);
-            if (mpc_AND_verify(t0, MASK, tmp1[j], z->ve, z->ve1, randomness, randCount, countY) == 1)
-            {
-                *error = true;
-                return;
-            }
+            mpc_AND_verify(t0, MASK, tmp1[j], z->ve, z->ve1, randomness, randCount, countY);
         }
 
         for (int j = 0; j < 2; j++)
@@ -428,11 +403,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         {
             memcpy(&t0[0], vx[0] + path_index + i * SHA256_DIGEST_LENGTH + j * 4, 4);
             memcpy(&t0[1], vx[1] + path_index + i * SHA256_DIGEST_LENGTH + j * 4, 4);
-            if (mpc_AND_verify(t0, MASK, tmp2[j], z->ve, z->ve1, randomness, randCount, countY) == 1)
-            {
-                *error = true;
-                return;
-            }
+            mpc_AND_verify(t0, MASK, tmp2[j], z->ve, z->ve1, randomness, randCount, countY);
         }
 
         for (int j = 0; j < 8; j++)
@@ -457,8 +428,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         {
             memcpy(&t0[0], results[0] + j * 4, 4);
             memcpy(&t0[1], results[1] + j * 4, 4);
-            if (mpc_AND_verify(t0, MASK, tmp1[j], z->ve, z->ve1, randomness, randCount, countY) == 1)
-                *error = true;
+            mpc_AND_verify(t0, MASK, tmp1[j], z->ve, z->ve1, randomness, randCount, countY);
         }
 
         for (int j = 0; j < 2; j++)
@@ -470,8 +440,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         {
             memcpy(&t0[0], vx[0] + path_index + i * SHA256_DIGEST_LENGTH + j * 4, 4);
             memcpy(&t0[1], vx[1] + path_index + i * SHA256_DIGEST_LENGTH + j * 4, 4);
-            if (mpc_AND_verify(t0, MASK, tmp2[j], z->ve, z->ve1, randomness, randCount, countY) == 1)
-                *error = true;
+            mpc_AND_verify(t0, MASK, tmp2[j], z->ve, z->ve1, randomness, randCount, countY);
         }
 
         for (int j = 0; j < 8; j++)
@@ -485,11 +454,7 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
             memcpy(inputs[1] + 32 + 4 * j, &tmp[j][1], 4);
         }
 
-        if (mpc_sha256_verify(inputs, 64 * 8, results, randCount, countY, randomness, z->ve, z->ve1) == 1)
-        {
-            *error = true;
-            return;
-        }
+        mpc_sha256_verify(inputs, 64 * 8, results, randCount, countY, randomness, z->ve, z->ve1);
     }
 
     // Verify announced outputs

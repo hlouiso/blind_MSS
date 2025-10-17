@@ -377,11 +377,6 @@ bool write_to_file(FILE *file, a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
             fprintf(stderr, "Erreur fwrite zs[%d]->re1\n", i);
             write_success = false;
         }
-        if (fwrite(zs[i]->ve.y, sizeof(uint32_t), ySize, file) != ySize)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ve.y\n", i);
-            write_success = false;
-        }
         if (fwrite(zs[i]->ve.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
         {
             fprintf(stderr, "Erreur fwrite zs[%d]->ve.x\n", i);
