@@ -79,6 +79,8 @@ void mpc_ADD(uint32_t x[3], uint32_t y[3], uint32_t z[3], unsigned char *randomn
     views[1]->y[*countY] = c[1];
     views[2]->y[*countY] = c[2];
     *countY += 1;
+
+    return;
 }
 
 void mpc_ADDK(uint32_t x[3], uint32_t y, uint32_t z[3], unsigned char *randomness[3], int *randCount, View *views[3],

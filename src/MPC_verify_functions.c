@@ -28,31 +28,35 @@ void mpc_AND_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View v
 void mpc_ADD_verify(uint32_t x[2], uint32_t y[2], uint32_t z[2], View ve, View ve1, unsigned char *randomness[2],
                     int *randCount, int *countY)
 {
-    uint32_t c[2] = {0};
-    uint32_t r[2] = {getRandom32(randomness[0], *randCount), getRandom32(randomness[1], *randCount)};
+    uint32_t r0 = getRandom32(randomness[0], *randCount);
+    uint32_t r1 = getRandom32(randomness[1], *randCount);
     *randCount += 4;
 
-    uint8_t a[2], b[2];
+    uint32_t c1 = ve1.y[*countY];
 
-    uint8_t t;
+    uint32_t c0 = 0;
+
+    uint32_t x0 = x[0], y0 = y[0];
+    uint32_t x1 = x[1], y1 = y[1];
 
     for (int i = 0; i < 31; i++)
     {
-        a[0] = GETBIT(x[0] ^ ve.y[*countY], i);
-        a[1] = GETBIT(x[1] ^ ve1.y[*countY], i);
+        uint8_t a0 = GETBIT(x0 ^ c0, i);
+        uint8_t b0 = GETBIT(y0 ^ c0, i);
 
-        b[0] = GETBIT(y[0] ^ ve.y[*countY], i);
-        b[1] = GETBIT(y[1] ^ ve1.y[*countY], i);
+        uint8_t a1 = GETBIT(x1 ^ c1, i);
+        uint8_t b1 = GETBIT(y1 ^ c1, i);
 
-        t = (a[0] & b[1]) ^ (a[1] & b[0]) ^ GETBIT(r[1], i);
-        if (GETBIT(ve.y[*countY], i + 1) != (t ^ (a[0] & b[0]) ^ GETBIT(ve.y[*countY], i) ^ GETBIT(r[0], i)))
-        {
-            return 1;
-        }
+        uint8_t t = (a0 & b1) ^ (a1 & b0) ^ GETBIT(r1, i);
+        SETBIT(c0, i + 1, t ^ (a0 & b0) ^ GETBIT(c0, i) ^ GETBIT(r0, i));
     }
 
-    z[0] = x[0] ^ y[0] ^ ve.y[*countY];
-    z[1] = x[1] ^ y[1] ^ ve1.y[*countY];
+    uint32_t z0 = x0 ^ y0 ^ c0;
+
+    ve.y[*countY] = c0;
+    z[0] = z0;
+    z[1] = c1 ^ x1 ^ y1;
+
     (*countY)++;
     return;
 }
@@ -129,7 +133,7 @@ void mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *res
         padded[i] = (unsigned char *)calloc(totalLen, 1);
         if (!padded[i])
         {
-            return 1;
+            return;
         }
         if (srcBytes)
             memcpy(padded[i], inputs[i], srcBytes);
@@ -189,9 +193,7 @@ void mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *res
             mpc_XOR2(t0, t1, s1);
 
             mpc_ADD_verify(w[j - 16], s0, t1, ve, ve1, randomness, randCount, countY);
-
             mpc_ADD_verify(w[j - 7], t1, t1, ve, ve1, randomness, randCount, countY);
-
             mpc_ADD_verify(t1, s1, w[j], ve, ve1, randomness, randCount, countY);
         }
 
@@ -277,5 +279,5 @@ void mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *res
         results[1][i * 4 + 3] = (unsigned char)H[i][1];
     }
 
-    return 0;
+    return;
 }

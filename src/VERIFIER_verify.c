@@ -109,6 +109,7 @@ int main(int argc, char *argv[])
 
     uint32_t ysize = (uint32_t)ySize;
     uint32_t input_len = (uint32_t)INPUT_LEN;
+
     for (int i = 0; i < NUM_ROUNDS; i++)
     {
         if (fread(as[i], sizeof(a), 1, file) != 1)

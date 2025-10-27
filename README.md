@@ -139,4 +139,5 @@ All hex in files is **UPPERCASE** without spaces.
 ## References
 
 - [ZKBoo: Faster Zero-Knowledge for Boolean Circuits — ePrint 2016/163](https://eprint.iacr.org/2016/163)
+- [Post-Quantum Zero-Knowledge and Signatures from Symmetric-Key Primitives - ePrint 2017/279](https://eprint.iacr.org/2017/279.pdf)
 - [GitHub Repository for Original ZKBoo Implementation (Aarhus University) - Proof of knowledge of a SHA-256 preimage](https://github.com/Sobuno/ZKBoo)

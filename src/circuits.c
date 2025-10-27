@@ -256,13 +256,6 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
 
     unsigned char hash[SHA256_DIGEST_LENGTH];
 
-    H_com(z->ke, &z->ve, z->re, hash);
-    if (memcmp(a->h[e], hash, 32) != 0)
-    {
-        *error = true;
-        return;
-    }
-
     H_com(z->ke1, &z->ve1, z->re1, hash);
     if (memcmp(a->h[(e + 1) % 3], hash, 32) != 0)
     {
@@ -466,13 +459,19 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
         if (v0 != a->yp[e][i])
         {
             *error = true;
-            return;
         }
         if (v1 != a->yp[(e + 1) % 3][i])
         {
             *error = true;
-            return;
         }
+    }
+
+    // Verify the hash of the reconstructed view_e
+    H_com(z->ke, &z->ve, z->re, hash);
+
+    if (memcmp(a->h[e], hash, 32) != 0)
+    {
+        *error = true;
     }
 
     // Free allocated memory
@@ -486,4 +485,5 @@ void verify(unsigned char message_digest[32], bool *error, a *a, int e, z *z)
     }
     free(randCount);
     free(countY);
+    return;
 }
