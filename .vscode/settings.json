@@ -17,6 +17,7 @@
     "evp.h": "c",
     "sha.h": "c",
     "stdbool.h": "c",
-    "verifying_views.h": "c"
+    "verifying_views.h": "c",
+    "stdlib.h": "c"
   }
 }

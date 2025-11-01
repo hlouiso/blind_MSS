@@ -10,6 +10,8 @@
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 
+#include <omp.h>
+
 #define CH(e, f, g) ((e & f) ^ ((~e) & g)) // Chooses f if e = 0 and g if e = 1
 
 void prove(z *z, int e, unsigned char keys[3][32], unsigned char rs[3][32], View *views[3])
@@ -241,7 +243,6 @@ int main(int argc, char *argv[])
 
     /* ========================================== Running Circuit ========================================== */
 
-    unsigned char hash1[SHA256_DIGEST_LENGTH];
     bool error = false;
 
     // Generating keys
@@ -251,15 +252,13 @@ int main(int argc, char *argv[])
     unsigned char rs[NUM_ROUNDS][3][32];
     RAND_bytes((unsigned char *)rs, NUM_ROUNDS * 3 * 32);
 
-    uint32_t t0;
-
     printf("\n===========================================================================\n");
     printf("\nChosen number of ZKBoo rounds: %d (can be changed in 'src/shared.c')\n", NUM_ROUNDS);
 
+    int round = 0;
+#pragma omp parallel for // parallelizing the verification
     for (int k = 0; k < NUM_ROUNDS; k++)
     {
-        printf("Currently running ZKBoo round number %d/%d\r", k + 1, NUM_ROUNDS);
-
         for (int j = 0; j < 3; j++)
         {
             getAllRandomness(keys[k][j], randomness[k][j]);
@@ -267,6 +266,7 @@ int main(int argc, char *argv[])
 
         building_views(as[k], message_digest, shares[k], randomness[k], localViews[k]);
 
+        uint32_t t0;
         for (int j = 0; j < 8; j++)
         {
             memcpy(&t0, public_key + j * 4, 4);
@@ -275,6 +275,8 @@ int main(int argc, char *argv[])
                 error = true;
             }
         }
+
+        unsigned char hash1[SHA256_DIGEST_LENGTH];
 
         H_com(keys[k][0], localViews[k][0], rs[k][0], hash1);
         memcpy(&as[k]->h[0], hash1, 32);
@@ -288,8 +290,11 @@ int main(int argc, char *argv[])
             printf("\b");
         if (k > 98)
             printf("\b");
+
+        round++;
+        printf("ZKBoo round built: %d/%d\r", round, NUM_ROUNDS);
     }
-    printf("Currently running ZKBoo round number %d/%d\n\n", NUM_ROUNDS, NUM_ROUNDS);
+    printf("ZKBoo round built: %d/%d\n\n", round, NUM_ROUNDS);
 
     // Generating e
     int es[NUM_ROUNDS];

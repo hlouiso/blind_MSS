@@ -11,7 +11,7 @@ This work was carried out during my final internship for the Master's degree in 
 ## Build
 
 Requirements:
-- A C compiler (GCC/Clang)
+- A C compiler (GCC/Clang) with OpenMP support
 - OpenSSL **libcrypto**
 - `make`
 

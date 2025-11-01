@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <omp.h>
+
 int main(int argc, char *argv[])
 {
     // help display
@@ -167,17 +169,21 @@ int main(int argc, char *argv[])
     printf("===========================================================================\n\n");
     bool verify_error = false;
     bool error = false;
+
+    int round = 0;
+#pragma omp parallel for // parallelizing the verification
     for (int i = 0; i < NUM_ROUNDS; i++)
     {
         verify_error = false;
-        printf("Verifying round %d/%d\r", i + 1, NUM_ROUNDS);
         verify(digest, &verify_error, as[i], es[i], zs[i]);
         if (verify_error)
         {
             error = true;
         }
+        round++;
+        printf("ZKBoo round verified: %d/%d\r", round, NUM_ROUNDS);
     }
-    printf("Verifying round %d/%d", NUM_ROUNDS, NUM_ROUNDS);
+    printf("ZKBoo round verified: %d/%d\r", round, NUM_ROUNDS);
     printf("\n\nDone verifying all rounds.\n\n");
 
     /* ============================================================================================================= */

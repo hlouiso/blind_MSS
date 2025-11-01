@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -O2 -Wall -Wextra -Werror
-LDLIBS = -lcrypto
+CFLAGS = -fopenmp -O2 -Wall -Wextra -Werror
+LDLIBS = -lssl -lcrypto
 
 PROGS = CLIENT_blinding_message SIGNER_MSS_keygen SIGNER_MSS_sign CLIENT_blind_sign VERIFIER_verify
 
