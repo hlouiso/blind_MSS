@@ -131,7 +131,7 @@ void H_com(unsigned char k[32], View *v, unsigned char r[32], unsigned char hash
  * Derive Fiat–Shamir challenges es[0..s-1] ∈ {0,1,2} from the output vector y (32 bytes)
  * and the per-round seeds/commitments a[0..s-1].
  */
-void H3(uint32_t y[8], a *as[NUM_ROUNDS], int s, int *es);
+void H3(unsigned char message_digest[32], uint32_t y[8], a *as[NUM_ROUNDS], int s, int *es);
 
 /**
  * Allocate and initialize the arrays needed during verification (as[], zs[]).

@@ -164,7 +164,7 @@ int main(int argc, char *argv[])
     int es[NUM_ROUNDS];
     uint32_t y[8];
     memcpy(y, public_key, 32);
-    H3(y, as, NUM_ROUNDS, es);
+    H3(digest, y, as, NUM_ROUNDS, es);
 
     printf("===========================================================================\n\n");
     bool verify_error = false;

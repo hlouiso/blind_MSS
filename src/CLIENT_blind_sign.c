@@ -300,7 +300,7 @@ int main(int argc, char *argv[])
     int es[NUM_ROUNDS];
     uint32_t y[8];
     memcpy(y, public_key, 32);
-    H3(y, as, NUM_ROUNDS, es);
+    H3(message_digest, y, as, NUM_ROUNDS, es);
 
     // Getting z
     for (int i = 0; i < NUM_ROUNDS; i++)

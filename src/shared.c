@@ -214,13 +214,14 @@ void H_com(unsigned char k[32], View *v, unsigned char r[32], unsigned char hash
     EVP_MD_CTX_free(ctx);
 }
 
-void H3(uint32_t y[8], a *as[NUM_ROUNDS], int s, int *es)
+void H3(unsigned char message_digest[32], uint32_t y[8], a *as[NUM_ROUNDS], int s, int *es)
 {
     unsigned char hash[SHA256_DIGEST_LENGTH];
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     unsigned int outl = 0;
 
     EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+    EVP_DigestUpdate(ctx, message_digest, 32);
     EVP_DigestUpdate(ctx, y, 32);
 
     for (int i = 0; i < s; i++)
