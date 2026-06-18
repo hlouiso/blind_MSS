@@ -1,5 +1,6 @@
 #include "circuits.h"
 #include "shared.h"
+#include "xmss.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -12,322 +13,236 @@
 
 #include <omp.h>
 
-#define CH(e, f, g) ((e & f) ^ ((~e) & g)) // Chooses f if e = 0 and g if e = 1
+/* Read exactly n bytes (2n hex chars), skipping any non-hex characters (newlines). */
+static int read_hex(FILE *f, unsigned char *out, int n)
+{
+    int got = 0;
+    int hi = -1;
+    int c;
+    while (got < n && (c = fgetc(f)) != EOF)
+    {
+        int v;
+        if (c >= '0' && c <= '9')
+            v = c - '0';
+        else if (c >= 'A' && c <= 'F')
+            v = c - 'A' + 10;
+        else if (c >= 'a' && c <= 'f')
+            v = c - 'a' + 10;
+        else
+            continue;
+        if (hi < 0)
+            hi = v;
+        else
+        {
+            out[got++] = (unsigned char)((hi << 4) | v);
+            hi = -1;
+        }
+    }
+    return got == n ? 0 : -1;
+}
 
 void prove(z *z, int e, unsigned char keys[3][32], unsigned char rs[3][32], View *views[3])
 {
     memcpy(&z->ke, keys[e], 32);
     memcpy(&z->ke1, keys[(e + 1) % 3], 32);
-
     z->ve.x = views[e]->x;
     z->ve1.x = views[(e + 1) % 3]->x;
     z->ve1.y = views[(e + 1) % 3]->y;
-
     memcpy(&z->re, rs[e], 32);
     memcpy(&z->re1, rs[(e + 1) % 3], 32);
-    return;
 }
 
 int main(int argc, char *argv[])
 {
-    // help display
     if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))
     {
-        printf("CLIENT_blind_sign\n"
-               "\n"
-               "Usage:\n"
-               "  ./CLIENT_blind_sign [-h|--help]\n"
-               "\n"
-               "Description:\n"
-               "  Builds a ZKBoo/MPC-in-the-head proof that you know a valid MSS signature\n"
-               "  for the commitment of message m with blinding key r.\n"
-               "\n"
-               "Prompts:\n"
-               "  - message m (stdin)\n"
-               "Reads:\n"
-               "  - blinding_key.txt\n"
-               "  - MSS_signature.txt\n"
-               "  - MSS_public_key.txt\n"
-               "Output file:\n"
-               "  - signature_proof.bin\n");
+        printf("CLIENT_blind_sign\n\n"
+               "  Builds a ZKBoo/MPC-in-the-head proof of a valid target-sum WOTS+/XMSS\n"
+               "  signature on the commitment M = SHA256(SHA256(m) || r).\n\n"
+               "  Prompts: message m (stdin)\n"
+               "  Reads:   blinding_key.txt, XMSS_signature.txt, XMSS_public_key.txt\n"
+               "  Writes:  signature_proof.bin\n");
         return 0;
     }
 
     setbuf(stdout, NULL);
 
-    // Getting m
+    /* ---- message digest m_hat = SHA256(m) (public input) ---- */
     char *message = NULL;
     size_t bufferSize = 0;
-
     printf("\nPlease enter your message:\n");
-    int message_length = getline(&message, &bufferSize, stdin);
-    if (message_length == -1)
+    if (getline(&message, &bufferSize, stdin) == -1)
     {
         perror("Error reading message");
         return EXIT_FAILURE;
     }
-
-    message[strlen(message) - 1] = '\0'; // to remove '\n' at the end
-
-    // Computing message digest
-    unsigned char message_digest[SHA256_DIGEST_LENGTH];
-    SHA256((unsigned char *)message, strlen(message), message_digest);
+    message[strcspn(message, "\n")] = '\0';
+    unsigned char m_hat[SHA256_DIGEST_LENGTH];
+    SHA256((unsigned char *)message, strlen(message), m_hat);
     free(message);
 
-    // Getting commitment key
-    char hexInput[2 * COMMIT_KEY_LEN + 1];
-    unsigned char commitment_key[COMMIT_KEY_LEN];
-
+    /* ---- blinding key r ---- */
+    unsigned char r[32];
     FILE *f = fopen("blinding_key.txt", "r");
-    if (f == NULL)
+    if (!f || read_hex(f, r, 32) != 0)
     {
-        fprintf(stderr, "Error opening blinding_key.txt\n");
-        return EXIT_FAILURE;
-    }
-
-    if (!fgets(hexInput, sizeof(hexInput), f))
-    {
-        fclose(f);
         fprintf(stderr, "Error reading blinding_key.txt\n");
         return EXIT_FAILURE;
     }
-
     fclose(f);
 
-    for (int i = 0; i < COMMIT_KEY_LEN; i++)
+    /* ---- public key: pk_seed (16) then root (16) ---- */
+    unsigned char pk_seed[XMSS_PK_SEED_BYTES], root[XMSS_NODE_BYTES];
+    f = fopen("XMSS_public_key.txt", "r");
+    if (!f || read_hex(f, pk_seed, XMSS_PK_SEED_BYTES) != 0 || read_hex(f, root, XMSS_NODE_BYTES) != 0)
     {
-        unsigned int byte;
-        sscanf(&hexInput[i * 2], "%2X", &byte);
-        commitment_key[i] = (unsigned char)byte;
-    }
-
-    // Getting MSS signature
-    int c1;
-    int c2;
-    f = fopen("MSS_signature.txt", "r");
-
-    // getting leaf index
-    unsigned char leaf_index_bytes[4];
-    char buf[32];
-    if (fgets(buf, sizeof(buf), f) == NULL)
-    {
-        fclose(f);
-        perror("Error reading leaf index");
+        fprintf(stderr, "Error reading XMSS_public_key.txt\n");
         return EXIT_FAILURE;
     }
-    uint32_t leaf_index = (uint32_t)strtoul(buf, NULL, 10);
-    leaf_index_bytes[0] = (leaf_index >> 24) & 0xFF;
-    leaf_index_bytes[1] = (leaf_index >> 16) & 0xFF;
-    leaf_index_bytes[2] = (leaf_index >> 8) & 0xFF;
-    leaf_index_bytes[3] = (leaf_index) & 0xFF;
-
-    // WOTS signature
-    unsigned char sigma[WOTS_len * SHA256_DIGEST_LENGTH];
-
-    for (int i = 0; i < 512; i++)
-    {
-        for (int j = 0; j < 32; j++)
-        {
-            c1 = fgetc(f);
-            while (c1 == '\n')
-            {
-                c1 = fgetc(f);
-            }
-
-            c2 = fgetc(f);
-            while (c2 == '\n')
-            {
-                c2 = fgetc(f);
-            }
-
-            c1 = (c1 <= '9') ? c1 - '0' : c1 - 'A' + 10;
-            c2 = (c2 <= '9') ? c2 - '0' : c2 - 'A' + 10;
-
-            sigma[i * 32 + j] = (char)((c1 << 4) | c2);
-        }
-    }
-
-    // PATH
-    unsigned char PATH[10 * SHA256_DIGEST_LENGTH];
-    for (int i = 0; i < 10 * SHA256_DIGEST_LENGTH; i++)
-    {
-        c1 = fgetc(f);
-        while (c1 == '\n')
-        {
-            c1 = fgetc(f);
-        }
-
-        c2 = fgetc(f);
-        while (c2 == '\n')
-        {
-            c2 = fgetc(f);
-        }
-
-        c1 = (c1 <= '9') ? c1 - '0' : c1 - 'A' + 10;
-        c2 = (c2 <= '9') ? c2 - '0' : c2 - 'A' + 10;
-
-        PATH[i] = (char)((c1 << 4) | c2);
-    }
-
-    // Building input
-    unsigned char input[INPUT_LEN];
-    memcpy(input, commitment_key, 32);
-    memcpy(input + 32, leaf_index_bytes, 4);
-    memcpy(input + 32 + 4, sigma, WOTS_len * SHA256_DIGEST_LENGTH);
-    memcpy(input + 32 + 4 + WOTS_len * SHA256_DIGEST_LENGTH, PATH, 10 * SHA256_DIGEST_LENGTH);
-
     fclose(f);
 
-    // Getting public_key
-    f = fopen("MSS_public_key.txt", "r");
-    unsigned char public_key[SHA256_DIGEST_LENGTH];
-    for (int j = 0; j < 32; ++j)
+    /* ---- signature: leaf_index, nonce, sig_hashes, auth_path ---- */
+    xmss_sig sig;
+    f = fopen("XMSS_signature.txt", "r");
+    if (!f)
     {
-        c1 = fgetc(f);
-        while (c1 == '\n')
-        {
-            c1 = fgetc(f);
-        }
-
-        c2 = fgetc(f);
-        while (c2 == '\n')
-        {
-            c2 = fgetc(f);
-        }
-
-        c1 = (c1 <= '9') ? c1 - '0' : c1 - 'A' + 10;
-        c2 = (c2 <= '9') ? c2 - '0' : c2 - 'A' + 10;
-
-        public_key[j] = (char)((c1 << 4) | c2);
+        fprintf(stderr, "Error opening XMSS_signature.txt\n");
+        return EXIT_FAILURE;
     }
+    char buf[64];
+    if (!fgets(buf, sizeof buf, f))
+    {
+        fprintf(stderr, "Error reading leaf_index\n");
+        fclose(f);
+        return EXIT_FAILURE;
+    }
+    sig.leaf_index = (uint32_t)strtoul(buf, NULL, 10);
+    int rerr = read_hex(f, sig.nonce, XMSS_NONCE_LEN);
+    for (int i = 0; i < XMSS_WOTS_LEN; i++)
+        rerr |= read_hex(f, sig.sig_hashes[i], XMSS_NODE_BYTES);
+    for (int h = 0; h < XMSS_H; h++)
+        rerr |= read_hex(f, sig.auth_path[h], XMSS_NODE_BYTES);
     fclose(f);
+    if (rerr != 0)
+    {
+        fprintf(stderr, "Error parsing XMSS_signature.txt\n");
+        return EXIT_FAILURE;
+    }
 
-    /* ========================================== Allocating memory ========================================= */
+    /* ---- native consistency pre-check (user verifies Sigma before proving) ---- */
+    unsigned char preM[64], M[32];
+    memcpy(preM, m_hat, 32);
+    memcpy(preM + 32, r, 32);
+    SHA256(preM, 64, M);
+    if (!xmss_verify(pk_seed, root, M, 32, &sig))
+    {
+        fprintf(stderr, "Inconsistent inputs: the XMSS signature is not valid for SHA256(SHA256(m)||r)\n"
+                        "under this public key. Check the message, r, and signature.\n");
+        return EXIT_FAILURE;
+    }
 
+    /* ---- expected public output: root | target sum | 0 ---- */
+    uint32_t pubout[8] = {0};
+    for (int w = 0; w < YP_ROOT_WORDS; w++)
+        memcpy(&pubout[w], root + w * 4, 4);
+    pubout[YP_SUM_WORD] = XMSS_TARGET_SUM;
+
+    /* ---- witness ---- */
+    unsigned char input[1354];
+    memcpy(input + W_R_OFF, r, 32);
+    input[W_LEAFIDX_OFF + 0] = (sig.leaf_index >> 24) & 0xFF;
+    input[W_LEAFIDX_OFF + 1] = (sig.leaf_index >> 16) & 0xFF;
+    input[W_LEAFIDX_OFF + 2] = (sig.leaf_index >> 8) & 0xFF;
+    input[W_LEAFIDX_OFF + 3] = (sig.leaf_index) & 0xFF;
+    memcpy(input + W_NONCE_OFF, sig.nonce, XMSS_NONCE_LEN);
+    for (int i = 0; i < XMSS_WOTS_LEN; i++)
+        memcpy(input + W_SIG_OFF + i * XMSS_NODE_BYTES, sig.sig_hashes[i], XMSS_NODE_BYTES);
+    for (int h = 0; h < XMSS_H; h++)
+        memcpy(input + W_PATH_OFF + h * XMSS_NODE_BYTES, sig.auth_path[h], XMSS_NODE_BYTES);
+
+    /* ---- allocate prover structures ---- */
     unsigned char *shares[NUM_ROUNDS][3];
     a *as[NUM_ROUNDS];
     z *zs[NUM_ROUNDS];
     unsigned char *randomness[NUM_ROUNDS][3];
     View *localViews[NUM_ROUNDS][3];
-
-    int alloc = alloc_structures_prove(shares, as, zs, randomness, localViews);
-    if (alloc != 0)
+    if (alloc_structures_prove(shares, as, zs, randomness, localViews) != 0)
     {
         fprintf(stderr, "Error allocating memory\n");
         return EXIT_FAILURE;
     }
 
-    /* =========================================== Sharing inputs =========================================== */
-
     for (int k = 0; k < NUM_ROUNDS; k++)
     {
         for (int j = 0; j < 2; j++)
-        {
             if (RAND_bytes(shares[k][j], INPUT_LEN) != 1)
             {
-                perror("RAND_bytes failed crypto, aborting\n");
+                fprintf(stderr, "RAND_bytes failed\n");
                 return EXIT_FAILURE;
             }
-        }
-
         for (int j = 0; j < INPUT_LEN; j++)
-        {
             shares[k][2][j] = input[j] ^ shares[k][0][j] ^ shares[k][1][j];
-        }
-
         for (int j = 0; j < 3; j++)
-        {
             memcpy(localViews[k][j]->x, shares[k][j], INPUT_LEN);
-        }
     }
 
-    /* ========================================== Running Circuit ========================================== */
-
     bool error = false;
-
-    // Generating keys
     unsigned char keys[NUM_ROUNDS][3][32];
-    RAND_bytes((unsigned char *)keys, NUM_ROUNDS * 3 * 32);
-
     unsigned char rs[NUM_ROUNDS][3][32];
+    RAND_bytes((unsigned char *)keys, NUM_ROUNDS * 3 * 32);
     RAND_bytes((unsigned char *)rs, NUM_ROUNDS * 3 * 32);
 
     printf("\n===========================================================================\n");
     printf("\nChosen number of ZKBoo rounds: %d (can be changed in 'src/shared.c')\n", NUM_ROUNDS);
 
     int round = 0;
-#pragma omp parallel for // parallelizing the verification
+#pragma omp parallel for
     for (int k = 0; k < NUM_ROUNDS; k++)
     {
         for (int j = 0; j < 3; j++)
-        {
             getAllRandomness(keys[k][j], randomness[k][j]);
-        }
 
-        building_views(as[k], message_digest, shares[k], randomness[k], localViews[k]);
+        building_views(as[k], m_hat, pk_seed, shares[k], randomness[k], localViews[k]);
 
-        uint32_t t0;
         for (int j = 0; j < 8; j++)
-        {
-            memcpy(&t0, public_key + j * 4, 4);
-            if ((as[k]->yp[0][j] ^ as[k]->yp[1][j] ^ as[k]->yp[2][j]) != t0)
-            {
+            if ((as[k]->yp[0][j] ^ as[k]->yp[1][j] ^ as[k]->yp[2][j]) != pubout[j])
                 error = true;
-            }
+
+        for (int j = 0; j < 3; j++)
+        {
+            unsigned char hash1[SHA256_DIGEST_LENGTH];
+            H_com(keys[k][j], localViews[k][j], rs[k][j], hash1);
+            memcpy(&as[k]->h[j], hash1, 32);
         }
 
-        unsigned char hash1[SHA256_DIGEST_LENGTH];
-
-        H_com(keys[k][0], localViews[k][0], rs[k][0], hash1);
-        memcpy(&as[k]->h[0], hash1, 32);
-        H_com(keys[k][1], localViews[k][1], rs[k][1], hash1);
-        memcpy(&as[k]->h[1], hash1, 32);
-        H_com(keys[k][2], localViews[k][2], rs[k][2], hash1);
-        memcpy(&as[k]->h[2], hash1, 32);
-
-        printf("\b");
-        if (k > 8)
-            printf("\b");
-        if (k > 98)
-            printf("\b");
-
+#pragma omp atomic
         round++;
         printf("ZKBoo round built: %d/%d\r", round, NUM_ROUNDS);
     }
-    printf("ZKBoo round built: %d/%d\n\n", round, NUM_ROUNDS);
+    printf("ZKBoo round built: %d/%d\n\n", NUM_ROUNDS, NUM_ROUNDS);
 
-    // Generating e
     int es[NUM_ROUNDS];
-    uint32_t y[8];
-    memcpy(y, public_key, 32);
-    H3(message_digest, y, as, NUM_ROUNDS, es);
+    H3(m_hat, pubout, as, NUM_ROUNDS, es);
 
-    // Getting z
     for (int i = 0; i < NUM_ROUNDS; i++)
-    {
         prove(zs[i], es[i], keys[i], rs[i], localViews[i]);
-    }
 
-    // Writing to file
     FILE *file = fopen("signature_proof.bin", "wb");
+    bool write_success = file && write_to_file(file, as, zs);
+    if (file)
+        fclose(file);
 
-    bool write_success = write_to_file(file, as, zs);
-
-    // free memory
     free_structures_prove(shares, as, zs, randomness, localViews);
-    fclose(file);
 
     if (!write_success)
     {
-        fprintf(stderr, "Error in writing signature_proof.bin\n\n");
+        fprintf(stderr, "Error writing signature_proof.bin\n\n");
         return EXIT_FAILURE;
     }
-
     if (error)
     {
-        fprintf(stderr, "Error somewhere, the MSS signature is not valid for the "
-                        "message or the blinding-key r. The generated proof is invalid.\n\n");
-        exit(EXIT_FAILURE);
+        fprintf(stderr, "Circuit output != public key. The proof would be invalid.\n\n");
+        return EXIT_FAILURE;
     }
 
     printf("===========================================================================\n");

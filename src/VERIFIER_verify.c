@@ -1,5 +1,6 @@
 #include "circuits.h"
 #include "shared.h"
+#include "xmss.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -7,198 +8,165 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <openssl/sha.h>
+
 #include <omp.h>
+
+/* Read exactly n bytes (2n hex chars), skipping any non-hex characters (newlines). */
+static int read_hex(FILE *f, unsigned char *out, int n)
+{
+    int got = 0, hi = -1, c;
+    while (got < n && (c = fgetc(f)) != EOF)
+    {
+        int v;
+        if (c >= '0' && c <= '9')
+            v = c - '0';
+        else if (c >= 'A' && c <= 'F')
+            v = c - 'A' + 10;
+        else if (c >= 'a' && c <= 'f')
+            v = c - 'a' + 10;
+        else
+            continue;
+        if (hi < 0)
+            hi = v;
+        else
+        {
+            out[got++] = (unsigned char)((hi << 4) | v);
+            hi = -1;
+        }
+    }
+    return got == n ? 0 : -1;
+}
 
 int main(int argc, char *argv[])
 {
-    // help display
     if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))
     {
-        printf("VERIFIER_verify\n"
-               "\n"
-               "Usage:\n"
-               "  ./VERIFIER_verify [-h|--help]\n"
-               "\n"
-               "Description:\n"
-               "  Verifies signature_proof.bin against MSS_public_key.txt for a given message m.\n"
-               "\n"
-               "Prompts:\n"
-               "  - message m (stdin)\n"
-               "Reads:\n"
-               "  - MSS_public_key.txt\n"
-               "  - signature_proof.bin\n");
+        printf("VERIFIER_verify\n\n"
+               "  Verifies signature_proof.bin against XMSS_public_key.txt for a message m.\n\n"
+               "  Prompts: message m (stdin)\n"
+               "  Reads:   XMSS_public_key.txt, signature_proof.bin\n");
         return 0;
     }
 
     setbuf(stdout, NULL);
 
-    // Getting m
     char *message = NULL;
     size_t bufferSize = 0;
-
     printf("\nPlease enter the signed message:\n");
-    int length = getline(&message, &bufferSize, stdin);
-    if (length == -1)
+    if (getline(&message, &bufferSize, stdin) == -1)
     {
         perror("Error reading input");
         free(message);
         return 1;
     }
-
-    message[strlen(message) - 1] = '\0'; // to remove '\n' at the end
+    message[strcspn(message, "\n")] = '\0';
     printf("\n");
 
-    // Computing message digest
-    unsigned char digest[SHA256_DIGEST_LENGTH];
-    SHA256((unsigned char *)message, strlen(message), digest);
+    unsigned char m_hat[SHA256_DIGEST_LENGTH];
+    SHA256((unsigned char *)message, strlen(message), m_hat);
     free(message);
 
-    // Getting public_key
-    FILE *file;
-    int c1;
-    int c2;
-    file = fopen("MSS_public_key.txt", "r");
-    if (file == NULL)
+    /* public key: pk_seed (16) then root (16) */
+    unsigned char pk_seed[XMSS_PK_SEED_BYTES], root[XMSS_NODE_BYTES];
+    FILE *file = fopen("XMSS_public_key.txt", "r");
+    if (!file || read_hex(file, pk_seed, XMSS_PK_SEED_BYTES) != 0 || read_hex(file, root, XMSS_NODE_BYTES) != 0)
     {
-        perror("Error opening file");
+        fprintf(stderr, "Error reading XMSS_public_key.txt\n");
         return 1;
     }
-
-    unsigned char public_key[32];
-    for (int j = 0; j < 32; ++j)
-    {
-        c1 = fgetc(file);
-        while (c1 == '\n')
-        {
-            c1 = fgetc(file);
-        }
-
-        c2 = fgetc(file);
-        while (c2 == '\n')
-        {
-            c2 = fgetc(file);
-        }
-
-        c1 = (c1 <= '9') ? c1 - '0' : c1 - 'A' + 10;
-        c2 = (c2 <= '9') ? c2 - '0' : c2 - 'A' + 10;
-
-        public_key[j] = (unsigned char)((c1 << 4) | c2);
-    }
-
     fclose(file);
 
+    /* expected public output: root | target sum | 0 */
+    uint32_t pubout[8] = {0};
+    for (int w = 0; w < YP_ROOT_WORDS; w++)
+        memcpy(&pubout[w], root + w * 4, 4);
+    pubout[YP_SUM_WORD] = XMSS_TARGET_SUM;
+
     file = fopen("signature_proof.bin", "rb");
-    if (file == NULL)
+    if (!file)
     {
-        perror("Error opening file");
+        perror("Error opening signature_proof.bin");
         return 1;
     }
-
-    /* ============================================== Reading Proof ============================================== */
 
     a *as[NUM_ROUNDS];
     z *zs[NUM_ROUNDS];
-
-    int alloc = alloc_structures_verify(as, zs);
-    if (alloc == -1)
+    if (alloc_structures_verify(as, zs) == -1)
     {
-        fprintf(stderr, "Error in allocating structures for verification\n");
+        fprintf(stderr, "Error allocating verification structures\n");
         fclose(file);
         return EXIT_FAILURE;
     }
 
     bool read_error = false;
-
     uint32_t ysize = (uint32_t)ySize;
     uint32_t input_len = (uint32_t)INPUT_LEN;
-
     for (int i = 0; i < NUM_ROUNDS; i++)
     {
         if (fread(as[i], sizeof(a), 1, file) != 1)
             read_error = true;
-        if (fread(zs[i]->ke, sizeof(unsigned char), 32, file) != 32)
+        if (fread(zs[i]->ke, 1, 32, file) != 32)
             read_error = true;
-        if (fread(zs[i]->ke1, sizeof(unsigned char), 32, file) != 32)
+        if (fread(zs[i]->ke1, 1, 32, file) != 32)
             read_error = true;
-        if (fread(zs[i]->re, sizeof(unsigned char), 32, file) != 32)
+        if (fread(zs[i]->re, 1, 32, file) != 32)
             read_error = true;
-        if (fread(zs[i]->re1, sizeof(unsigned char), 32, file) != 32)
+        if (fread(zs[i]->re1, 1, 32, file) != 32)
             read_error = true;
-        if (fread(zs[i]->ve.x, sizeof(unsigned char), input_len, file) != input_len)
+        if (fread(zs[i]->ve.x, 1, input_len, file) != input_len)
             read_error = true;
         if (fread(zs[i]->ve1.y, sizeof(uint32_t), ysize, file) != ysize)
             read_error = true;
-        if (fread(zs[i]->ve1.x, sizeof(unsigned char), input_len, file) != input_len)
+        if (fread(zs[i]->ve1.x, 1, input_len, file) != input_len)
             read_error = true;
     }
-
     fclose(file);
 
     if (read_error)
     {
-        fprintf(stderr, "Error in reading signature_proof.bin\n");
+        fprintf(stderr, "Error reading signature_proof.bin\n");
         free_structures_verify(as, zs);
         return EXIT_FAILURE;
     }
 
-    /* ============================================== Verifying proof ============================================== */
-
-    // Verifying Circuit Output
-
-    uint32_t t0;
+    /* circuit output must reconstruct to (root | target-sum | 0) */
     for (int k = 0; k < NUM_ROUNDS; k++)
-    {
         for (int j = 0; j < 8; j++)
-        {
-            memcpy(&t0, public_key + j * 4, 4);
-            if ((as[k]->yp[0][j] ^ as[k]->yp[1][j] ^ as[k]->yp[2][j]) != t0)
+            if ((as[k]->yp[0][j] ^ as[k]->yp[1][j] ^ as[k]->yp[2][j]) != pubout[j])
             {
-                fprintf(stderr, "Outputs XOR != public-key at round %d\n", k + 1);
+                fprintf(stderr, "Outputs XOR != (root | target-sum) at round %d\n", k + 1);
                 free_structures_verify(as, zs);
-                exit(EXIT_FAILURE);
+                return EXIT_FAILURE;
             }
-        }
-    }
 
-    // Generating e
     int es[NUM_ROUNDS];
-    uint32_t y[8];
-    memcpy(y, public_key, 32);
-    H3(digest, y, as, NUM_ROUNDS, es);
+    H3(m_hat, pubout, as, NUM_ROUNDS, es);
 
     printf("===========================================================================\n\n");
-    bool verify_error = false;
     bool error = false;
-
     int round = 0;
-#pragma omp parallel for // parallelizing the verification
+#pragma omp parallel for
     for (int i = 0; i < NUM_ROUNDS; i++)
     {
-        verify_error = false;
-        verify(digest, &verify_error, as[i], es[i], zs[i]);
+        bool verify_error = false;
+        verify(m_hat, pk_seed, &verify_error, as[i], es[i], zs[i]);
         if (verify_error)
-        {
             error = true;
-        }
+#pragma omp atomic
         round++;
         printf("ZKBoo round verified: %d/%d\r", round, NUM_ROUNDS);
     }
-    printf("ZKBoo round verified: %d/%d\r", round, NUM_ROUNDS);
-    printf("\n\nDone verifying all rounds.\n\n");
-
-    /* ============================================================================================================= */
+    printf("ZKBoo round verified: %d/%d\n\n", NUM_ROUNDS, NUM_ROUNDS);
 
     free_structures_verify(as, zs);
 
     printf("===========================================================================\n\n");
-
     if (error)
     {
         fprintf(stderr, "Error: invalid signature-proof\n\n");
-        exit(EXIT_FAILURE);
+        return EXIT_FAILURE;
     }
-
     printf("Signature proof verified successfully. The signature is valid.\n\n");
-
     return EXIT_SUCCESS;
 }

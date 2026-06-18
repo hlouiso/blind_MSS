@@ -1,6 +1,8 @@
-# Blind MSS (WOTS-OTS) with ZKBoo (MPC-in-the-Head)
+# Blind XMSS (target-sum WOTS+) with ZKBoo (MPC-in-the-Head)
 
-This project implements a **blind signature**  over an **MSS (Merkle Signature Scheme)** using **WOTS** as the one-time signature (OTS) and a ZK proof in the **ZKBoo / MPC-in-the-head** style to prove knowledge of a valid signature **without revealing** secret material.
+This project implements a **blind signature** over **XMSS** (a stateful Merkle signature scheme) with **target-sum WOTS+** one-time signatures in the leaves, and a ZK proof in the **ZKBoo / MPC-in-the-head** style to prove knowledge of a valid signature **without revealing** the secret material (the commitment opening, the leaf index, or the signature).
+
+It is the ZKBoo-based instantiation of the generic hash-based blind signature construction: a commitment scheme, a hash-based signature scheme, and a NIZK. Here the commitment is `M = SHA256(SHA256(m) || r)`, the signature is target-sum WOTS+/XMSS, and the NIZK is ZKBoo. The same XMSS/WOTS+ scheme is shared with the Longfellow- and Binius64-based instantiations; only the NIZK differs.
 
 > ⚠️ This code is for research/education. Do not use in production.
 
@@ -15,129 +17,77 @@ Requirements:
 - OpenSSL **libcrypto**
 - `make`
 
-Build everything:
 ```bash
-make
+make          # build everything
+make clean    # remove binaries and intermediates
 ```
 
-Clean:
-```bash
-make clean
-```
+Binaries produced: `CLIENT_blinding_message`, `SIGNER_XMSS_keygen`, `SIGNER_XMSS_sign`, `CLIENT_blind_sign`, `VERIFIER_verify`.
 
-Binaries produced:
-- `CLIENT_blinding_message` (client)
-- `SIGNER_MSS_keygen` (signer)
-- `SIGNER_MSS_sign` (signer)
-- `CLIENT_blind_sign` (client)
-- `VERIFIER_verify` (verifier / anyone)
+## Parameters
 
-## Parameters (hard-coded)
+Signature scheme (`xmss.h`), matching the Longfellow/Binius64 instantiations:
+- `XMSS_H = 10` — Merkle tree height (`2^10 = 1024` signatures per key pair)
+- `XMSS_WOTS_W = 4` — Winternitz parameter (2-bit coordinates)
+- `XMSS_WOTS_LEN = 72` — number of WOTS+ chains (target-sum encoding, no checksum)
+- `XMSS_TARGET_SUM = 132` — required sum of the 72 coordinates
+- `XMSS_NODE_BYTES = 16` — every internal node is a SHA-256 output truncated to 128 bits
+- `XMSS_PK_SEED_BYTES = 16`, `XMSS_NONCE_LEN = 6`
+- All hashing is SHA-256, SPHINCS+-style keyed/tweaked (tweaks `0x00` chain, `0x01` tree/pk, `0x02` message).
 
-From `shared.c`:
-- `H = 10` (Merkle tree height → `2^10 = 1024` leaves)
-- `N = 32` (byte length of hashes / words)
-- `WOTS_len = 512` (number of WOTS chain elements)
+ZKBoo (`shared.c`):
+- `NUM_ROUNDS = 137` parallel executions (soundness error `(2/3)^137`); raise to `219` for `2^-128`.
+- `INPUT_LEN = 1354`, `ySize = 181664` (nonlinear-gate transcript words per view).
 
 ## Files & Formats
 
-All hex in files is **UPPERCASE** without spaces.
+All hex is **UPPERCASE** without spaces.
 
-- **`MSS_secret_key.txt`** (created by `SIGNER_MSS_keygen`)
-  - **Line 1:** `sk_seed` — 32 bytes as 64 hex chars
-  - **Line 2:** `leaf_index` — decimal (initially `0`)
+- **`XMSS_secret_key.txt`** (`SIGNER_XMSS_keygen`)
+  - Line 1: `sk_seed` — 32 bytes (64 hex)
+  - Line 2: `pk_seed` — 16 bytes (32 hex)
+  - Line 3: `leaf_index` — decimal (initially `0`)
 
-- **`MSS_public_key.txt`** (created by `SIGNER_MSS_keygen`)
-  - Merkle-tree root — 32 bytes as 64 hex chars, newline-terminated
+- **`XMSS_public_key.txt`** (`SIGNER_XMSS_keygen`)
+  - Line 1: `pk_seed` — 16 bytes (32 hex)
+  - Line 2: XMSS root — 16 bytes (32 hex)
 
-- **`blinding_key.txt`** (created by `CLIENT_blinding_message`)
-  - Blinding key **r** - 32 bytes (64 hex chars)
+- **`blinding_key.txt`** (`CLIENT_blinding_message`)
+  - Blinding randomness `r` — 32 bytes (64 hex)
 
-- **`blinded_message.txt`** (created by `CLIENT_blinding_message`)
-  - Blinded message - 64 bytes (128 hex chars) defined as **blinded = commitment || ~commitment** with **commitment = SHA256( SHA256(m) || r )**
+- **`blinded_message.txt`** (`CLIENT_blinding_message`)
+  - Commitment `M = SHA256( SHA256(m) || r )` — 32 bytes (64 hex)
 
-- **`MSS_signature.txt`** (created by `SIGNER_MSS_sign`)
-  - **Line 1:** `leaf_index` — decimal
-  - **Line 2:** empty line
-  - **Lines 3 .. 3+WOTS_len-1:** WOTS signature; each line is **32 bytes** (64 hex chars)
-  - **Next line:** empty line
-  - **Next `H` lines:** authentication path; each line is **32 bytes** (64 hex chars)
+- **`XMSS_signature.txt`** (`SIGNER_XMSS_sign`)
+  - Line 1: `leaf_index` — decimal
+  - Line 2: `nonce` — 6 bytes (12 hex)
+  - Next `72` lines: WOTS+ chain values — 16 bytes (32 hex) each
+  - Next `10` lines: XMSS authentication path — 16 bytes (32 hex) each
 
-- **`signature_proof.bin`** (created by `CLIENT_blind_sign`)
-  - Binary ZK proof (ZKBoo/MPC-in-the-head) that a valid MSS signature exists for the committed message.
+- **`signature_proof.bin`** (`CLIENT_blind_sign`)
+  - Binary ZKBoo proof that a valid XMSS signature exists on the committed message.
 
 ## Typical Workflow
 
-1) **Signer** generates keys
-   ```bash
-   ./SIGNER_MSS_keygen
-   ```
-   Produces `MSS_secret_key.txt` and `MSS_public_key.txt`. Prints the public key and the secret seed to stdout as a convenience.
+1. **Signer** generates keys: `./SIGNER_XMSS_keygen` → `XMSS_secret_key.txt`, `XMSS_public_key.txt`.
+2. **Client** blinds a message: `./CLIENT_blinding_message` (prompts for `m`) → `blinding_key.txt`, `blinded_message.txt` (the commitment `M`). The client keeps `r` secret and sends `M` to the signer.
+3. **Signer** signs `M`: `./SIGNER_XMSS_sign` (reads `XMSS_secret_key.txt`, `blinded_message.txt`; self-checks the signature against the public key) → `XMSS_signature.txt`, and advances the leaf index.
+4. **Client** proves: `./CLIENT_blind_sign` (prompts for `m`; reads `blinding_key.txt`, `XMSS_signature.txt`, `XMSS_public_key.txt`). It first re-checks that the XMSS signature is valid for `SHA256(SHA256(m)||r)`, then writes the ZK proof to `signature_proof.bin`.
+5. **Verifier** checks: `./VERIFIER_verify` (prompts for `m`; reads `XMSS_public_key.txt`, `signature_proof.bin`).
 
-2) **Client** blinds a message
-   ```bash
-   ./CLIENT_blinding_message
-   ```
-   - Prompts: plaintext message `m` (one line from stdin).
+## The circuit C
 
-   - Produces: 
-   - `blinding_key.txt` with **Blinding key `r`** (32 bytes, 64 hex chars)
-   - `blinded_messge.txt` with **Blinded message** (64 bytes, 128 hex chars) defined as `commitment || ~commitment`, where `commitment = SHA256( SHA256(m) || r )`.
+`CLIENT_blind_sign` / `VERIFIER_verify` prove/verify in zero knowledge that the witness `(r, leaf_index, nonce, WOTS+ chain values, auth path)` satisfies, for public `(m̂ = SHA256(m), pk = pk_seed || root)`:
+1. `M = SHA256(m̂ || r)` — the commitment;
+2. `mh = SHA256(pk_seed || 0x02 || nonce || M)`, decoded into 72 base-4 coordinates whose sum is `132`;
+3. each WOTS+ chain walks from its secret start to the public-key endpoint (data-dependent step count handled by a fixed 3-stage pipeline with a secret-selector mux);
+4. the leaf `SHA256(pk_seed || 0x01 || pk_hash[0..71])` walks the authentication path (left/right and the tweak index routed by the secret leaf-index bits) up to `root`.
 
-   Client keeps `r` secret and sends the **blinded message** to the signer.
-
-3) **Signer** signs the **blinded message**
-   ```bash
-   ./SIGNER_MSS_sign
-   ```
-   - Reads `MSS_secret_key.txt`, `blinded_messge.txt`
-
-   - Produces `MSS_signature.txt` with: `leaf_index`, the WOTS signature (512 × 32-byte lines), and the Merkle authentication path (10 × 32-byte lines).
-
-4) **Client** produces a zero-knowledge **signature proof**
-   ```bash
-   ./CLIENT_blind_sign
-   ```
-   - Prompts for:
-     - plaintext message `m` (stdin)
-
-   - Reads: `blinding_key.txt`, `MSS_signature.txt`, `MSS_public_key.txt`
-   - Writes **`signature_proof.bin`**.  
-     If anything is inconsistent (message or `r` doesn’t match, signature invalid, etc.), it prints an error and exits.
-
-5) **Verifier** checks the proof against the public key and message
-   ```bash
-   ./VERIFIER_verify
-   ```
-   - Prompts for the **signed message** `m` (stdin).
-   - Reads: `MSS_public_key.txt` and `signature_proof.bin`.
-   - Prints success/failure.
-
-## Binary Summaries
-
-- **CLIENT_blinding_message**
-  - Input: message `m` from stdin
-  - Output file: `blinding_key.txt`, `blinded_message.txt`
-
-- **SIGNER_MSS_keygen**
-  - Output files: `MSS_secret_key.txt`, `MSS_public_key.txt`
-
-- **SIGNER_MSS_sign**
-  - Reads: `blinded_message.txt`, `MSS_secret_key.txt`
-  - Output file: `MSS_signature.txt`
-
-- **CLIENT_blind_sign**
-  - Inputs: message `m` (stdin)
-  - Reads: `blinding_key.txt`, `MSS_signature.txt`, `MSS_public_key.txt`
-  - Output file: `signature_proof.bin`
-
-- **VERIFIER_verify**
-  - Input: message `m` (stdin)
-  - Reads: `MSS_public_key.txt`, `signature_proof.bin`
-  - Output: success/failure (stdout)
+The circuit outputs `root` and the codeword sum, which the verifier checks equal the public root and `132`.
 
 ## References
 
 - [ZKBoo: Faster Zero-Knowledge for Boolean Circuits — ePrint 2016/163](https://eprint.iacr.org/2016/163)
-- [Post-Quantum Zero-Knowledge and Signatures from Symmetric-Key Primitives - ePrint 2017/279](https://eprint.iacr.org/2017/279.pdf)
-- [GitHub Repository for Original ZKBoo Implementation (Aarhus University) - Proof of knowledge of a SHA-256 preimage](https://github.com/Sobuno/ZKBoo)
+- [Post-Quantum Zero-Knowledge and Signatures from Symmetric-Key Primitives — ePrint 2017/279](https://eprint.iacr.org/2017/279.pdf)
+- [Original ZKBoo implementation (Aarhus University)](https://github.com/Sobuno/ZKBoo)
+- [XMSS — RFC 8391](https://datatracker.ietf.org/doc/html/rfc8391)

@@ -7,19 +7,13 @@
 #include <stdio.h>
 #include <string.h>
 
-// MSS parameters
-extern const int H;
-extern const int N;
-extern const int WOTS_len;
-extern const int nb_leaves;
-
-// ZKBoo parameters & needed values
+// ZKBoo parameters & needed values (XMSS scheme params live in xmss.h)
 extern const int COMMIT_KEY_LEN;
 extern const int NUM_ROUNDS;
 extern const int ySize;
 extern const int Random_Bytes_Needed;
 
-/* 16740 bytes = COMMIT_KEY_LEN (32 bytes) + leaf_index (4 bytes) + Sigma_size (512*32 bytes) + PATH (10*32 bytes) */
+// XOR-shared witness length; see the W_* layout in circuits.h.
 extern const int INPUT_LEN;
 
 #define RIGHTROTATE(x, n) (((x) >> (n)) | ((x) << (32 - (n))))

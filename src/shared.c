@@ -7,20 +7,16 @@
 #include <stdio.h>
 #include <string.h>
 
-// MSS parameters
-const int H = 10;
-const int N = 32;
-const int WOTS_len = 512;
-const int nb_leaves = (1u << H);
-
 // ZKBoo parameters & needed values
 const int COMMIT_KEY_LEN = 32;
-const int NUM_ROUNDS = 137; // Usually 137
-const int ySize = 584360;
-const int Random_Bytes_Needed = 2337440;
+const int NUM_ROUNDS = 219; // Usually 137
+// ySize = number of nonlinear-gate transcript words per view; Random_Bytes_Needed = 4 * ySize.
+// Measured exactly by test_circuit: 248 SHA-256 blocks x 728 + 1120 standalone gates.
+const int ySize = 181664;
+const int Random_Bytes_Needed = 726656;
 
-/* 16740 bytes = COMMIT_KEY_LEN (32 bytes) + leaf_index (4 bytes) + Sigma_size (512 * 32 bytes) + PATH (10*32 bytes) */
-const int INPUT_LEN = 16740;
+/* INPUT_LEN = r (32) + leaf_index (4) + nonce (XMSS_NONCE_LEN=6) + sig_hashes (72*16) + path (10*16) = 1354 */
+const int INPUT_LEN = 1354;
 
 const uint32_t hA[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
 

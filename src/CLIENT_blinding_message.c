@@ -27,14 +27,13 @@ int main(int argc, char *argv[])
                "\n"
                "Description:\n"
                "  Prompts for a plaintext message, generates a random 32-byte blinding key r,\n"
-               "  and prints the 64-byte blinded message = commitment || ~commitment,\n"
-               "  with commitment = SHA256( SHA256(m) || r ).\n"
+               "  and prints the 32-byte commitment M = SHA256( SHA256(m) || r ).\n"
                "\n"
                "Input:\n"
                "  - message m from stdin (one line)\n"
                "Files:\n"
                "  - blinding_key.txt: r (32 bytes, 64 hex uppercase)\n"
-               "  - blinded_message.txt: blinded message (64 bytes, 128 hex uppercase)\n");
+               "  - blinded_message.txt: commitment M (32 bytes, 64 hex uppercase)\n");
         return 0;
     }
 
@@ -63,6 +62,7 @@ int main(int argc, char *argv[])
     if (RAND_bytes(r, BLIND_KEY_LEN) != 1)
     {
         fprintf(stderr, "RAND_bytes failed\n");
+        free(message);
         return EXIT_FAILURE;
     }
 
@@ -85,32 +85,22 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    // commitment M = SHA256( SHA256(m) || r )
     SHA256((unsigned char *)message, strlen(message), digest1);
-
     memcpy(final_input, digest1, SHA256_DIGEST_LENGTH);
     memcpy(final_input + SHA256_DIGEST_LENGTH, r, BLIND_KEY_LEN);
-
     SHA256(final_input, SHA256_DIGEST_LENGTH + BLIND_KEY_LEN, commitment);
 
-    unsigned char final_commitment[2 * SHA256_DIGEST_LENGTH] = {0};
-    memcpy(final_commitment, commitment, SHA256_DIGEST_LENGTH);
-
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
-    {
-        final_commitment[SHA256_DIGEST_LENGTH + i] = ~commitment[i];
-    }
-
-    printf("\nBlinded message = (commitment || ~commitment) ");
-    printf("with commitment = SHA256(SHA256(m) || r)");
+    printf("\nCommitment M = SHA256(SHA256(m) || r)");
     printf("\n\n===========================================================================\n");
-    printf("\nBlinded message (64 bytes):\n\n");
-    print_hex(final_commitment, 2 * SHA256_DIGEST_LENGTH);
+    printf("\nCommitment M (32 bytes):\n\n");
+    print_hex(commitment, SHA256_DIGEST_LENGTH);
 
     FILE *fm = fopen("blinded_message.txt", "w");
     if (fm)
     {
-        for (int i = 0; i < 2 * SHA256_DIGEST_LENGTH; i++)
-            fprintf(fm, "%02X", final_commitment[i]);
+        for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+            fprintf(fm, "%02X", commitment[i]);
         fprintf(fm, "\n");
         fclose(fm);
     }
@@ -122,7 +112,7 @@ int main(int argc, char *argv[])
     }
 
     printf("\n===========================================================================\n\n");
-    printf("Blinding-key r and blinded message also written to files:\n"
+    printf("Blinding-key r and commitment M also written to files:\n"
            "  - blinding_key.txt\n"
            "  - blinded_message.txt\n\n");
 
