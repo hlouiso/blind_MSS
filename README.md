@@ -2,7 +2,7 @@
 
 This project implements a **blind signature** over **XMSS** (a stateful Merkle signature scheme) with **target-sum WOTS+** one-time signatures in the leaves, and a ZK proof in the **ZKBoo / MPC-in-the-head** style to prove knowledge of a valid signature **without revealing** the secret material (the commitment opening, the leaf index, or the signature).
 
-It is the ZKBoo-based instantiation of the generic hash-based blind signature construction: a commitment scheme, a hash-based signature scheme, and a NIZK. Here the commitment is `M = SHA256(SHA256(m) || r)`, the signature is target-sum WOTS+/XMSS, and the NIZK is ZKBoo. The same XMSS/WOTS+ scheme is shared with the Longfellow- and Binius64-based instantiations; only the NIZK differs.
+It is the ZKBoo-based instantiation of the generic hash-based blind signature construction: a commitment scheme, a hash-based signature scheme, and a NIZK. Here the commitment is **Halevi–Micali over GF(2¹²⁸)**, the signature is target-sum WOTS+/XMSS, and the NIZK is ZKBoo.
 
 > ⚠️ This code is for research/education. Do not use in production.
 
@@ -35,9 +35,13 @@ Signature scheme (`xmss.h`), matching the Longfellow/Binius64 instantiations:
 - `XMSS_PK_SEED_BYTES = 16`, `XMSS_NONCE_LEN = 6`
 - All hashing is SHA-256, SPHINCS+-style keyed/tweaked (tweaks `0x00` chain, `0x01` tree/pk, `0x02` message).
 
+Halevi–Micali commitment (`commitment.h`):
+- `HM_NONCES = 6`, `HM_LINES = 2`, field `GF(2¹²⁸)` — same layout as the Longfellow-based instantiation.
+- Opening `(r, a)` is `96 + 192 = 288` bytes; the commitment `com = a‖b‖y` is `256` bytes.
+
 ZKBoo (`shared.c`):
 - `NUM_ROUNDS = 137` parallel executions (soundness error `(2/3)^137`); raise to `219` for `2^-128`.
-- `INPUT_LEN = 1354`, `ySize = 181664` (nonlinear-gate transcript words per view).
+- `INPUT_LEN = 1610`, `ySize = 191448` (nonlinear-gate transcript words per view).
 
 ## Files & Formats
 
@@ -52,11 +56,12 @@ All hex is **UPPERCASE** without spaces.
   - Line 1: `pk_seed` — 16 bytes (32 hex)
   - Line 2: XMSS root — 16 bytes (32 hex)
 
-- **`blinding_key.txt`** (`CLIENT_blinding_message`)
-  - Blinding randomness `r` — 32 bytes (64 hex)
+- **`blinding_key.txt`** (`CLIENT_blinding_message`) — the secret opening `(r, a)`
+  - Line 1: nonces `r₁‖…‖r₆` — 96 bytes (192 hex)
+  - Line 2: line matrix `a` (row-major `a_{0,0..5} ‖ a_{1,0..5}`) — 192 bytes (384 hex)
 
 - **`blinded_message.txt`** (`CLIENT_blinding_message`)
-  - Commitment `M = SHA256( SHA256(m) || r )` — 32 bytes (64 hex)
+  - Commitment `com = a ‖ b ‖ y` — 256 bytes (512 hex). The signer derives `d = SHA256(com)`.
 
 - **`XMSS_signature.txt`** (`SIGNER_XMSS_sign`)
   - Line 1: `leaf_index` — decimal
@@ -70,20 +75,43 @@ All hex is **UPPERCASE** without spaces.
 ## Typical Workflow
 
 1. **Signer** generates keys: `./SIGNER_XMSS_keygen` → `XMSS_secret_key.txt`, `XMSS_public_key.txt`.
-2. **Client** blinds a message: `./CLIENT_blinding_message` (prompts for `m`) → `blinding_key.txt`, `blinded_message.txt` (the commitment `M`). The client keeps `r` secret and sends `M` to the signer.
-3. **Signer** signs `M`: `./SIGNER_XMSS_sign` (reads `XMSS_secret_key.txt`, `blinded_message.txt`; self-checks the signature against the public key) → `XMSS_signature.txt`, and advances the leaf index.
-4. **Client** proves: `./CLIENT_blind_sign` (prompts for `m`; reads `blinding_key.txt`, `XMSS_signature.txt`, `XMSS_public_key.txt`). It first re-checks that the XMSS signature is valid for `SHA256(SHA256(m)||r)`, then writes the ZK proof to `signature_proof.bin`.
+2. **Client** blinds a message: `./CLIENT_blinding_message` (prompts for `m`) → `blinding_key.txt` (the secret opening `(r, a)`), `blinded_message.txt` (the commitment `com = a‖b‖y`). The client keeps `(r, a)` secret and sends `com` to the signer.
+3. **Signer** signs the commitment: `./SIGNER_XMSS_sign` (reads `XMSS_secret_key.txt`, `blinded_message.txt`; derives `d = SHA256(com)`, signs `d`, self-checks against the public key) → `XMSS_signature.txt`, and advances the leaf index.
+4. **Client** proves: `./CLIENT_blind_sign` (prompts for `m`; reads `blinding_key.txt`, `XMSS_signature.txt`, `XMSS_public_key.txt`). It first re-checks that the XMSS signature is valid for `d = SHA256(a‖b‖y)`, then writes the ZK proof to `signature_proof.bin`.
 5. **Verifier** checks: `./VERIFIER_verify` (prompts for `m`; reads `XMSS_public_key.txt`, `signature_proof.bin`).
 
-## The circuit C
+## Performance
 
-`CLIENT_blind_sign` / `VERIFIER_verify` prove/verify in zero knowledge that the witness `(r, leaf_index, nonce, WOTS+ chain values, auth path)` satisfies, for public `(m̂ = SHA256(m), pk = pk_seed || root)`:
-1. `M = SHA256(m̂ || r)` — the commitment;
-2. `mh = SHA256(pk_seed || 0x02 || nonce || M)`, decoded into 72 base-4 coordinates whose sum is `132`;
-3. each WOTS+ chain walks from its secret start to the public-key endpoint (data-dependent step count handled by a fixed 3-stage pipeline with a secret-selector mux);
-4. the leaf `SHA256(pk_seed || 0x01 || pk_hash[0..71])` walks the authentication path (left/right and the tweak index routed by the secret leaf-index bits) up to `root`.
+Message length affects only the native
+`m̂ = SHA256(m)`, so prove/verify time is independent of `|m|`.
 
-The circuit outputs `root` and the codeword sum, which the verifier checks equal the public root and `132`.
+### Artefact sizes
+
+| Artefact | Size |
+|---|---:|
+| Public key (`pk_seed ‖ root`) | $32$ B |
+| Secret key (`sk_seed ‖ pk_seed ‖ leaf_index`) | $52$ B |
+| Commitment `com = a ‖ b ‖ y` | $256$ B |
+| Raw XMSS signature (`leaf ‖ nonce ‖ 72 chains ‖ 10 path`) | $1.29$ KB |
+| **Blind signature (ZKBoo proof)** | $\approx 168.5$ MB |
+
+### Timing
+
+| Phase | Mean time |
+|---|---:|
+| Commitment computation | $< 1$ ms |
+| Key generation | $\approx 130$ ms |
+| Signing | $\approx 130$ ms |
+| Proof generation | $\approx 1.7$ s |
+| Proof verification | $\approx 0.9$ s |
+
+The proof is huge because it is inherent to ZKBoo: each of the `NUM_ROUNDS` rounds
+serialises one full per-view nonlinear-gate transcript, so
+
+```
+proof ≈ NUM_ROUNDS · (ySize·4 + 2·INPUT_LEN + sizeof(a) + 128)
+      = 219 · (765792 + 3220 + 192 + 128) ≈ 168.5 MB
+```
 
 ## References
 

@@ -1,4 +1,7 @@
+#include "commitment.h"
 #include "xmss.h"
+
+#include <openssl/sha.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -34,9 +37,10 @@ int main(int argc, char *argv[])
                "  ./SIGNER_XMSS_sign [-h|--help]\n"
                "\n"
                "Description:\n"
-               "  Reads XMSS_secret_key.txt and blinded_message.txt (the 32-byte commitment M),\n"
-               "  produces a target-sum WOTS+ / XMSS signature on M, self-checks it against the\n"
-               "  public key, and writes XMSS_signature.txt.\n"
+               "  Reads XMSS_secret_key.txt and blinded_message.txt (the 256-byte Halevi-Micali\n"
+               "  commitment com = a||b||y), derives d = SHA256(com), produces a target-sum\n"
+               "  WOTS+ / XMSS signature on d, self-checks it against the public key, and writes\n"
+               "  XMSS_signature.txt.\n"
                "\n"
                "Output file (XMSS_signature.txt):\n"
                "  * line1: leaf_index (decimal)\n"
@@ -77,26 +81,27 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    /* ============================== Reading commitment M ============================== */
+    /* ===================== Reading commitment com = a||b||y, deriving d ===================== */
     FILE *fbm = fopen("blinded_message.txt", "r");
     if (!fbm)
     {
         fprintf(stderr, "Error opening blinded_message.txt\n");
         return EXIT_FAILURE;
     }
-    char mhex[2 * 32 + 2];
-    unsigned char M[32];
-    if (!fgets(mhex, sizeof mhex, fbm) || hex_to_bytes(mhex, M, 32) != 0)
+    char comhex[2 * HM_COM_BYTES + 2];
+    unsigned char com[HM_COM_BYTES], d[32];
+    if (!fgets(comhex, sizeof comhex, fbm) || hex_to_bytes(comhex, com, HM_COM_BYTES) != 0)
     {
-        fprintf(stderr, "Error reading blinded_message.txt (expected 64 hex chars)\n");
+        fprintf(stderr, "Error reading blinded_message.txt (expected %d hex chars)\n", 2 * HM_COM_BYTES);
         fclose(fbm);
         return EXIT_FAILURE;
     }
     fclose(fbm);
+    hm_digest(com, d); /* d = SHA256(com): the signer certifies the full commitment */
 
     /* ============================== Signing ============================== */
     xmss_sig sig;
-    if (!xmss_sign(sk_seed, pk_seed, leaf_idx, M, 32, &sig))
+    if (!xmss_sign(sk_seed, pk_seed, leaf_idx, d, 32, &sig))
     {
         fprintf(stderr, "Error: XMSS signing failed (nonce grinding budget exhausted)\n");
         return EXIT_FAILURE;
@@ -120,7 +125,7 @@ int main(int argc, char *argv[])
     }
     fclose(fpk);
 
-    if (!xmss_verify(pk_seed, root, M, 32, &sig))
+    if (!xmss_verify(pk_seed, root, d, 32, &sig))
     {
         fprintf(stderr, "Self-check FAILED: produced signature does not verify against the public key.\n");
         return EXIT_FAILURE;

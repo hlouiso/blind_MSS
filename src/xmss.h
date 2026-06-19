@@ -6,7 +6,7 @@
  * Longfellow- and Binius64-based instantiations of the paper.  SHA-256 with
  * SPHINCS+-style keyed/tweaked hashing; every internal node is a SHA-256 output
  * truncated to 16 bytes (128-bit).  Byte formats are identical to
- * blind-xmss-longfellow/src/sha.{h,cc} so the security analysis carries over.
+ * https://github.com/diegode/blind-longfellow so the security analysis carries over.
  *
  * Tweaked-hash byte formats (each a single SHA-256 block):
  *   message    : pk_seed(16) || 0x02 || nonce(6)  || message(msg_len)
@@ -23,7 +23,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* ── Parameters (match blind-xmss-longfellow) ─────────────────────────────── */
+/* ── Parameters ───────────────────────────────────────────────────────────── */
 #define XMSS_NODE_BYTES 16    /* SHA-256 truncated to 128 bits */
 #define XMSS_PK_SEED_BYTES 16 /* domain parameter */
 #define XMSS_H 10             /* tree height: 2^10 = 1024 leaves */

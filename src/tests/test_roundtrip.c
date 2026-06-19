@@ -35,23 +35,23 @@ int main(void)
     xmss_node root;
     xmss_compute_root(sk_seed, pk_seed, root);
 
-    unsigned char m_hat[32], r[32];
+    unsigned char m_hat[32], r[HM_R_BYTES], a_mat[HM_A_BYTES];
     RAND_bytes(m_hat, sizeof m_hat);
     RAND_bytes(r, sizeof r);
-    unsigned char preM[64], M[32];
-    memcpy(preM, m_hat, 32);
-    memcpy(preM + 32, r, 32);
-    SHA256(preM, 64, M);
+    RAND_bytes(a_mat, sizeof a_mat);
+    unsigned char com[HM_COM_BYTES], d[32];
+    hm_commit(m_hat, r, a_mat, com, d);
 
     xmss_sig sig;
-    if (!xmss_sign(sk_seed, pk_seed, 0, M, 32, &sig))
+    if (!xmss_sign(sk_seed, pk_seed, 0, d, 32, &sig))
     {
         printf("native sign failed\n");
         return 1;
     }
 
-    unsigned char input[1354];
-    memcpy(input + W_R_OFF, r, 32);
+    unsigned char input[W_END];
+    memcpy(input + W_R_OFF, r, HM_R_BYTES);
+    memcpy(input + W_A_OFF, a_mat, HM_A_BYTES);
     memset(input + W_LEAFIDX_OFF, 0, 4); /* leaf 0 */
     memcpy(input + W_NONCE_OFF, sig.nonce, XMSS_NONCE_LEN);
     for (int i = 0; i < XMSS_WOTS_LEN; i++)

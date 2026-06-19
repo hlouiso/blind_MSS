@@ -1,4 +1,5 @@
 #include "circuits.h"
+#include "commitment.h"
 #include "shared.h"
 #include "xmss.h"
 
@@ -58,7 +59,8 @@ int main(int argc, char *argv[])
     {
         printf("CLIENT_blind_sign\n\n"
                "  Builds a ZKBoo/MPC-in-the-head proof of a valid target-sum WOTS+/XMSS\n"
-               "  signature on the commitment M = SHA256(SHA256(m) || r).\n\n"
+               "  signature on the certified digest d = SHA256(a||b||y) of a Halevi-Micali\n"
+               "  commitment that opens to m_hat = SHA256(m).\n\n"
                "  Prompts: message m (stdin)\n"
                "  Reads:   blinding_key.txt, XMSS_signature.txt, XMSS_public_key.txt\n"
                "  Writes:  signature_proof.bin\n");
@@ -81,10 +83,11 @@ int main(int argc, char *argv[])
     SHA256((unsigned char *)message, strlen(message), m_hat);
     free(message);
 
-    /* ---- blinding key r ---- */
-    unsigned char r[32];
+    /* ---- secret opening: r (6 nonces) then a (2x6 line matrix) ---- */
+    unsigned char r[HM_R_BYTES];
+    unsigned char a_mat[HM_A_BYTES];
     FILE *f = fopen("blinding_key.txt", "r");
-    if (!f || read_hex(f, r, 32) != 0)
+    if (!f || read_hex(f, r, HM_R_BYTES) != 0 || read_hex(f, a_mat, HM_A_BYTES) != 0)
     {
         fprintf(stderr, "Error reading blinding_key.txt\n");
         return EXIT_FAILURE;
@@ -130,14 +133,12 @@ int main(int argc, char *argv[])
     }
 
     /* ---- native consistency pre-check (user verifies Sigma before proving) ---- */
-    unsigned char preM[64], M[32];
-    memcpy(preM, m_hat, 32);
-    memcpy(preM + 32, r, 32);
-    SHA256(preM, 64, M);
-    if (!xmss_verify(pk_seed, root, M, 32, &sig))
+    unsigned char com[HM_COM_BYTES], d[32];
+    hm_commit(m_hat, r, a_mat, com, d); /* com = a||b||y, d = SHA256(com) */
+    if (!xmss_verify(pk_seed, root, d, 32, &sig))
     {
-        fprintf(stderr, "Inconsistent inputs: the XMSS signature is not valid for SHA256(SHA256(m)||r)\n"
-                        "under this public key. Check the message, r, and signature.\n");
+        fprintf(stderr, "Inconsistent inputs: the XMSS signature is not valid for the certified digest\n"
+                        "d = SHA256(a||b||y) under this public key. Check the message, opening, and signature.\n");
         return EXIT_FAILURE;
     }
 
@@ -148,8 +149,9 @@ int main(int argc, char *argv[])
     pubout[YP_SUM_WORD] = XMSS_TARGET_SUM;
 
     /* ---- witness ---- */
-    unsigned char input[1354];
-    memcpy(input + W_R_OFF, r, 32);
+    unsigned char input[W_END];
+    memcpy(input + W_R_OFF, r, HM_R_BYTES);
+    memcpy(input + W_A_OFF, a_mat, HM_A_BYTES);
     input[W_LEAFIDX_OFF + 0] = (sig.leaf_index >> 24) & 0xFF;
     input[W_LEAFIDX_OFF + 1] = (sig.leaf_index >> 16) & 0xFF;
     input[W_LEAFIDX_OFF + 2] = (sig.leaf_index >> 8) & 0xFF;

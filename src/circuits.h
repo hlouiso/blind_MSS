@@ -1,28 +1,34 @@
 #ifndef BUILDING_H
 #define BUILDING_H
 
+#include "commitment.h"
 #include "shared.h"
 #include "xmss.h"
 
 #include <stdbool.h>
 
 /* ── Witness layout (the XOR-shared INPUT_LEN buffer) ─────────────────────────
- *   r           (32)                blinding randomness
+ *   r           (HM_R_BYTES=96)     the n=6 Halevi–Micali nonces r_1..r_6
+ *   a           (HM_A_BYTES=192)    the 2x6 GF(2^128) line matrix a_{k,i}
  *   leaf_index  (4, big-endian)     XMSS leaf index (secret, for blindness)
  *   nonce       (XMSS_NONCE_LEN)    WOTS+ target-sum grinding nonce
  *   sig_hashes  (LEN * NODE)        WOTS+ chain start values
  *   auth_path   (XMSS_H * NODE)     XMSS authentication path
+ * The opening of the commitment is (r, a); b, y, com=a||b||y and the certified
+ * digest d=SHA256(com) are all recomputed inside the circuit.
  * Total = INPUT_LEN (defined in shared.c, must equal W_END). */
 #define W_R_OFF 0
-#define W_R_LEN 32
-#define W_LEAFIDX_OFF (W_R_OFF + W_R_LEN)      /* 32 */
+#define W_R_LEN HM_R_BYTES                       /* 96  */
+#define W_A_OFF (W_R_OFF + W_R_LEN)              /* 96  */
+#define W_A_LEN HM_A_BYTES                       /* 192 */
+#define W_LEAFIDX_OFF (W_A_OFF + W_A_LEN)        /* 288 */
 #define W_LEAFIDX_LEN 4
-#define W_NONCE_OFF (W_LEAFIDX_OFF + W_LEAFIDX_LEN) /* 36 */
-#define W_SIG_OFF (W_NONCE_OFF + XMSS_NONCE_LEN)    /* 42 */
+#define W_NONCE_OFF (W_LEAFIDX_OFF + W_LEAFIDX_LEN) /* 292 */
+#define W_SIG_OFF (W_NONCE_OFF + XMSS_NONCE_LEN)    /* 298 */
 #define W_SIG_LEN (XMSS_WOTS_LEN * XMSS_NODE_BYTES) /* 1152 */
-#define W_PATH_OFF (W_SIG_OFF + W_SIG_LEN)          /* 1194 */
+#define W_PATH_OFF (W_SIG_OFF + W_SIG_LEN)          /* 1450 */
 #define W_PATH_LEN (XMSS_H * XMSS_NODE_BYTES)       /* 160 */
-#define W_END (W_PATH_OFF + W_PATH_LEN)             /* 1354 */
+#define W_END (W_PATH_OFF + W_PATH_LEN)             /* 1610 */
 
 /* The circuit's public output (a->yp), per share:
  *   words 0..3 : XMSS root (16 bytes)

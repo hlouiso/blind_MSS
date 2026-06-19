@@ -11,12 +11,15 @@
 const int COMMIT_KEY_LEN = 32;
 const int NUM_ROUNDS = 219; // Usually 137
 // ySize = number of nonlinear-gate transcript words per view; Random_Bytes_Needed = 4 * ySize.
-// Measured exactly by test_circuit: 248 SHA-256 blocks x 728 + 1120 standalone gates.
-const int ySize = 181664;
-const int Random_Bytes_Needed = 726656;
+// Measured exactly by test_circuit: 253 SHA-256 blocks x 728 + 7264 standalone gates.
+// Commitment SHA blocks: y=SHA256(r) (2) + d=SHA256(a||b||y) (5); the 7264 standalone
+// gates include the 12 GF(2^128) line multiplies (512 ANDs each = 6144) + 1120 XMSS gates.
+const int ySize = 191448;
+const int Random_Bytes_Needed = 765792;
 
-/* INPUT_LEN = r (32) + leaf_index (4) + nonce (XMSS_NONCE_LEN=6) + sig_hashes (72*16) + path (10*16) = 1354 */
-const int INPUT_LEN = 1354;
+/* INPUT_LEN = r (HM nonces, 6*16=96) + a (HM matrix, 2*6*16=192) + leaf_index (4)
+ *           + nonce (XMSS_NONCE_LEN=6) + sig_hashes (72*16) + path (10*16) = 1610 */
+const int INPUT_LEN = 1610;
 
 const uint32_t hA[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
 

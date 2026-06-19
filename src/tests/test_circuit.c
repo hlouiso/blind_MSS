@@ -33,32 +33,32 @@ int main(void)
     xmss_node root;
     xmss_compute_root(sk_seed, pk_seed, root);
 
-    unsigned char m_hat[32], r[32];
+    unsigned char m_hat[32], r[HM_R_BYTES], a_mat[HM_A_BYTES];
     RAND_bytes(m_hat, sizeof m_hat);
     RAND_bytes(r, sizeof r);
+    RAND_bytes(a_mat, sizeof a_mat);
 
-    unsigned char preM[64];
-    memcpy(preM, m_hat, 32);
-    memcpy(preM + 32, r, 32);
-    unsigned char M[32];
-    SHA256(preM, 64, M);
+    /* Halevi–Micali commitment: com = a||b||y, certified digest d = SHA256(com) */
+    unsigned char com[HM_COM_BYTES], d[32];
+    hm_commit(m_hat, r, a_mat, com, d);
 
     uint32_t leaf_index = 0;
     xmss_sig sig;
-    if (!xmss_sign(sk_seed, pk_seed, leaf_index, M, 32, &sig))
+    if (!xmss_sign(sk_seed, pk_seed, leaf_index, d, 32, &sig))
     {
         printf("FAIL: native signing failed\n");
         return 1;
     }
-    if (!xmss_verify(pk_seed, root, M, 32, &sig))
+    if (!xmss_verify(pk_seed, root, d, 32, &sig))
     {
         printf("FAIL: native signature does not verify\n");
         return 1;
     }
 
     /* ---- assemble the witness in the new layout ---- */
-    unsigned char input[1354];
-    memcpy(input + W_R_OFF, r, 32);
+    unsigned char input[W_END];
+    memcpy(input + W_R_OFF, r, HM_R_BYTES);
+    memcpy(input + W_A_OFF, a_mat, HM_A_BYTES);
     input[W_LEAFIDX_OFF + 0] = (leaf_index >> 24) & 0xFF;
     input[W_LEAFIDX_OFF + 1] = (leaf_index >> 16) & 0xFF;
     input[W_LEAFIDX_OFF + 2] = (leaf_index >> 8) & 0xFF;

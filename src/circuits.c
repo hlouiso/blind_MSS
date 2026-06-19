@@ -1,6 +1,8 @@
 #include "circuits.h"
 #include "MPC_prove_functions.h"
 #include "MPC_verify_functions.h"
+#include "commitment.h"
+#include "gf128.h"
 #include "shared.h"
 #include "xmss.h"
 
@@ -81,6 +83,36 @@ static void mpc_mux16(unsigned char x[3][16], unsigned char h[3][16], const uint
     }
 }
 
+/* Shared GF(2^128) multiply: out = X * Y, each a 3-share 128-bit element in word
+ * form (4 little-endian words).  Conditional shift-and-XOR over the 128 bits of Y:
+ * each Y-bit broadcasts (locally, free) to a full-word mask, AND'd with X (4
+ * mpc_AND gates) and shift-accumulated into a 256-bit product, which is then
+ * reduced mod the field polynomial.  512 mpc_AND gates per multiply; the
+ * shift-accumulate and reduction are GF(2)-linear (value-independent) so they run
+ * per share with no transcript/randomness cost — guaranteeing the reconstructed
+ * product equals the native gf128_mul. */
+static void mpc_gf128_mul(const uint32_t X[3][4], const uint32_t Y[3][4], uint32_t out[3][4],
+                          unsigned char *randomness[3], int *randCount, View *views[3], int *countY)
+{
+    uint32_t acc[3][8] = {{0}};
+    for (int j = 0; j < 128; j++)
+    {
+        uint32_t mask[3];
+        for (int k = 0; k < 3; k++)
+            mask[k] = 0u - ((Y[k][j >> 5] >> (j & 31)) & 1u);
+        for (int w = 0; w < 4; w++)
+        {
+            uint32_t xw[3] = {X[0][w], X[1][w], X[2][w]};
+            uint32_t mw[3];
+            mpc_AND(mask, xw, mw, randomness, randCount, views, countY);
+            for (int k = 0; k < 3; k++)
+                gf128_word_shift_xor(acc[k], mw[k], 32 * w + j);
+        }
+    }
+    for (int k = 0; k < 3; k++)
+        gf128_reduce(acc[k], out[k]);
+}
+
 /* ──────────────────────────────── building_views ────────────────────────────── */
 
 void building_views(a *a, unsigned char message_digest[32], unsigned char pk_seed[XMSS_PK_SEED_BYTES],
@@ -89,19 +121,63 @@ void building_views(a *a, unsigned char message_digest[32], unsigned char pk_see
     int *countY = calloc(1, sizeof(int));
     int *randCount = calloc(1, sizeof(int));
 
-    /* =================== (1) commitment M = SHA256(m̂ ‖ r) =================== */
-    unsigned char Msh[3][32];
+    /* =================== (1) Halevi–Micali commitment → digest d =================== */
+    unsigned char dsh[3][32];
     {
+        /* (1a) y = SHA256(r_1 ‖ … ‖ r_6) — hashes the n=6 nonces only */
+        unsigned char ysh[3][32];
+        {
+            unsigned char *sec[3], *out[3];
+            for (int k = 0; k < 3; k++)
+            {
+                sec[k] = shares[k] + W_R_OFF;
+                out[k] = ysh[k];
+            }
+            mpc_thash(views, randomness, countY, randCount, NULL, 0, sec, HM_R_BYTES, NULL, 0, out, 32);
+        }
+
+        /* (1b) two affine lines b_k = m̂_k + Σ_i a_{k,i}·r_i over GF(2^128) */
+        unsigned char bsh[3][HM_B_BYTES];
+        for (int line = 0; line < HM_LINES; line++)
+        {
+            uint32_t acc[3][4] = {{0}};
+            for (int i = 0; i < HM_NONCES; i++)
+            {
+                uint32_t A[3][4], R[3][4], P[3][4];
+                for (int k = 0; k < 3; k++)
+                {
+                    gf128_load(A[k], shares[k] + W_A_OFF + (line * HM_NONCES + i) * HM_ELT);
+                    gf128_load(R[k], shares[k] + W_R_OFF + i * HM_ELT);
+                }
+                mpc_gf128_mul(A, R, P, randomness, randCount, views, countY);
+                for (int k = 0; k < 3; k++)
+                    for (int w = 0; w < 4; w++)
+                        acc[k][w] ^= P[k][w];
+            }
+            /* + m̂_line (public): XOR the public 16-byte half into party 0 only */
+            uint32_t Mk[4];
+            gf128_load(Mk, message_digest + line * HM_ELT);
+            for (int w = 0; w < 4; w++)
+                acc[0][w] ^= Mk[w];
+            for (int k = 0; k < 3; k++)
+                gf128_store(bsh[k] + line * HM_ELT, acc[k]);
+        }
+
+        /* (1c) certified digest d = SHA256(a ‖ b ‖ y) — a,b,y all secret */
+        unsigned char secbuf[3][HM_COM_BYTES];
         unsigned char *sec[3], *out[3];
         for (int k = 0; k < 3; k++)
         {
-            sec[k] = shares[k] + W_R_OFF; /* r share (32) */
-            out[k] = Msh[k];
+            memcpy(secbuf[k], shares[k] + W_A_OFF, HM_A_BYTES);
+            memcpy(secbuf[k] + HM_A_BYTES, bsh[k], HM_B_BYTES);
+            memcpy(secbuf[k] + HM_A_BYTES + HM_B_BYTES, ysh[k], HM_Y_BYTES);
+            sec[k] = secbuf[k];
+            out[k] = dsh[k];
         }
-        mpc_thash(views, randomness, countY, randCount, message_digest, 32, sec, W_R_LEN, NULL, 0, out, 32);
+        mpc_thash(views, randomness, countY, randCount, NULL, 0, sec, HM_COM_BYTES, NULL, 0, out, 32);
     }
 
-    /* =========== (2) message hash mh = SHA256(pk_seed ‖ 0x02 ‖ nonce ‖ M) =========== */
+    /* =========== (2) message hash mh = SHA256(pk_seed ‖ 0x02 ‖ nonce ‖ d) =========== */
     unsigned char mh[3][32];
     {
         unsigned char prefix[XMSS_PK_SEED_BYTES + 1];
@@ -112,7 +188,7 @@ void building_views(a *a, unsigned char message_digest[32], unsigned char pk_see
         for (int k = 0; k < 3; k++)
         {
             memcpy(secbuf[k], shares[k] + W_NONCE_OFF, XMSS_NONCE_LEN);
-            memcpy(secbuf[k] + XMSS_NONCE_LEN, Msh[k], 32);
+            memcpy(secbuf[k] + XMSS_NONCE_LEN, dsh[k], 32);
             sec[k] = secbuf[k];
             out[k] = mh[k];
         }
@@ -342,6 +418,29 @@ static void mpc_mux16_verify(unsigned char x[2][16], unsigned char h[2][16], con
     }
 }
 
+/* Mirror of mpc_gf128_mul on the two opened parties. */
+static void mpc_gf128_mul_verify(const uint32_t X[2][4], const uint32_t Y[2][4], uint32_t out[2][4], View ve,
+                                 View ve1, unsigned char *randomness[2], int *randCount, int *countY)
+{
+    uint32_t acc[2][8] = {{0}};
+    for (int j = 0; j < 128; j++)
+    {
+        uint32_t mask[2];
+        for (int t = 0; t < 2; t++)
+            mask[t] = 0u - ((Y[t][j >> 5] >> (j & 31)) & 1u);
+        for (int w = 0; w < 4; w++)
+        {
+            uint32_t xw[2] = {X[0][w], X[1][w]};
+            uint32_t mw[2];
+            mpc_AND_verify(mask, xw, mw, ve, ve1, randomness, randCount, countY);
+            for (int t = 0; t < 2; t++)
+                gf128_word_shift_xor(acc[t], mw[t], 32 * w + j);
+        }
+    }
+    for (int t = 0; t < 2; t++)
+        gf128_reduce(acc[t], out[t]);
+}
+
 /* ──────────────────────────────────── verify ─────────────────────────────────── */
 
 void verify(unsigned char message_digest[32], unsigned char pk_seed[XMSS_PK_SEED_BYTES], bool *error, a *a, int e,
@@ -370,20 +469,67 @@ void verify(unsigned char message_digest[32], unsigned char pk_seed[XMSS_PK_SEED
     View ve = z->ve, ve1 = z->ve1;
     unsigned char *vx[2] = {z->ve.x, z->ve1.x};
 
-    /* =================== (1) commitment M = SHA256(m̂ ‖ r) =================== */
-    unsigned char Msh[2][32];
+    /* =================== (1) Halevi–Micali commitment → digest d =================== */
+    unsigned char dsh[2][32];
     {
+        /* (1a) y = SHA256(r_1 ‖ … ‖ r_6) — hashes the n=6 nonces only */
+        unsigned char ysh[2][32];
+        {
+            unsigned char *sec[2], *out[2];
+            for (int j = 0; j < 2; j++)
+            {
+                sec[j] = vx[j] + W_R_OFF;
+                out[j] = ysh[j];
+            }
+            mpc_thash_verify(ve, ve1, randomness, countY, randCount, opened, NULL, 0, sec, HM_R_BYTES, NULL, 0, out,
+                             32);
+        }
+
+        /* (1b) two affine lines b_k = m̂_k + Σ_i a_{k,i}·r_i over GF(2^128) */
+        unsigned char bsh[2][HM_B_BYTES];
+        for (int line = 0; line < HM_LINES; line++)
+        {
+            uint32_t acc[2][4] = {{0}};
+            for (int i = 0; i < HM_NONCES; i++)
+            {
+                uint32_t A[2][4], R[2][4], P[2][4];
+                for (int j = 0; j < 2; j++)
+                {
+                    gf128_load(A[j], vx[j] + W_A_OFF + (line * HM_NONCES + i) * HM_ELT);
+                    gf128_load(R[j], vx[j] + W_R_OFF + i * HM_ELT);
+                }
+                mpc_gf128_mul_verify(A, R, P, ve, ve1, randomness, randCount, countY);
+                for (int j = 0; j < 2; j++)
+                    for (int w = 0; w < 4; w++)
+                        acc[j][w] ^= P[j][w];
+            }
+            /* + m̂_line (public): XOR into the opened party that is party 0 (if any) */
+            uint32_t Mk[4];
+            gf128_load(Mk, message_digest + line * HM_ELT);
+            for (int j = 0; j < 2; j++)
+                if (opened[j] == 0)
+                    for (int w = 0; w < 4; w++)
+                        acc[j][w] ^= Mk[w];
+            for (int j = 0; j < 2; j++)
+                gf128_store(bsh[j] + line * HM_ELT, acc[j]);
+        }
+
+        /* (1c) certified digest d = SHA256(a ‖ b ‖ y) — a,b,y all secret */
+        unsigned char secbuf[2][HM_COM_BYTES];
         unsigned char *sec[2], *out[2];
         for (int j = 0; j < 2; j++)
         {
-            sec[j] = vx[j] + W_R_OFF;
-            out[j] = Msh[j];
+            memcpy(secbuf[j], vx[j] + W_A_OFF, HM_A_BYTES);
+            memcpy(secbuf[j] + HM_A_BYTES, bsh[j], HM_B_BYTES);
+            memcpy(secbuf[j] + HM_A_BYTES + HM_B_BYTES, ysh[j], HM_Y_BYTES);
+            sec[j] = secbuf[j];
+            out[j] = dsh[j];
         }
-        mpc_thash_verify(ve, ve1, randomness, countY, randCount, opened, message_digest, 32, sec, W_R_LEN, NULL, 0,
-                         out, 32);
+        mpc_thash_verify(ve, ve1, randomness, countY, randCount, opened, NULL, 0, sec, HM_COM_BYTES, NULL, 0, out,
+                         32);
     }
 
-    /* =========== (2) message hash mh = SHA256(pk_seed ‖ 0x02 ‖ nonce ‖ M) =========== */
+    /* =========== (2) message hash mh = SHA256(pk_seed ‖ 0x02 ‖ nonce ‖ d) =========== */
     unsigned char mh[2][32];
     {
         unsigned char prefix[XMSS_PK_SEED_BYTES + 1];
@@ -394,7 +540,7 @@ void verify(unsigned char message_digest[32], unsigned char pk_seed[XMSS_PK_SEED
         for (int j = 0; j < 2; j++)
         {
             memcpy(secbuf[j], vx[j] + W_NONCE_OFF, XMSS_NONCE_LEN);
-            memcpy(secbuf[j] + XMSS_NONCE_LEN, Msh[j], 32);
+            memcpy(secbuf[j] + XMSS_NONCE_LEN, dsh[j], 32);
             sec[j] = secbuf[j];
             out[j] = mh[j];
         }
