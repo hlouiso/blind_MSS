@@ -43,18 +43,25 @@ _Static_assert(W_END == 2762, "W_END changed — update INPUT_LEN in shared.c");
 extern int g_circuit_gates;
 
 /**
- * Build the three MPC views for one ZKBoo round of the target-sum WOTS+/XMSS
- * blind-signature circuit.  Public inputs: message digest m̂ = SHA256(m) and the
- * 16-byte XMSS public seed.  All signature material is in the shared witness.
+ * Build N-party KKW views for one round of the target-sum WOTS+/XMSS circuit.
+ * x_shares[N_PARTIES]: XOR-secret-shared witness (INPUT_LEN bytes each).
+ * tapes[N_PARTIES]:    expanded Beaver triple tapes (TAPE_SIZE bytes each).
+ * broadcast, aux:      output arrays (2*ySize and ySize uint32_t respectively).
+ * Writes output shares into a->yp[N_PARTIES][8].
  */
-void building_views(a *a, unsigned char message_digest[32], unsigned char pk_seed[XMSS_PK_SEED_BYTES],
-                    unsigned char *shares[3], unsigned char *randomness[3], View *views[3]);
+void building_views(a *a, unsigned char message_digest[32],
+                    unsigned char pk_seed[XMSS_PK_SEED_BYTES],
+                    unsigned char *x_shares[N_PARTIES],
+                    unsigned char *tapes[N_PARTIES],
+                    uint32_t *broadcast, uint32_t *aux);
 
 /**
- * Verify one round given challenge e ∈ {0,1,2} (MPC-in-the-head, ZKBoo-like).
- * Sets *error = true on first inconsistency, leaves it unchanged otherwise.
+ * Verify one KKW round.
+ * e: hidden party index ∈ {0..N_PARTIES-1}.
+ * Sets *error = true on any inconsistency.
  */
-void verify(unsigned char message_digest[32], unsigned char pk_seed[XMSS_PK_SEED_BYTES], bool *error, a *a, int e,
-            z *z);
+void verify(unsigned char message_digest[32],
+            unsigned char pk_seed[XMSS_PK_SEED_BYTES],
+            bool *error, a *a, int e, z *z);
 
 #endif // BUILDING_H

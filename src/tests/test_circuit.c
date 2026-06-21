@@ -1,17 +1,18 @@
-/* Standalone cross-check for the prover circuit (building_views):
- * builds a real native XMSS signature, runs the ZKBoo prover circuit on the
- * shared witness, and confirms the reconstructed output (root | codeword sum)
- * matches the native values.  Also prints the exact gate count (countY) used to
- * size ySize / Random_Bytes_Needed.
+/* Standalone cross-check for the KKW prover circuit (building_views):
+ * builds a real native XMSS signature, runs the KKW prover on the shared
+ * witness, and confirms the reconstructed output (root | codeword sum)
+ * matches the native values.  Also prints the gate count for sizing ySize.
  *
- * Build:
- *   clang -O2 -Wall -Wextra -Wno-array-parameter -I/opt/homebrew/opt/openssl/include \
- *     circuits.c MPC_prove_functions.c MPC_verify_functions.c shared.c xmss.c test_circuit.c \
- *     -L/opt/homebrew/opt/openssl/lib -lcrypto -o test_circuit
+ * Build from src/:
+ *   gcc -O2 -Wall -Wextra -Wno-array-parameter \
+ *     circuits.c MPC_prove_functions.c MPC_verify_functions.c \
+ *     shared.c xmss.c commitment.c gf128.c tests/test_circuit.c \
+ *     -lssl -lcrypto -o test_circuit
  */
-#include "circuits.h"
-#include "shared.h"
-#include "xmss.h"
+#include "../circuits.h"
+#include "../shared.h"
+#include "../xmss.h"
+#include "../commitment.h"
 
 #include <openssl/rand.h>
 #include <openssl/sha.h>
@@ -20,12 +21,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define YBIG 300000              /* generous per-view transcript size (words) */
-#define RBIG (4 * YBIG + 64)     /* generous random-tape size (bytes) */
-
 int main(void)
 {
-    /* ---- native key + signature on a commitment M = SHA256(m_hat || r) ---- */
     unsigned char sk_seed[32], pk_seed[XMSS_PK_SEED_BYTES];
     RAND_bytes(sk_seed, sizeof sk_seed);
     RAND_bytes(pk_seed, sizeof pk_seed);
@@ -38,94 +35,80 @@ int main(void)
     RAND_bytes(r, sizeof r);
     RAND_bytes(a_mat, sizeof a_mat);
 
-    /* Halevi–Micali commitment: com = a||b||y, certified digest d = SHA256(com) */
     unsigned char com[HM_COM_BYTES], d[32];
     hm_commit(m_hat, r, a_mat, com, d);
 
-    uint32_t leaf_index = 0;
     xmss_sig sig;
-    if (!xmss_sign(sk_seed, pk_seed, leaf_index, d, 32, &sig))
-    {
-        printf("FAIL: native signing failed\n");
-        return 1;
+    if (!xmss_sign(sk_seed, pk_seed, 0, d, 32, &sig)) {
+        printf("FAIL: native signing failed\n"); return 1;
     }
-    if (!xmss_verify(pk_seed, root, d, 32, &sig))
-    {
-        printf("FAIL: native signature does not verify\n");
-        return 1;
+    if (!xmss_verify(pk_seed, root, d, 32, &sig)) {
+        printf("FAIL: native signature does not verify\n"); return 1;
     }
 
-    /* ---- assemble the witness in the new layout ---- */
     unsigned char input[W_END];
-    memcpy(input + W_R_OFF, r, HM_R_BYTES);
-    memcpy(input + W_A_OFF, a_mat, HM_A_BYTES);
-    input[W_LEAFIDX_OFF + 0] = (leaf_index >> 24) & 0xFF;
-    input[W_LEAFIDX_OFF + 1] = (leaf_index >> 16) & 0xFF;
-    input[W_LEAFIDX_OFF + 2] = (leaf_index >> 8) & 0xFF;
-    input[W_LEAFIDX_OFF + 3] = (leaf_index) & 0xFF;
+    memcpy(input + W_R_OFF,   r,      HM_R_BYTES);
+    memcpy(input + W_A_OFF,   a_mat,  HM_A_BYTES);
+    input[W_LEAFIDX_OFF+0] = 0; input[W_LEAFIDX_OFF+1] = 0;
+    input[W_LEAFIDX_OFF+2] = 0; input[W_LEAFIDX_OFF+3] = 0;
     memcpy(input + W_NONCE_OFF, sig.nonce, XMSS_NONCE_LEN);
     for (int i = 0; i < XMSS_WOTS_LEN; i++)
-        memcpy(input + W_SIG_OFF + i * XMSS_NODE_BYTES, sig.sig_hashes[i], XMSS_NODE_BYTES);
+        memcpy(input + W_SIG_OFF + i*XMSS_NODE_BYTES, sig.sig_hashes[i], XMSS_NODE_BYTES);
     for (int h = 0; h < XMSS_H; h++)
-        memcpy(input + W_PATH_OFF + h * XMSS_NODE_BYTES, sig.auth_path[h], XMSS_NODE_BYTES);
+        memcpy(input + W_PATH_OFF + h*XMSS_NODE_BYTES, sig.auth_path[h], XMSS_NODE_BYTES);
 
-    if ((int)W_END != INPUT_LEN)
-    {
-        printf("FAIL: witness layout mismatch (W_END=%d INPUT_LEN=%d)\n", (int)W_END, INPUT_LEN);
-        return 1;
+    /* KKW: N_PARTIES x shares */
+    unsigned char *x_shares[N_PARTIES];
+    for (int p = 0; p < N_PARTIES; p++) {
+        x_shares[p] = malloc(INPUT_LEN);
+        if (!x_shares[p]) { printf("FAIL: OOM\n"); return 1; }
+    }
+    for (int p = 0; p < N_PARTIES - 1; p++) RAND_bytes(x_shares[p], INPUT_LEN);
+    for (int b = 0; b < INPUT_LEN; b++) {
+        unsigned char v = input[b];
+        for (int p = 0; p < N_PARTIES-1; p++) v ^= x_shares[p][b];
+        x_shares[N_PARTIES-1][b] = v;
     }
 
-    /* ---- XOR-share the witness across 3 parties ---- */
-    unsigned char *shares[3], *randomness[3];
-    View *views[3];
-    for (int k = 0; k < 3; k++)
-    {
-        shares[k] = malloc(INPUT_LEN);
-        randomness[k] = malloc(RBIG);
-        RAND_bytes(randomness[k], RBIG);
-        views[k] = malloc(sizeof(View));
-        views[k]->x = shares[k];
-        views[k]->y = malloc((size_t)YBIG * sizeof(uint32_t));
+    /* Random seeds + expand tapes */
+    unsigned char seeds[N_PARTIES][SEED_SIZE];
+    RAND_bytes(seeds[0], N_PARTIES * SEED_SIZE);
+    unsigned char *tapes[N_PARTIES];
+    for (int p = 0; p < N_PARTIES; p++) {
+        tapes[p] = malloc((size_t)TAPE_SIZE);
+        if (!tapes[p]) { printf("FAIL: OOM\n"); return 1; }
+        expand_tape(seeds[p], tapes[p]);
     }
-    RAND_bytes(shares[0], INPUT_LEN);
-    RAND_bytes(shares[1], INPUT_LEN);
-    for (int j = 0; j < INPUT_LEN; j++)
-        shares[2][j] = input[j] ^ shares[0][j] ^ shares[1][j];
 
-    /* ---- run the prover circuit ---- */
+    /* broadcast[2*ySize], aux[ySize] — use generous initial sizes */
+    int YBIG = 300000;
+    uint32_t *broadcast = calloc((size_t)(2 * YBIG), sizeof(uint32_t));
+    uint32_t *aux       = calloc((size_t)YBIG,       sizeof(uint32_t));
+    if (!broadcast || !aux) { printf("FAIL: OOM\n"); return 1; }
+
     a A;
-    building_views(&A, m_hat, pk_seed, shares, randomness, views);
+    building_views(&A, m_hat, pk_seed, x_shares, tapes, broadcast, aux);
 
-    /* ---- reconstruct and compare ---- */
+    /* Reconstruct output and compare */
     unsigned char circ_root[16];
-    for (int w = 0; w < YP_ROOT_WORDS; w++)
-    {
-        uint32_t v = A.yp[0][w] ^ A.yp[1][w] ^ A.yp[2][w];
-        memcpy(circ_root + w * 4, &v, 4);
+    uint32_t circ_sum = 0;
+    for (int w = 0; w < YP_ROOT_WORDS; w++) {
+        uint32_t v = 0;
+        for (int p = 0; p < N_PARTIES; p++) v ^= A.yp[p][w];
+        memcpy(circ_root + w*4, &v, 4);
     }
-    uint32_t circ_sum = A.yp[0][YP_SUM_WORD] ^ A.yp[1][YP_SUM_WORD] ^ A.yp[2][YP_SUM_WORD];
+    for (int p = 0; p < N_PARTIES; p++) circ_sum ^= A.yp[p][YP_SUM_WORD];
 
     int ok_root = (memcmp(circ_root, root, 16) == 0);
-    int ok_sum = (circ_sum == (uint32_t)XMSS_TARGET_SUM);
+    int ok_sum  = (circ_sum == (uint32_t)XMSS_TARGET_SUM);
 
     printf("  circuit root  %s native root\n", ok_root ? "==" : "!=  MISMATCH");
     printf("  circuit sum   = %u (target %d) %s\n", circ_sum, XMSS_TARGET_SUM, ok_sum ? "ok" : "MISMATCH");
-    printf("  gate count (countY) = %d   -> set ySize=%d, Random_Bytes_Needed=%d\n", g_circuit_gates,
-           g_circuit_gates, 4 * g_circuit_gates);
+    printf("  gate count = %d  -> set ySize=%d in shared.c\n", g_circuit_gates, g_circuit_gates);
 
-    for (int k = 0; k < 3; k++)
-    {
-        free(shares[k]);
-        free(randomness[k]);
-        free(views[k]->y);
-        free(views[k]);
-    }
+    for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
+    free(broadcast); free(aux);
 
-    if (ok_root && ok_sum)
-    {
-        printf("\nCIRCUIT OK\n");
-        return 0;
-    }
-    printf("\nCIRCUIT FAILED\n");
-    return 1;
+    if (ok_root && ok_sum) { printf("\nCIRCUIT OK\n"); return 0; }
+    printf("\nCIRCUIT FAILED\n"); return 1;
 }

@@ -5,66 +5,69 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-// ZKBoo parameters & needed values
-const int COMMIT_KEY_LEN = 32;
-const int NUM_ROUNDS = 219; // Usually 137
-// ySize = number of nonlinear-gate transcript words per view; Random_Bytes_Needed = 4 * ySize.
-// Measured exactly by test_circuit (run after any parameter change to re-derive these values).
+/* ── KKW parameters ─────────────────────────────────────────────────────── */
+const int NUM_ROUNDS = 32;
+/* ySize: number of nonlinear gates (word-level) in one circuit execution.
+ * Measured by test_circuit after any parameter change. */
 const int ySize = 151776;
-const int Random_Bytes_Needed = 607104;
+const int INPUT_LEN = 2762; /* W_END — see circuits.h */
 
-/* INPUT_LEN = r (HM nonces, 6*16=96) + a (HM matrix, 2*6*16=192) + leaf_index (4)
- *           + nonce (XMSS_NONCE_LEN=6) + sig_hashes (144*16) + path (10*16) = 2762 */
-const int INPUT_LEN = 2762;
+/* TAPE_SIZE = 3 * ySize * 4 (u[], v[], w_raw[] blocks, each ySize uint32_t). */
+const int TAPE_SIZE = 3 * 151776 * 4; /* = 1 821 312 bytes */
 
-const uint32_t hA[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+const uint32_t hA[8] = {
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+};
+const uint32_t k[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+};
 
-const uint32_t k[64] = {0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-                        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-                        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-                        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-                        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-                        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-                        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-                        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+/* ── Tape expansion ─────────────────────────────────────────────────────── */
 
-int prf_aes256_ctr_32(const unsigned char sk_seed[32], uint32_t leaf, uint32_t j, unsigned char out32[32])
+void expand_tape(const unsigned char seed[SEED_SIZE], unsigned char *tape)
 {
+    /* AES-256-CTR: seed → TAPE_SIZE bytes of pseudo-random Beaver triple data.
+     * IV = {0xA5,0xA5,0xA5,0xA5, 0,0,...} (same domain separator as ZKBoo era). */
     unsigned char iv[16] = {0};
-
     iv[0] = iv[1] = iv[2] = iv[3] = 0xA5;
 
-    iv[4] = (unsigned char)(leaf >> 24);
-    iv[5] = (unsigned char)(leaf >> 16);
-    iv[6] = (unsigned char)(leaf >> 8);
-    iv[7] = (unsigned char)(leaf);
-
-    iv[8] = (unsigned char)(j >> 24);
-    iv[9] = (unsigned char)(j >> 16);
-    iv[10] = (unsigned char)(j >> 8);
-    iv[11] = (unsigned char)(j);
-
-    iv[12] = iv[13] = iv[14] = iv[15] = 0;
-
-    unsigned char zeros[32] = {0};
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx)
-        return 0;
-    int outl = 0, tmplen = 0;
-    int ok = EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, sk_seed, iv) == 1 &&
-             EVP_EncryptUpdate(ctx, out32, &outl, zeros, sizeof zeros) == 1 &&
-             EVP_EncryptFinal_ex(ctx, out32 + outl, &tmplen) == 1;
+    if (!ctx) { memset(tape, 0, TAPE_SIZE); return; }
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, seed, iv) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        memset(tape, 0, TAPE_SIZE);
+        return;
+    }
+
+    unsigned char zeros[64] = {0};
+    size_t offset = 0;
+    size_t total = (size_t)TAPE_SIZE;
+    int outl = 0;
+    while (offset < total) {
+        size_t chunk = (total - offset < 64) ? (total - offset) : 64;
+        EVP_EncryptUpdate(ctx, tape + offset, &outl, zeros, (int)chunk);
+        offset += chunk;
+    }
     EVP_CIPHER_CTX_free(ctx);
-    return ok;
 }
+
+/* ── SHA-256 helpers ────────────────────────────────────────────────────── */
 
 int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32])
 {
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx)
-        return 0;
+    if (!ctx) return 0;
     unsigned int outl = 0;
     int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
              EVP_DigestUpdate(ctx, in, inlen) == 1 &&
@@ -73,156 +76,46 @@ int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32])
     return ok;
 }
 
-void getAllRandomness(unsigned char key[32], unsigned char *randomness)
+void H_com(const unsigned char seed[SEED_SIZE],
+           const unsigned char *x,
+           const uint32_t yp[8],
+           unsigned char hash[32])
 {
-    unsigned char iv[16] = {0};
-    iv[0] = iv[1] = iv[2] = iv[3] = 0xA5;
-
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx)
-        return;
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, key, iv) != 1)
-    {
-        EVP_CIPHER_CTX_free(ctx);
-        return;
+    /* Encode yp as 32 big-endian bytes. */
+    unsigned char yp_bytes[32];
+    for (int i = 0; i < 8; i++) {
+        yp_bytes[i*4+0] = (unsigned char)(yp[i] >> 24);
+        yp_bytes[i*4+1] = (unsigned char)(yp[i] >> 16);
+        yp_bytes[i*4+2] = (unsigned char)(yp[i] >>  8);
+        yp_bytes[i*4+3] = (unsigned char)(yp[i]);
     }
 
-    size_t total = Random_Bytes_Needed;
-    size_t offset = 0;
-    unsigned char zeros[32] = {0};
-    int outl = 0;
-
-    while (offset < total)
-    {
-        size_t chunk = (total - offset > 32) ? 32 : (total - offset);
-        unsigned char out[32];
-        EVP_EncryptUpdate(ctx, out, &outl, zeros, 32);
-        memcpy(randomness + offset, out, chunk);
-        offset += chunk;
-    }
-
-    EVP_CIPHER_CTX_free(ctx);
-}
-
-uint32_t getRandom32(unsigned char *randomness, int randCount)
-{
-    uint32_t ret;
-    memcpy(&ret, &randomness[randCount], 4);
-    return ret;
-}
-
-int alloc_structures_prove(unsigned char *shares[NUM_ROUNDS][3], a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS],
-                           unsigned char *randomness[NUM_ROUNDS][3], View *localViews[NUM_ROUNDS][3])
-{
-    for (int i = 0; i < NUM_ROUNDS; i++)
-    {
-        as[i] = NULL;
-        zs[i] = NULL;
-        for (int j = 0; j < 3; j++)
-        {
-            shares[i][j] = NULL;
-            randomness[i][j] = NULL;
-            localViews[i][j] = NULL;
-        }
-    }
-
-    int round;
-    for (int i = 0; i < NUM_ROUNDS; i++)
-    {
-        round = i;
-        for (int j = 0; j < 3; j++)
-        {
-            shares[i][j] = malloc(INPUT_LEN);
-            if (!shares[i][j])
-                goto alloc_error;
-
-            localViews[i][j] = calloc(1, sizeof(View));
-            if (!localViews[i][j])
-                goto alloc_error;
-
-            localViews[i][j]->x = malloc(INPUT_LEN);
-            if (!localViews[i][j]->x)
-                goto alloc_error;
-
-            localViews[i][j]->y = malloc(ySize * sizeof(uint32_t));
-            if (!localViews[i][j]->y)
-                goto alloc_error;
-
-            randomness[i][j] = malloc(Random_Bytes_Needed);
-            if (!randomness[i][j])
-                goto alloc_error;
-        }
-
-        as[i] = malloc(sizeof(a));
-        if (!as[i])
-            goto alloc_error;
-
-        zs[i] = malloc(sizeof(z));
-        if (!zs[i])
-            goto alloc_error;
-    }
-
-    return 0;
-
-alloc_error:
-    for (int i = 0; i <= round; i++)
-    {
-        for (int j = 0; j < 3; j++)
-        {
-            free(shares[i][j]);
-            if (localViews[i][j])
-            {
-                free(localViews[i][j]->x);
-                free(localViews[i][j]->y);
-                free(localViews[i][j]);
-            }
-            free(randomness[i][j]);
-        }
-        free(as[i]);
-        free(zs[i]);
-    }
-    return -1;
-}
-
-void free_structures_prove(unsigned char *shares[NUM_ROUNDS][3], a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS],
-                           unsigned char *randomness[NUM_ROUNDS][3], View *localViews[NUM_ROUNDS][3])
-{
-    for (int k = 0; k < NUM_ROUNDS; k++)
-    {
-        for (int j = 0; j < 3; j++)
-        {
-            free(shares[k][j]);
-            if (localViews[k][j])
-            {
-                free(localViews[k][j]->x);
-                free(localViews[k][j]->y);
-                free(localViews[k][j]);
-            }
-            free(randomness[k][j]);
-        }
-        free(as[k]);
-        free(zs[k]);
-    }
-}
-
-void H_com(unsigned char k[32], View *v, unsigned char r[32], unsigned char hash[SHA256_DIGEST_LENGTH])
-{
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) { memset(hash, 0, SHA256_DIGEST_LENGTH); return; }
+    if (!ctx) { memset(hash, 0, 32); return; }
     unsigned int outl = 0;
-
     int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, k, 32) == 1 &&
-             EVP_DigestUpdate(ctx, v->x, INPUT_LEN) == 1 &&
-             EVP_DigestUpdate(ctx, v->y, ySize * sizeof(uint32_t)) == 1 &&
-             EVP_DigestUpdate(ctx, r, 32) == 1 &&
+             EVP_DigestUpdate(ctx, seed, SEED_SIZE) == 1 &&
+             EVP_DigestUpdate(ctx, x, (size_t)INPUT_LEN) == 1 &&
+             EVP_DigestUpdate(ctx, yp_bytes, 32) == 1 &&
              EVP_DigestFinal_ex(ctx, hash, &outl) == 1;
     EVP_MD_CTX_free(ctx);
-    if (!ok) memset(hash, 0, SHA256_DIGEST_LENGTH);
+    if (!ok) memset(hash, 0, 32);
 }
 
-void H3(unsigned char message_digest[32], uint32_t y[8], a *as[NUM_ROUNDS], int s, int *es)
+/* ── Fiat–Shamir challenge ─────────────────────────────────────────────── */
+
+void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
+        a *as[NUM_ROUNDS], int s, int *es)
 {
+    /* Encode pubout as 32 big-endian bytes. */
+    unsigned char pubout_bytes[32];
+    for (int i = 0; i < 8; i++) {
+        pubout_bytes[i*4+0] = (unsigned char)(pubout[i] >> 24);
+        pubout_bytes[i*4+1] = (unsigned char)(pubout[i] >> 16);
+        pubout_bytes[i*4+2] = (unsigned char)(pubout[i] >>  8);
+        pubout_bytes[i*4+3] = (unsigned char)(pubout[i]);
+    }
+
     unsigned char hash[SHA256_DIGEST_LENGTH];
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (!ctx) { memset(es, 0, s * sizeof(*es)); return; }
@@ -230,185 +123,193 @@ void H3(unsigned char message_digest[32], uint32_t y[8], a *as[NUM_ROUNDS], int 
 
     int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
              EVP_DigestUpdate(ctx, message_digest, 32) == 1 &&
-             EVP_DigestUpdate(ctx, y, 32) == 1;
+             EVP_DigestUpdate(ctx, pubout_bytes, 32) == 1;
     for (int i = 0; i < s && ok; i++)
         ok = EVP_DigestUpdate(ctx, as[i], sizeof(a)) == 1;
     ok = ok && EVP_DigestFinal_ex(ctx, hash, &outl) == 1;
-    if (!ok)
-    {
+    if (!ok) {
         EVP_MD_CTX_free(ctx);
         memset(es, 0, s * sizeof(*es));
         return;
     }
 
-    int i = 0;
-    int bitTracker = 0;
-    while (i < s)
-    {
-        if (bitTracker >= SHA256_DIGEST_LENGTH * 8)
-        {
+    /* Extract challenges in {0 .. N_PARTIES-1}.
+     * Use 4 bits per challenge (N_PARTIES=16 is a power of two → no rejection). */
+    int i = 0, byteIdx = 0, nibble = 0;
+    while (i < s) {
+        if (byteIdx >= SHA256_DIGEST_LENGTH) {
             ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
                  EVP_DigestUpdate(ctx, hash, sizeof(hash)) == 1 &&
                  EVP_DigestFinal_ex(ctx, hash, &outl) == 1;
-            if (!ok)
-            {
+            if (!ok) {
                 EVP_MD_CTX_free(ctx);
                 memset(es, 0, s * sizeof(*es));
                 return;
             }
-            bitTracker = 0;
+            byteIdx = 0; nibble = 0;
         }
-
-        int b1 = GETBIT(hash[bitTracker / 8], bitTracker % 8);
-        int b2 = GETBIT(hash[(bitTracker + 1) / 8], (bitTracker + 1) % 8);
-        if (b1 == 0)
-        {
-            if (b2 == 0)
-            {
-                es[i] = 0;
-                bitTracker += 2;
-                i++;
-            }
-            else
-            {
-                es[i] = 1;
-                bitTracker += 2;
-                i++;
-            }
+        /* Extract one 4-bit nibble from current byte. */
+        int val;
+        if (nibble == 0) {
+            val = (hash[byteIdx] >> 4) & 0xF;
+            nibble = 1;
+        } else {
+            val = hash[byteIdx] & 0xF;
+            nibble = 0;
+            byteIdx++;
         }
-        else
-        {
-            if (b2 == 0)
-            {
-                es[i] = 2;
-                bitTracker += 2;
-                i++;
-            }
-            else
-            {
-                bitTracker += 2;
-            }
-        }
+        es[i++] = val; /* val ∈ {0..15} = {0..N_PARTIES-1} */
     }
-
     EVP_MD_CTX_free(ctx);
 }
 
-int alloc_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
+/* ── Prove allocation ───────────────────────────────────────────────────── */
+
+int alloc_structures_prove(
+    unsigned char  seeds[NUM_ROUNDS][N_PARTIES][SEED_SIZE],
+    unsigned char *x_shares[NUM_ROUNDS][N_PARTIES],
+    a             *as[NUM_ROUNDS],
+    z             *zs[NUM_ROUNDS])
 {
-    for (int i = 0; i < NUM_ROUNDS; i++)
-    {
-        as[i] = NULL;
-        zs[i] = NULL;
+    for (int i = 0; i < NUM_ROUNDS; i++) {
+        as[i] = NULL; zs[i] = NULL;
+        for (int j = 0; j < N_PARTIES; j++)
+            x_shares[i][j] = NULL;
     }
+    /* Initialize seeds to zero; caller fills via RAND_bytes. */
+    memset(seeds, 0, (size_t)NUM_ROUNDS * N_PARTIES * SEED_SIZE);
 
-    int round;
-    for (int i = 0; i < NUM_ROUNDS; i++)
-    {
+    int round = 0;
+    for (int i = 0; i < NUM_ROUNDS; i++) {
         round = i;
-        as[i] = malloc(sizeof(a));
-        if (!as[i])
-            goto alloc_error;
-
+        for (int j = 0; j < N_PARTIES; j++) {
+            x_shares[i][j] = malloc((size_t)INPUT_LEN);
+            if (!x_shares[i][j]) goto err;
+        }
+        as[i] = calloc(1, sizeof(a));
+        if (!as[i]) goto err;
         zs[i] = calloc(1, sizeof(z));
-        if (!zs[i])
-            goto alloc_error;
+        if (!zs[i]) goto err;
 
-        zs[i]->ve.y = malloc(ySize * sizeof(uint32_t));
-        if (!zs[i]->ve.y)
-            goto alloc_error;
-
-        zs[i]->ve.x = malloc(INPUT_LEN);
-        if (!zs[i]->ve.x)
-            goto alloc_error;
-
-        zs[i]->ve1.y = malloc(ySize * sizeof(uint32_t));
-        if (!zs[i]->ve1.y)
-            goto alloc_error;
-
-        zs[i]->ve1.x = malloc(INPUT_LEN);
-        if (!zs[i]->ve1.x)
-            goto alloc_error;
+        /* Allocate z internals (broadcast and aux; x_revealed set later). */
+        zs[i]->broadcast = malloc((size_t)2 * ySize * sizeof(uint32_t));
+        if (!zs[i]->broadcast) goto err;
+        zs[i]->aux = malloc((size_t)ySize * sizeof(uint32_t));
+        if (!zs[i]->aux) goto err;
+        zs[i]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
+        if (!zs[i]->x_revealed) goto err;
     }
-
     return 0;
 
-alloc_error:
-    for (int i = 0; i <= round; i++)
-    {
-        if (zs[i])
-        {
-            free(zs[i]->ve.y);
-            free(zs[i]->ve.x);
-            free(zs[i]->ve1.y);
-            free(zs[i]->ve1.x);
+err:
+    for (int i = 0; i <= round; i++) {
+        for (int j = 0; j < N_PARTIES; j++) { free(x_shares[i][j]); x_shares[i][j] = NULL; }
+        free(as[i]);
+        if (zs[i]) {
+            free(zs[i]->broadcast);
+            free(zs[i]->aux);
+            free(zs[i]->x_revealed);
             free(zs[i]);
         }
+    }
+    return -1;
+}
+
+void free_structures_prove(
+    unsigned char *x_shares[NUM_ROUNDS][N_PARTIES],
+    a             *as[NUM_ROUNDS],
+    z             *zs[NUM_ROUNDS])
+{
+    for (int i = 0; i < NUM_ROUNDS; i++) {
+        for (int j = 0; j < N_PARTIES; j++) free(x_shares[i][j]);
         free(as[i]);
+        if (zs[i]) {
+            free(zs[i]->broadcast);
+            free(zs[i]->aux);
+            free(zs[i]->x_revealed);
+            free(zs[i]);
+        }
+    }
+}
+
+/* ── Verify allocation ──────────────────────────────────────────────────── */
+
+int alloc_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
+{
+    for (int i = 0; i < NUM_ROUNDS; i++) { as[i] = NULL; zs[i] = NULL; }
+
+    int round = 0;
+    for (int i = 0; i < NUM_ROUNDS; i++) {
+        round = i;
+        as[i] = calloc(1, sizeof(a));
+        if (!as[i]) goto err;
+        zs[i] = calloc(1, sizeof(z));
+        if (!zs[i]) goto err;
+        zs[i]->broadcast = malloc((size_t)2 * ySize * sizeof(uint32_t));
+        if (!zs[i]->broadcast) goto err;
+        zs[i]->aux = malloc((size_t)ySize * sizeof(uint32_t));
+        if (!zs[i]->aux) goto err;
+        zs[i]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
+        if (!zs[i]->x_revealed) goto err;
+    }
+    return 0;
+
+err:
+    for (int i = 0; i <= round; i++) {
+        free(as[i]);
+        if (zs[i]) {
+            free(zs[i]->broadcast);
+            free(zs[i]->aux);
+            free(zs[i]->x_revealed);
+            free(zs[i]);
+        }
     }
     return -1;
 }
 
 void free_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
 {
-    for (int i = 0; i < NUM_ROUNDS; i++)
-    {
-        free(zs[i]->ve.y);
-        free(zs[i]->ve.x);
-        free(zs[i]->ve1.y);
-        free(zs[i]->ve1.x);
-        free(zs[i]);
-
+    for (int i = 0; i < NUM_ROUNDS; i++) {
         free(as[i]);
+        if (zs[i]) {
+            free(zs[i]->broadcast);
+            free(zs[i]->aux);
+            free(zs[i]->x_revealed);
+            free(zs[i]);
+        }
     }
-    return;
 }
+
+/* ── Proof serialization ────────────────────────────────────────────────── */
 
 bool write_to_file(FILE *file, a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
 {
-    bool write_success = true;
-    for (int i = 0; i < NUM_ROUNDS; i++)
-    {
-        if (fwrite(as[i], sizeof(a), 1, file) != 1)
-        {
-            fprintf(stderr, "Erreur fwrite as[%d]\n", i);
-            write_success = false;
+    bool ok = true;
+    for (int i = 0; i < NUM_ROUNDS; i++) {
+        /* Commitment struct (yp[N][8] + h[N][32]). */
+        if (fwrite(as[i], sizeof(a), 1, file) != 1) {
+            fprintf(stderr, "fwrite as[%d] failed\n", i); ok = false;
         }
-        if (fwrite(zs[i]->ke, sizeof(unsigned char), 32, file) != 32)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ke\n", i);
-            write_success = false;
+        /* Revealed seeds: (N-1) * SEED_SIZE bytes. */
+        if (fwrite(zs[i]->ke, SEED_SIZE, N_PARTIES - 1, file) != (size_t)(N_PARTIES - 1)) {
+            fprintf(stderr, "fwrite ke[%d] failed\n", i); ok = false;
         }
-        if (fwrite(zs[i]->ke1, sizeof(unsigned char), 32, file) != 32)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ke1\n", i);
-            write_success = false;
+        /* Revealed x shares: (N-1) * INPUT_LEN bytes. */
+        if (fwrite(zs[i]->x_revealed, (size_t)INPUT_LEN, N_PARTIES - 1, file) != (size_t)(N_PARTIES - 1)) {
+            fprintf(stderr, "fwrite x_revealed[%d] failed\n", i); ok = false;
         }
-        if (fwrite(zs[i]->re, sizeof(unsigned char), 32, file) != 32)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->re\n", i);
-            write_success = false;
+        /* Hidden party's output share. */
+        if (fwrite(zs[i]->yp_e, sizeof(uint32_t), 8, file) != 8) {
+            fprintf(stderr, "fwrite yp_e[%d] failed\n", i); ok = false;
         }
-        if (fwrite(zs[i]->re1, sizeof(unsigned char), 32, file) != 32)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->re1\n", i);
-            write_success = false;
+        /* Broadcast: 2*ySize uint32_t. */
+        if (fwrite(zs[i]->broadcast, sizeof(uint32_t), (size_t)(2 * ySize), file) != (size_t)(2 * ySize)) {
+            fprintf(stderr, "fwrite broadcast[%d] failed\n", i); ok = false;
         }
-        if (fwrite(zs[i]->ve.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ve.x\n", i);
-            write_success = false;
-        }
-        if (fwrite(zs[i]->ve1.y, sizeof(uint32_t), ySize, file) != ySize)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ve1.y\n", i);
-            write_success = false;
-        }
-        if (fwrite(zs[i]->ve1.x, sizeof(unsigned char), INPUT_LEN, file) != INPUT_LEN)
-        {
-            fprintf(stderr, "Erreur fwrite zs[%d]->ve1.x\n", i);
-            write_success = false;
+        /* Aux: ySize uint32_t. */
+        if (fwrite(zs[i]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize) {
+            fprintf(stderr, "fwrite aux[%d] failed\n", i); ok = false;
         }
     }
-    return write_success;
+    return ok;
 }

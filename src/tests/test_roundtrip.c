@@ -1,31 +1,29 @@
-/* Fast in-process prove -> verify check for ONE ZKBoo round (validates that
- * verify() mirrors building_views before wiring the full binaries).
+/* KKW prove -> verify roundtrip test for ONE round.
  *
- * Build:
- *   clang -O2 -Wall -Wextra -Wno-gnu-folding-constant -Wno-array-parameter \
- *     -I/opt/homebrew/opt/openssl/include circuits.c MPC_prove_functions.c \
- *     MPC_verify_functions.c shared.c xmss.c test_roundtrip.c \
- *     -L/opt/homebrew/opt/openssl/lib -lcrypto -o test_roundtrip
+ * Build from src/:
+ *   gcc -O2 -Wall -Wextra -Wno-array-parameter \
+ *     circuits.c MPC_prove_functions.c MPC_verify_functions.c \
+ *     shared.c xmss.c commitment.c gf128.c tests/test_roundtrip.c \
+ *     -lssl -lcrypto -o test_roundtrip
  */
-#include "circuits.h"
-#include "shared.h"
-#include "xmss.h"
+#include "../circuits.h"
+#include "../shared.h"
+#include "../xmss.h"
+#include "../commitment.h"
 
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static int failures = 0;
-#define CHECK(c, m)                                                                                                \
-    do                                                                                                             \
-    {                                                                                                              \
-        printf("  %s %s\n", (c) ? "ok  " : "FAIL", m);                                                            \
-        if (!(c))                                                                                                  \
-            failures++;                                                                                            \
-    } while (0)
+#define CHECK(c, m) do { \
+    printf("  %s %s\n", (c) ? "ok  " : "FAIL", m); \
+    if (!(c)) failures++; \
+} while (0)
 
 int main(void)
 {
@@ -43,94 +41,100 @@ int main(void)
     hm_commit(m_hat, r, a_mat, com, d);
 
     xmss_sig sig;
-    if (!xmss_sign(sk_seed, pk_seed, 0, d, 32, &sig))
-    {
-        printf("native sign failed\n");
-        return 1;
+    if (!xmss_sign(sk_seed, pk_seed, 0, d, 32, &sig)) {
+        printf("native sign failed\n"); return 1;
     }
 
     unsigned char input[W_END];
-    memcpy(input + W_R_OFF, r, HM_R_BYTES);
-    memcpy(input + W_A_OFF, a_mat, HM_A_BYTES);
-    memset(input + W_LEAFIDX_OFF, 0, 4); /* leaf 0 */
+    memcpy(input + W_R_OFF,   r,      HM_R_BYTES);
+    memcpy(input + W_A_OFF,   a_mat,  HM_A_BYTES);
+    memset(input + W_LEAFIDX_OFF, 0, 4);
     memcpy(input + W_NONCE_OFF, sig.nonce, XMSS_NONCE_LEN);
     for (int i = 0; i < XMSS_WOTS_LEN; i++)
-        memcpy(input + W_SIG_OFF + i * XMSS_NODE_BYTES, sig.sig_hashes[i], XMSS_NODE_BYTES);
+        memcpy(input + W_SIG_OFF + i*XMSS_NODE_BYTES, sig.sig_hashes[i], XMSS_NODE_BYTES);
     for (int h = 0; h < XMSS_H; h++)
-        memcpy(input + W_PATH_OFF + h * XMSS_NODE_BYTES, sig.auth_path[h], XMSS_NODE_BYTES);
+        memcpy(input + W_PATH_OFF + h*XMSS_NODE_BYTES, sig.auth_path[h], XMSS_NODE_BYTES);
 
-    /* expected public output: root | target sum | 0 */
     uint32_t pubout[8] = {0};
-    for (int w = 0; w < 4; w++)
-        memcpy(&pubout[w], root + w * 4, 4);
+    for (int w = 0; w < YP_ROOT_WORDS; w++) memcpy(&pubout[w], root + w*4, 4);
     pubout[YP_SUM_WORD] = XMSS_TARGET_SUM;
 
-    /* ---- prover: one round ---- */
-    unsigned char *shares[3], *randomness[3];
-    View *views[3];
-    unsigned char keys[3][32], rs[3][32];
-    RAND_bytes((unsigned char *)keys, sizeof keys);
-    RAND_bytes((unsigned char *)rs, sizeof rs);
-    for (int k = 0; k < 3; k++)
-    {
-        shares[k] = malloc(INPUT_LEN);
-        randomness[k] = malloc(Random_Bytes_Needed);
-        views[k] = malloc(sizeof(View));
-        views[k]->x = shares[k];
-        views[k]->y = malloc((size_t)ySize * sizeof(uint32_t));
+    /* ── KKW prover: one round ── */
+    unsigned char seeds[N_PARTIES][SEED_SIZE];
+    RAND_bytes(seeds[0], N_PARTIES * SEED_SIZE);
+
+    unsigned char *x_shares[N_PARTIES];
+    for (int p = 0; p < N_PARTIES; p++) x_shares[p] = malloc(INPUT_LEN);
+    for (int p = 0; p < N_PARTIES-1; p++) RAND_bytes(x_shares[p], INPUT_LEN);
+    for (int b = 0; b < INPUT_LEN; b++) {
+        unsigned char v = input[b];
+        for (int p = 0; p < N_PARTIES-1; p++) v ^= x_shares[p][b];
+        x_shares[N_PARTIES-1][b] = v;
     }
-    RAND_bytes(shares[0], INPUT_LEN);
-    RAND_bytes(shares[1], INPUT_LEN);
-    for (int j = 0; j < INPUT_LEN; j++)
-        shares[2][j] = input[j] ^ shares[0][j] ^ shares[1][j];
-    for (int k = 0; k < 3; k++)
-        getAllRandomness(keys[k], randomness[k]);
+
+    unsigned char *tapes[N_PARTIES];
+    for (int p = 0; p < N_PARTIES; p++) {
+        tapes[p] = malloc((size_t)TAPE_SIZE);
+        expand_tape(seeds[p], tapes[p]);
+    }
+
+    uint32_t *broadcast = calloc((size_t)(2 * ySize), sizeof(uint32_t));
+    uint32_t *aux       = calloc((size_t)ySize,       sizeof(uint32_t));
 
     a A;
-    building_views(&A, m_hat, pk_seed, shares, randomness, views);
+    building_views(&A, m_hat, pk_seed, x_shares, tapes, broadcast, aux);
 
     int out_ok = 1;
-    for (int j = 0; j < 8; j++)
-        if ((A.yp[0][j] ^ A.yp[1][j] ^ A.yp[2][j]) != pubout[j])
-            out_ok = 0;
+    for (int j = 0; j < 8; j++) {
+        uint32_t xorv = 0;
+        for (int p = 0; p < N_PARTIES; p++) xorv ^= A.yp[p][j];
+        if (xorv != pubout[j]) out_ok = 0;
+    }
     CHECK(out_ok, "prover output XOR == (root | target-sum | 0)");
 
-    for (int k = 0; k < 3; k++)
-        H_com(keys[k], views[k], rs[k], A.h[k]);
+    /* Commitments */
+    for (int p = 0; p < N_PARTIES; p++)
+        H_com(seeds[p], x_shares[p], A.yp[p], A.h[p]);
 
-    /* ---- verify each challenge e in {0,1,2} ---- */
-    for (int e = 0; e < 3; e++)
-    {
+    /* ── Verify all N challenges ── */
+    for (int e = 0; e < N_PARTIES; e++) {
+        /* Build z for this challenge */
         z Z;
-        int e1 = (e + 1) % 3;
-        memcpy(Z.ke, keys[e], 32);
-        memcpy(Z.ke1, keys[e1], 32);
-        memcpy(Z.re, rs[e], 32);
-        memcpy(Z.re1, rs[e1], 32);
-        Z.ve.x = views[e]->x;
-        Z.ve.y = malloc((size_t)ySize * sizeof(uint32_t));
-        Z.ve1.x = views[e1]->x;
-        Z.ve1.y = views[e1]->y;
+        Z.broadcast  = broadcast;
+        Z.aux        = aux;
+        Z.x_revealed = malloc((size_t)(N_PARTIES-1) * INPUT_LEN);
+        for (int j = 0; j < N_PARTIES-1; j++) {
+            int orig = (j < e) ? j : j+1;
+            memcpy(Z.ke[j], seeds[orig], SEED_SIZE);
+            memcpy(Z.x_revealed + (size_t)j * INPUT_LEN, x_shares[orig], INPUT_LEN);
+        }
+        memcpy(Z.yp_e, A.yp[e], 8 * sizeof(uint32_t));
 
         bool err = false;
         verify(m_hat, pk_seed, &err, &A, e, &Z);
-        char msg[40];
+        char msg[48];
         snprintf(msg, sizeof msg, "verify accepts honest proof (e=%d)", e);
         CHECK(!err, msg);
-        free(Z.ve.y);
+        free(Z.x_revealed);
     }
 
-    /* ---- tamper: corrupt a sig_hash share, expect rejection ---- */
+    /* ── Tamper: corrupt a sig_hash share, expect output mismatch ── */
     {
-        shares[0][W_SIG_OFF] ^= 0x01;
-        building_views(&A, m_hat, pk_seed, shares, randomness, views);
-        int still_root = ((A.yp[0][0] ^ A.yp[1][0] ^ A.yp[2][0]) == pubout[0]);
-        for (int k = 0; k < 3; k++)
-            H_com(keys[k], views[k], rs[k], A.h[k]);
-        /* the tampered witness yields a different root (output check fails) */
-        CHECK(!still_root, "tampered witness changes the circuit output (root mismatch)");
+        x_shares[0][W_SIG_OFF] ^= 0x01;
+        building_views(&A, m_hat, pk_seed, x_shares, tapes, broadcast, aux);
+        int still_root = 1;
+        for (int w = 0; w < YP_ROOT_WORDS; w++) {
+            uint32_t v = 0;
+            for (int p = 0; p < N_PARTIES; p++) v ^= A.yp[p][w];
+            if (v != pubout[w]) { still_root = 0; break; }
+        }
+        CHECK(!still_root, "tampered witness changes the circuit output");
     }
 
-    printf("\n%s (%d failure%s)\n", failures ? "FAILURES" : "ALL PASS", failures, failures == 1 ? "" : "s");
+    for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
+    free(broadcast); free(aux);
+
+    printf("\n%s (%d failure%s)\n", failures ? "FAILURES" : "ALL PASS",
+           failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }

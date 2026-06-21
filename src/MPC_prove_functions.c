@@ -1,314 +1,305 @@
 #include "MPC_prove_functions.h"
+#include "shared.h"
 
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-void mpc_XOR(uint32_t x[3], uint32_t y[3], uint32_t z[3])
+/* ── Linear gates (free, no Beaver cost) ───────────────────────────────── */
+
+void mpc_XOR(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES])
 {
-    z[0] = x[0] ^ y[0];
-    z[1] = x[1] ^ y[1];
-    z[2] = x[2] ^ y[2];
+    for (int i = 0; i < N_PARTIES; i++) z[i] = x[i] ^ y[i];
 }
 
-void mpc_AND(uint32_t x[3], uint32_t y[3], uint32_t z[3], unsigned char *randomness[3], int *randCount, View *views[3],
-             int *countY)
+void mpc_NEGATE(uint32_t x[N_PARTIES], uint32_t z[N_PARTIES])
 {
-    uint32_t r[3] = {getRandom32(randomness[0], *randCount), getRandom32(randomness[1], *randCount),
-                     getRandom32(randomness[2], *randCount)};
-    *randCount += 4;
-    uint32_t t[3] = {0};
-
-    t[0] = (x[0] & y[1]) ^ (x[1] & y[0]) ^ (x[0] & y[0]) ^ r[0] ^ r[1];
-    t[1] = (x[1] & y[2]) ^ (x[2] & y[1]) ^ (x[1] & y[1]) ^ r[1] ^ r[2];
-    t[2] = (x[2] & y[0]) ^ (x[0] & y[2]) ^ (x[2] & y[2]) ^ r[2] ^ r[0];
-    z[0] = t[0];
-    z[1] = t[1];
-    z[2] = t[2];
-    views[0]->y[*countY] = z[0];
-    views[1]->y[*countY] = z[1];
-    views[2]->y[*countY] = z[2];
-    (*countY)++;
+    for (int i = 0; i < N_PARTIES; i++) z[i] = ~x[i];
 }
 
-void mpc_NEGATE(uint32_t x[3], uint32_t z[3])
+void mpc_RIGHTROTATE(uint32_t x[N_PARTIES], int n, uint32_t z[N_PARTIES])
 {
-    z[0] = ~x[0];
-    z[1] = ~x[1];
-    z[2] = ~x[2];
+    for (int i = 0; i < N_PARTIES; i++) z[i] = RIGHTROTATE(x[i], n);
 }
 
-void mpc_ADD(uint32_t x[3], uint32_t y[3], uint32_t z[3], unsigned char *randomness[3], int *randCount, View *views[3],
-             int *countY)
+void mpc_RIGHTSHIFT(uint32_t x[N_PARTIES], int n, uint32_t z[N_PARTIES])
 {
-    uint32_t c[3] = {0};
-    uint32_t r[3] = {getRandom32(randomness[0], *randCount), getRandom32(randomness[1], *randCount),
-                     getRandom32(randomness[2], *randCount)};
+    for (int i = 0; i < N_PARTIES; i++) z[i] = x[i] >> n;
+}
 
-    *randCount += 4;
-    uint8_t a[3], b[3];
+/* ── Word-level Beaver AND ──────────────────────────────────────────────── */
 
-    uint8_t t;
+void mpc_AND(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES],
+             unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gateCount)
+{
+    int g = *gateCount;
 
-    for (int i = 0; i < 31; i++)
-    {
-        a[0] = GETBIT(x[0] ^ c[0], i);
-        a[1] = GETBIT(x[1] ^ c[1], i);
-        a[2] = GETBIT(x[2] ^ c[2], i);
+    uint32_t u_xor = 0, v_xor = 0, w_xor = 0;
+    uint32_t u[N_PARTIES], v[N_PARTIES], w[N_PARTIES];
+    for (int i = 0; i < N_PARTIES; i++) {
+        u[i] = tape_u(tapes[i], g);
+        v[i] = tape_v(tapes[i], g);
+        w[i] = tape_w(tapes[i], g);
+        u_xor ^= u[i]; v_xor ^= v[i]; w_xor ^= w[i];
+    }
+    /* Correction for party 0: makes XOR of all w[i] equal to u_xor AND v_xor. */
+    uint32_t corr = (u_xor & v_xor) ^ w_xor;
+    aux[g] = corr;
+    w[0] ^= corr;
 
-        b[0] = GETBIT(y[0] ^ c[0], i);
-        b[1] = GETBIT(y[1] ^ c[1], i);
-        b[2] = GETBIT(y[2] ^ c[2], i);
+    /* Broadcast: da = XOR_i(x[i] XOR u[i]), db = XOR_i(y[i] XOR v[i]). */
+    uint32_t da = 0, db = 0;
+    for (int i = 0; i < N_PARTIES; i++) { da ^= x[i] ^ u[i]; db ^= y[i] ^ v[i]; }
+    broadcast[2*g]   = da;
+    broadcast[2*g+1] = db;
 
-        t = (a[0] & b[1]) ^ (a[1] & b[0]) ^ GETBIT(r[1], i);
-        SETBIT(c[0], i + 1, t ^ (a[0] & b[0]) ^ GETBIT(c[0], i) ^ GETBIT(r[0], i));
+    /* Output shares. */
+    for (int i = 0; i < N_PARTIES; i++) {
+        z[i] = w[i] ^ (da & v[i]) ^ (db & u[i]);
+        if (i == 0) z[i] ^= da & db;
+    }
+    (*gateCount)++;
+}
 
-        t = (a[1] & b[2]) ^ (a[2] & b[1]) ^ GETBIT(r[2], i);
-        SETBIT(c[1], i + 1, t ^ (a[1] & b[1]) ^ GETBIT(c[1], i) ^ GETBIT(r[1], i));
+/* ── 32-bit ADD with bit-serial Beaver carry ────────────────────────────── */
+/* Each ADD uses ONE gate slot (one u/v/w triple per party, 32 bits wide).
+ * Carry propagation uses bit b of the word-triple for carry bit b. */
 
-        t = (a[2] & b[0]) ^ (a[0] & b[2]) ^ GETBIT(r[0], i);
-        SETBIT(c[2], i + 1, t ^ (a[2] & b[2]) ^ GETBIT(c[2], i) ^ GETBIT(r[2], i));
+void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES],
+             unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gateCount)
+{
+    int g = *gateCount;
+
+    uint32_t u[N_PARTIES], v[N_PARTIES], w[N_PARTIES];
+    for (int i = 0; i < N_PARTIES; i++) {
+        u[i] = tape_u(tapes[i], g);
+        v[i] = tape_v(tapes[i], g);
+        w[i] = tape_w(tapes[i], g);
     }
 
-    z[0] = x[0] ^ y[0] ^ c[0];
-    z[1] = x[1] ^ y[1] ^ c[1];
-    z[2] = x[2] ^ y[2] ^ c[2];
+    /* Carry shares: c[i][bit b] = party i's share of carry into position b+1. */
+    uint32_t c[N_PARTIES];
+    memset(c, 0, sizeof(c));
 
-    views[0]->y[*countY] = c[0];
-    views[1]->y[*countY] = c[1];
-    views[2]->y[*countY] = c[2];
-    *countY += 1;
+    uint32_t da_word = 0, db_word = 0, aux_word = 0;
 
-    return;
-}
+    for (int b = 0; b < 31; b++) {
+        /* Each party's inputs to carry AND: a_b = (x[i] XOR c[i]) >> b & 1,
+         * similarly b_b.  Triple bits taken from bit b of u[i]/v[i]/w[i]. */
+        uint32_t u_b_xor = 0, v_b_xor = 0, w_b_xor = 0;
+        for (int i = 0; i < N_PARTIES; i++) {
+            u_b_xor ^= (u[i] >> b) & 1;
+            v_b_xor ^= (v[i] >> b) & 1;
+            w_b_xor ^= (w[i] >> b) & 1;
+        }
+        uint32_t corr_b = (u_b_xor & v_b_xor) ^ w_b_xor;
+        aux_word |= (corr_b & 1u) << b;
 
-void mpc_ADDK(uint32_t x[3], uint32_t y, uint32_t z[3], unsigned char *randomness[3], int *randCount, View *views[3],
-              int *countY)
-{
-    uint32_t c[3] = {0};
-    uint32_t r[3] = {getRandom32(randomness[0], *randCount), getRandom32(randomness[1], *randCount),
-                     getRandom32(randomness[2], *randCount)};
-    *randCount += 4;
+        uint32_t da_b = 0, db_b = 0;
+        for (int i = 0; i < N_PARTIES; i++) {
+            uint32_t a_b = ((x[i] ^ c[i]) >> b) & 1;
+            uint32_t b_b = ((y[i] ^ c[i]) >> b) & 1;
+            da_b ^= a_b ^ ((u[i] >> b) & 1);
+            db_b ^= b_b ^ ((v[i] >> b) & 1);
+        }
+        da_b &= 1; db_b &= 1;
+        da_word |= da_b << b;
+        db_word |= db_b << b;
 
-    uint8_t a[3], b[3];
+        /* Compute carry shares for bit b+1. */
+        for (int i = 0; i < N_PARTIES; i++) {
+            uint32_t u_b = (u[i] >> b) & 1;
+            uint32_t v_b = (v[i] >> b) & 1;
+            uint32_t w_b = (w[i] >> b) & 1;
+            if (i == 0) w_b ^= corr_b;
 
-    uint8_t t;
+            uint32_t and_out = w_b ^ (da_b & v_b) ^ (db_b & u_b);
+            if (i == 0) and_out ^= da_b & db_b;
 
-    for (int i = 0; i < 31; i++)
-    {
-        a[0] = GETBIT(x[0] ^ c[0], i);
-        a[1] = GETBIT(x[1] ^ c[1], i);
-        a[2] = GETBIT(x[2] ^ c[2], i);
-
-        b[0] = GETBIT(y ^ c[0], i);
-        b[1] = GETBIT(y ^ c[1], i);
-        b[2] = GETBIT(y ^ c[2], i);
-
-        t = (a[0] & b[1]) ^ (a[1] & b[0]) ^ GETBIT(r[1], i);
-        SETBIT(c[0], i + 1, t ^ (a[0] & b[0]) ^ GETBIT(c[0], i) ^ GETBIT(r[0], i));
-
-        t = (a[1] & b[2]) ^ (a[2] & b[1]) ^ GETBIT(r[2], i);
-        SETBIT(c[1], i + 1, t ^ (a[1] & b[1]) ^ GETBIT(c[1], i) ^ GETBIT(r[1], i));
-
-        t = (a[2] & b[0]) ^ (a[0] & b[2]) ^ GETBIT(r[0], i);
-        SETBIT(c[2], i + 1, t ^ (a[2] & b[2]) ^ GETBIT(c[2], i) ^ GETBIT(r[2], i));
+            /* carry[b+1]_i = and_out XOR carry[b]_i */
+            uint32_t old_c = (c[i] >> b) & 1;
+            uint32_t new_c = and_out ^ old_c;
+            if (b + 1 < 32)
+                c[i] = (c[i] & ~(1u << (b+1))) | (new_c << (b+1));
+        }
     }
 
-    z[0] = x[0] ^ y ^ c[0];
-    z[1] = x[1] ^ y ^ c[1];
-    z[2] = x[2] ^ y ^ c[2];
-
-    views[0]->y[*countY] = c[0];
-    views[1]->y[*countY] = c[1];
-    views[2]->y[*countY] = c[2];
-    *countY += 1;
+    for (int i = 0; i < N_PARTIES; i++) z[i] = x[i] ^ y[i] ^ c[i];
+    broadcast[2*g]   = da_word;
+    broadcast[2*g+1] = db_word;
+    aux[g]           = aux_word;
+    (*gateCount)++;
 }
 
-void mpc_RIGHTROTATE(uint32_t x[], int i, uint32_t z[])
+/* ── ADD with public constant ───────────────────────────────────────────── */
+
+void mpc_ADDK(uint32_t x[N_PARTIES], uint32_t K, uint32_t z[N_PARTIES],
+              unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gateCount)
 {
-    z[0] = RIGHTROTATE(x[0], i);
-    z[1] = RIGHTROTATE(x[1], i);
-    z[2] = RIGHTROTATE(x[2], i);
+    /* K is public: party 0 holds K; other parties hold 0. */
+    uint32_t y[N_PARTIES];
+    memset(y, 0, sizeof(y));
+    y[0] = K;
+    mpc_ADD(x, y, z, tapes, broadcast, aux, gateCount);
 }
 
-void mpc_RIGHTSHIFT(uint32_t x[3], int i, uint32_t z[3])
-{
-    z[0] = x[0] >> i;
-    z[1] = x[1] >> i;
-    z[2] = x[2] >> i;
-} // shift means leaving zeros on the left
+/* ── SHA-256 derived gates ──────────────────────────────────────────────── */
 
-void mpc_MAJ(uint32_t a[], uint32_t b[3], uint32_t c[3], uint32_t z[3], unsigned char *randomness[3], int *randCount,
-             View *views[3], int *countY)
+void mpc_MAJ(uint32_t a[N_PARTIES], uint32_t b[N_PARTIES], uint32_t c[N_PARTIES],
+             uint32_t z[N_PARTIES],
+             unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gateCount)
 {
-    uint32_t t0[3];
-    uint32_t t1[3];
-
+    /* MAJ(a,b,c) = (a XOR b) AND (a XOR c) XOR a */
+    uint32_t t0[N_PARTIES], t1[N_PARTIES];
     mpc_XOR(a, b, t0);
     mpc_XOR(a, c, t1);
-    mpc_AND(t0, t1, z, randomness, randCount, views, countY);
+    mpc_AND(t0, t1, z, tapes, broadcast, aux, gateCount);
     mpc_XOR(z, a, z);
-} // maj means choosing 0 if 0 is in majority beyound 3 bits (same goes for 1)
-
-void mpc_CH(uint32_t e[], uint32_t f[3], uint32_t g[3], uint32_t z[3], unsigned char *randomness[3], int *randCount,
-            View *views[3], int *countY)
-{
-    uint32_t t0[3];
-
-    // e & (f^g) ^ g
-    mpc_XOR(f, g, t0);
-    mpc_AND(e, t0, t0, randomness, randCount, views, countY);
-    mpc_XOR(t0, g, z);
 }
 
-void mpc_sha256(unsigned char *inputs[3], int numBits, unsigned char *randomness[3], unsigned char *results[3],
-                View *views[3], int *countY, int *randCount)
+void mpc_CH(uint32_t e[N_PARTIES], uint32_t f[N_PARTIES], uint32_t g[N_PARTIES],
+            uint32_t z[N_PARTIES],
+            unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gateCount)
+{
+    /* CH(e,f,g) = (e AND (f XOR g)) XOR g */
+    uint32_t t[N_PARTIES];
+    mpc_XOR(f, g, t);
+    mpc_AND(e, t, t, tapes, broadcast, aux, gateCount);
+    mpc_XOR(t, g, z);
+}
+
+/* ── N-party SHA-256 ────────────────────────────────────────────────────── */
+
+void mpc_sha256(unsigned char *inputs[N_PARTIES], int numBits,
+                unsigned char *results[N_PARTIES],
+                unsigned char *tapes[N_PARTIES],
+                uint32_t *broadcast, uint32_t *aux, int *gateCount)
 {
     const uint64_t bitlen64 = (uint64_t)((numBits < 0) ? 0 : numBits);
     const size_t fullBytes = (size_t)(bitlen64 >> 3);
     const int remBits = (int)(bitlen64 & 7);
     const size_t srcBytes = fullBytes + (remBits ? 1 : 0);
     const size_t bytesBeforeLen = fullBytes + 1;
-    const size_t padZeroBytes = (size_t)((56 - (bytesBeforeLen % 64) + 64) % 64);
+    const size_t padZeroBytes = (size_t)((56 - (int)(bytesBeforeLen % 64) + 64) % 64);
     const size_t totalLen = bytesBeforeLen + padZeroBytes + 8;
     const size_t nBlocks = totalLen / 64;
 
-    unsigned char *padded[3] = {NULL, NULL, NULL};
-    for (int i = 0; i < 3; i++)
-    {
-        padded[i] = (unsigned char *)calloc(totalLen, 1);
-        if (!padded[i])
-        {
-            for (int j = 0; j < i; j++)
-                free(padded[j]);
+    unsigned char *padded[N_PARTIES];
+    for (int i = 0; i < N_PARTIES; i++) padded[i] = NULL;
+    for (int i = 0; i < N_PARTIES; i++) {
+        padded[i] = calloc(totalLen, 1);
+        if (!padded[i]) {
+            for (int j = 0; j < i; j++) free(padded[j]);
             return;
         }
-        if (srcBytes)
-            memcpy(padded[i], inputs[i], srcBytes);
-        if (remBits)
-        {
-            padded[i][fullBytes] &= (unsigned char)(0xFF << (8 - remBits));
-            padded[i][fullBytes] |= (unsigned char)(0x80 >> remBits);
+        if (srcBytes) memcpy(padded[i], inputs[i], srcBytes);
+        /* SHA-256 padding bytes are PUBLIC: place into party 0 only.
+         * Other parties' buffers remain zero in the padding region (calloc). */
+        if (i == 0) {
+            if (remBits) {
+                padded[0][fullBytes] &= (unsigned char)(0xFFu << (8 - remBits));
+                padded[0][fullBytes] |= (unsigned char)(0x80u >> remBits);
+            } else {
+                padded[0][fullBytes] = 0x80u;
+            }
+            uint64_t L = bitlen64;
+            for (int b = 0; b < 8; b++)
+                padded[0][totalLen - 1 - b] = (unsigned char)((L >> (8*b)) & 0xFF);
+        } else if (remBits) {
+            /* Mask out the padding bits in the partial byte for non-zero parties. */
+            padded[i][fullBytes] &= (unsigned char)(0xFFu << (8 - remBits));
         }
-        else
-        {
-            padded[i][fullBytes] = 0x80;
-        }
-        uint64_t L = bitlen64;
-        padded[i][totalLen - 1] = (unsigned char)(L & 0xFF);
-        padded[i][totalLen - 2] = (unsigned char)((L >> 8) & 0xFF);
-        padded[i][totalLen - 3] = (unsigned char)((L >> 16) & 0xFF);
-        padded[i][totalLen - 4] = (unsigned char)((L >> 24) & 0xFF);
-        padded[i][totalLen - 5] = (unsigned char)((L >> 32) & 0xFF);
-        padded[i][totalLen - 6] = (unsigned char)((L >> 40) & 0xFF);
-        padded[i][totalLen - 7] = (unsigned char)((L >> 48) & 0xFF);
-        padded[i][totalLen - 8] = (unsigned char)((L >> 56) & 0xFF);
     }
 
-    uint32_t H[8][3] = {{hA[0], hA[0], hA[0]}, {hA[1], hA[1], hA[1]}, {hA[2], hA[2], hA[2]}, {hA[3], hA[3], hA[3]},
-                        {hA[4], hA[4], hA[4]}, {hA[5], hA[5], hA[5]}, {hA[6], hA[6], hA[6]}, {hA[7], hA[7], hA[7]}};
+    uint32_t H[8][N_PARTIES];
+    for (int j = 0; j < 8; j++) {
+        /* SHA-256 IV is PUBLIC: party 0 holds it; all others hold 0. */
+        H[j][0] = hA[j];
+        for (int i = 1; i < N_PARTIES; i++) H[j][i] = 0;
+    }
 
-    uint32_t w[64][3];
-    uint32_t a[3], b[3], c[3], d[3], e[3], f[3], g[3], h[3];
-    uint32_t s0[3], s1[3], t0[3], t1[3], maj[3], temp1[3], temp2[3];
+    uint32_t w[64][N_PARTIES];
+    uint32_t A[N_PARTIES], B[N_PARTIES], C[N_PARTIES], D[N_PARTIES];
+    uint32_t E[N_PARTIES], F[N_PARTIES], G[N_PARTIES], Hv[N_PARTIES];
+    uint32_t s0[N_PARTIES], s1[N_PARTIES], t0[N_PARTIES], t1[N_PARTIES];
+    uint32_t maj[N_PARTIES], temp1[N_PARTIES], temp2[N_PARTIES];
 
-    for (size_t blk = 0; blk < nBlocks; blk++)
-    {
-        for (int i = 0; i < 3; i++)
-        {
+    for (size_t blk = 0; blk < nBlocks; blk++) {
+        for (int i = 0; i < N_PARTIES; i++) {
             const unsigned char *base = padded[i] + blk * 64;
-            for (int j = 0; j < 16; j++)
-            {
-                w[j][i] = ((uint32_t)base[j * 4] << 24) | ((uint32_t)base[j * 4 + 1] << 16) |
-                          ((uint32_t)base[j * 4 + 2] << 8) | ((uint32_t)base[j * 4 + 3]);
+            for (int j = 0; j < 16; j++) {
+                w[j][i] = ((uint32_t)base[j*4+0] << 24) | ((uint32_t)base[j*4+1] << 16) |
+                          ((uint32_t)base[j*4+2] <<  8) | ((uint32_t)base[j*4+3]);
             }
         }
 
-        for (int j = 16; j < 64; j++)
-        {
-            mpc_RIGHTROTATE(w[j - 15], 7, t0);
-            mpc_RIGHTROTATE(w[j - 15], 18, t1);
-            mpc_XOR(t0, t1, t0);
-            mpc_RIGHTSHIFT(w[j - 15], 3, t1);
-            mpc_XOR(t0, t1, s0);
-            mpc_RIGHTROTATE(w[j - 2], 17, t0);
-            mpc_RIGHTROTATE(w[j - 2], 19, t1);
-            mpc_XOR(t0, t1, t0);
-            mpc_RIGHTSHIFT(w[j - 2], 10, t1);
-            mpc_XOR(t0, t1, s1);
-            mpc_ADD(w[j - 16], s0, t1, randomness, randCount, views, countY);
-            mpc_ADD(w[j - 7], t1, t1, randomness, randCount, views, countY);
-            mpc_ADD(t1, s1, w[j], randomness, randCount, views, countY);
+        for (int j = 16; j < 64; j++) {
+            mpc_RIGHTROTATE(w[j-15], 7,  t0);
+            mpc_RIGHTROTATE(w[j-15], 18, t1); mpc_XOR(t0, t1, t0);
+            mpc_RIGHTSHIFT( w[j-15], 3,  t1); mpc_XOR(t0, t1, s0);
+
+            mpc_RIGHTROTATE(w[j-2], 17, t0);
+            mpc_RIGHTROTATE(w[j-2], 19, t1); mpc_XOR(t0, t1, t0);
+            mpc_RIGHTSHIFT( w[j-2], 10, t1); mpc_XOR(t0, t1, s1);
+
+            mpc_ADD(w[j-16], s0,   t1, tapes, broadcast, aux, gateCount);
+            mpc_ADD(w[j-7],  t1,   t1, tapes, broadcast, aux, gateCount);
+            mpc_ADD(t1,      s1, w[j], tapes, broadcast, aux, gateCount);
         }
 
-        memcpy(a, H[0], sizeof(a));
-        memcpy(b, H[1], sizeof(b));
-        memcpy(c, H[2], sizeof(c));
-        memcpy(d, H[3], sizeof(d));
-        memcpy(e, H[4], sizeof(e));
-        memcpy(f, H[5], sizeof(f));
-        memcpy(g, H[6], sizeof(g));
-        memcpy(h, H[7], sizeof(h));
-
-        for (int i = 0; i < 64; i++)
-        {
-            mpc_RIGHTROTATE(e, 6, t0);
-            mpc_RIGHTROTATE(e, 11, t1);
-            mpc_XOR(t0, t1, t0);
-            mpc_RIGHTROTATE(e, 25, t1);
-            mpc_XOR(t0, t1, s1);
-            mpc_ADD(h, s1, t0, randomness, randCount, views, countY);
-            mpc_CH(e, f, g, t1, randomness, randCount, views, countY);
-            mpc_ADD(t0, t1, t1, randomness, randCount, views, countY);
-            mpc_ADDK(t1, k[i], t1, randomness, randCount, views, countY);
-            mpc_ADD(t1, w[i], temp1, randomness, randCount, views, countY);
-            mpc_RIGHTROTATE(a, 2, t0);
-            mpc_RIGHTROTATE(a, 13, t1);
-            mpc_XOR(t0, t1, t0);
-            mpc_RIGHTROTATE(a, 22, t1);
-            mpc_XOR(t0, t1, s0);
-            mpc_MAJ(a, b, c, maj, randomness, randCount, views, countY);
-            mpc_ADD(s0, maj, temp2, randomness, randCount, views, countY);
-            memcpy(h, g, sizeof(uint32_t) * 3);
-            memcpy(g, f, sizeof(uint32_t) * 3);
-            memcpy(f, e, sizeof(uint32_t) * 3);
-            mpc_ADD(d, temp1, e, randomness, randCount, views, countY);
-            memcpy(d, c, sizeof(uint32_t) * 3);
-            memcpy(c, b, sizeof(uint32_t) * 3);
-            memcpy(b, a, sizeof(uint32_t) * 3);
-            mpc_ADD(temp1, temp2, a, randomness, randCount, views, countY);
+        for (int i = 0; i < N_PARTIES; i++) {
+            A[i] = H[0][i]; B[i] = H[1][i]; C[i] = H[2][i]; D[i] = H[3][i];
+            E[i] = H[4][i]; F[i] = H[5][i]; G[i] = H[6][i]; Hv[i] = H[7][i];
         }
 
-        mpc_ADD(H[0], a, H[0], randomness, randCount, views, countY);
-        mpc_ADD(H[1], b, H[1], randomness, randCount, views, countY);
-        mpc_ADD(H[2], c, H[2], randomness, randCount, views, countY);
-        mpc_ADD(H[3], d, H[3], randomness, randCount, views, countY);
-        mpc_ADD(H[4], e, H[4], randomness, randCount, views, countY);
-        mpc_ADD(H[5], f, H[5], randomness, randCount, views, countY);
-        mpc_ADD(H[6], g, H[6], randomness, randCount, views, countY);
-        mpc_ADD(H[7], h, H[7], randomness, randCount, views, countY);
+        for (int j = 0; j < 64; j++) {
+            mpc_RIGHTROTATE(E, 6,  t0);
+            mpc_RIGHTROTATE(E, 11, t1); mpc_XOR(t0, t1, t0);
+            mpc_RIGHTROTATE(E, 25, t1); mpc_XOR(t0, t1, s1);
+
+            mpc_ADD(Hv, s1, t0, tapes, broadcast, aux, gateCount);
+            mpc_CH(E, F, G, t1, tapes, broadcast, aux, gateCount);
+            mpc_ADD(t0, t1, t1, tapes, broadcast, aux, gateCount);
+            mpc_ADDK(t1, k[j], t1, tapes, broadcast, aux, gateCount);
+            mpc_ADD(t1, w[j], temp1, tapes, broadcast, aux, gateCount);
+
+            mpc_RIGHTROTATE(A, 2,  t0);
+            mpc_RIGHTROTATE(A, 13, t1); mpc_XOR(t0, t1, t0);
+            mpc_RIGHTROTATE(A, 22, t1); mpc_XOR(t0, t1, s0);
+
+            mpc_MAJ(A, B, C, maj, tapes, broadcast, aux, gateCount);
+            mpc_ADD(s0, maj, temp2, tapes, broadcast, aux, gateCount);
+
+            for (int i = 0; i < N_PARTIES; i++) Hv[i] = G[i];
+            for (int i = 0; i < N_PARTIES; i++) G[i]  = F[i];
+            for (int i = 0; i < N_PARTIES; i++) F[i]  = E[i];
+            mpc_ADD(D, temp1, E, tapes, broadcast, aux, gateCount);
+            for (int i = 0; i < N_PARTIES; i++) D[i] = C[i];
+            for (int i = 0; i < N_PARTIES; i++) C[i] = B[i];
+            for (int i = 0; i < N_PARTIES; i++) B[i] = A[i];
+            mpc_ADD(temp1, temp2, A, tapes, broadcast, aux, gateCount);
+        }
+
+        uint32_t tmp[N_PARTIES];
+        mpc_ADD(H[0], A,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[0][i]=tmp[i];
+        mpc_ADD(H[1], B,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[1][i]=tmp[i];
+        mpc_ADD(H[2], C,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[2][i]=tmp[i];
+        mpc_ADD(H[3], D,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[3][i]=tmp[i];
+        mpc_ADD(H[4], E,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[4][i]=tmp[i];
+        mpc_ADD(H[5], F,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[5][i]=tmp[i];
+        mpc_ADD(H[6], G,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[6][i]=tmp[i];
+        mpc_ADD(H[7], Hv, tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[7][i]=tmp[i];
     }
 
-    for (int i = 0; i < 3; i++)
-        free(padded[i]);
+    for (int i = 0; i < N_PARTIES; i++) free(padded[i]);
 
-    for (int i = 0; i < 8; i++)
-    {
-        mpc_RIGHTSHIFT(H[i], 24, t0);
-        results[0][i * 4 + 0] = (unsigned char)t0[0];
-        results[1][i * 4 + 0] = (unsigned char)t0[1];
-        results[2][i * 4 + 0] = (unsigned char)t0[2];
-        mpc_RIGHTSHIFT(H[i], 16, t0);
-        results[0][i * 4 + 1] = (unsigned char)t0[0];
-        results[1][i * 4 + 1] = (unsigned char)t0[1];
-        results[2][i * 4 + 1] = (unsigned char)t0[2];
-        mpc_RIGHTSHIFT(H[i], 8, t0);
-        results[0][i * 4 + 2] = (unsigned char)t0[0];
-        results[1][i * 4 + 2] = (unsigned char)t0[1];
-        results[2][i * 4 + 2] = (unsigned char)t0[2];
-        results[0][i * 4 + 3] = (unsigned char)H[i][0];
-        results[1][i * 4 + 3] = (unsigned char)H[i][1];
-        results[2][i * 4 + 3] = (unsigned char)H[i][2];
+    /* Pack output: big-endian bytes. */
+    for (int j = 0; j < 8; j++) {
+        for (int i = 0; i < N_PARTIES; i++) {
+            results[i][j*4+0] = (unsigned char)(H[j][i] >> 24);
+            results[i][j*4+1] = (unsigned char)(H[j][i] >> 16);
+            results[i][j*4+2] = (unsigned char)(H[j][i] >>  8);
+            results[i][j*4+3] = (unsigned char)(H[j][i]);
+        }
     }
 }
