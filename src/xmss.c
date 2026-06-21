@@ -10,11 +10,13 @@
 static void sha256_raw(const uint8_t *in, size_t inlen, uint8_t out32[32])
 {
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) { memset(out32, 0, 32); return; }
     unsigned int outl = 0;
-    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-    EVP_DigestUpdate(ctx, in, inlen);
-    EVP_DigestFinal_ex(ctx, out32, &outl);
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+             EVP_DigestUpdate(ctx, in, inlen) == 1 &&
+             EVP_DigestFinal_ex(ctx, out32, &outl) == 1;
     EVP_MD_CTX_free(ctx);
+    if (!ok) memset(out32, 0, 32);
 }
 
 /* AES-256-CTR PRF used to derive WOTS+ secret keys from sk_seed.  Mirrors the
@@ -33,13 +35,15 @@ static void prf_sk(const uint8_t sk_seed[32], uint32_t leaf, uint32_t j, uint8_t
     iv[11] = (uint8_t)(j);
 
     uint8_t zeros[32] = {0};
-    uint8_t full[32];
+    uint8_t full[32] = {0};
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) { memcpy(out16, full, XMSS_NODE_BYTES); return; }
     int outl = 0, tmplen = 0;
-    EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, sk_seed, iv);
-    EVP_EncryptUpdate(ctx, full, &outl, zeros, sizeof zeros);
-    EVP_EncryptFinal_ex(ctx, full + outl, &tmplen);
+    int ok = EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, sk_seed, iv) == 1 &&
+             EVP_EncryptUpdate(ctx, full, &outl, zeros, sizeof zeros) == 1 &&
+             EVP_EncryptFinal_ex(ctx, full + outl, &tmplen) == 1;
     EVP_CIPHER_CTX_free(ctx);
+    if (!ok) memset(full, 0, sizeof full);
     memcpy(out16, full, XMSS_NODE_BYTES); /* first 16 bytes */
 }
 
@@ -50,6 +54,11 @@ void xmss_hash_message(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const uint8_t 
 {
     size_t n = XMSS_PK_SEED_BYTES + 1 + nonce_len + message_len;
     uint8_t *buf = malloc(n);
+    if (!buf)
+    {
+        memset(out32, 0, 32);
+        return;
+    }
     size_t o = 0;
     memcpy(buf + o, pk_seed, XMSS_PK_SEED_BYTES);
     o += XMSS_PK_SEED_BYTES;

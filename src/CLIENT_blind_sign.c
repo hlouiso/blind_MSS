@@ -120,6 +120,12 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
     sig.leaf_index = (uint32_t)strtoul(buf, NULL, 10);
+    if (sig.leaf_index >= (1u << XMSS_H))
+    {
+        fprintf(stderr, "Error: leaf_index %u out of bounds\n", sig.leaf_index);
+        fclose(f);
+        return EXIT_FAILURE;
+    }
     int rerr = read_hex(f, sig.nonce, XMSS_NONCE_LEN);
     for (int i = 0; i < XMSS_WOTS_LEN; i++)
         rerr |= read_hex(f, sig.sig_hashes[i], XMSS_NODE_BYTES);
@@ -180,6 +186,7 @@ int main(int argc, char *argv[])
             if (RAND_bytes(shares[k][j], INPUT_LEN) != 1)
             {
                 fprintf(stderr, "RAND_bytes failed\n");
+                free_structures_prove(shares, as, zs, randomness, localViews);
                 return EXIT_FAILURE;
             }
         for (int j = 0; j < INPUT_LEN; j++)
@@ -191,8 +198,13 @@ int main(int argc, char *argv[])
     bool error = false;
     unsigned char keys[NUM_ROUNDS][3][32];
     unsigned char rs[NUM_ROUNDS][3][32];
-    RAND_bytes((unsigned char *)keys, NUM_ROUNDS * 3 * 32);
-    RAND_bytes((unsigned char *)rs, NUM_ROUNDS * 3 * 32);
+    if (RAND_bytes((unsigned char *)keys, NUM_ROUNDS * 3 * 32) != 1 ||
+        RAND_bytes((unsigned char *)rs, NUM_ROUNDS * 3 * 32) != 1)
+    {
+        fprintf(stderr, "Error: RAND_bytes failed (entropy source unavailable)\n");
+        free_structures_prove(shares, as, zs, randomness, localViews);
+        return EXIT_FAILURE;
+    }
 
     printf("\n===========================================================================\n");
     printf("\nChosen number of ZKBoo rounds: %d (can be changed in 'src/shared.c')\n", NUM_ROUNDS);

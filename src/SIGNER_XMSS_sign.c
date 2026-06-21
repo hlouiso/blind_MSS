@@ -125,12 +125,30 @@ int main(int argc, char *argv[])
     }
     fclose(fpk);
 
-    if (!xmss_verify(pk_seed, root, d, 32, &sig))
+    if (!xmss_verify(pk_seed_pub, root, d, 32, &sig))
     {
         fprintf(stderr, "Self-check FAILED: produced signature does not verify against the public key.\n");
         return EXIT_FAILURE;
     }
     printf("Self-check: signature verifies against the public key.\n");
+
+    /* ============================== Advancing the state (before writing sig) ============================== */
+    /* Write the incremented leaf_index FIRST so a crash between the two writes
+     * never leaves the key file pointing to a leaf that was already signed. */
+    FILE *fkey = fopen("XMSS_secret_key.txt", "w");
+    if (fkey == NULL)
+    {
+        fprintf(stderr, "Error updating XMSS_secret_key.txt\n");
+        return EXIT_FAILURE;
+    }
+    write_hex_line(fkey, sk_seed, sizeof sk_seed);
+    write_hex_line(fkey, pk_seed, sizeof pk_seed);
+    fprintf(fkey, "%u\n", leaf_idx + 1);
+    if (fclose(fkey) != 0)
+    {
+        fprintf(stderr, "Error flushing XMSS_secret_key.txt\n");
+        return EXIT_FAILURE;
+    }
 
     /* ============================== Writing XMSS_signature.txt ============================== */
     f = fopen("XMSS_signature.txt", "w");
@@ -145,20 +163,11 @@ int main(int argc, char *argv[])
         write_hex_line(f, sig.sig_hashes[i], XMSS_NODE_BYTES);
     for (int i = 0; i < XMSS_H; i++)
         write_hex_line(f, sig.auth_path[i], XMSS_NODE_BYTES);
-    fclose(f);
-
-    /* ============================== Advancing the state ============================== */
-    leaf_idx++;
-    FILE *fkey = fopen("XMSS_secret_key.txt", "w");
-    if (fkey == NULL)
+    if (fclose(f) != 0)
     {
-        fprintf(stderr, "Error updating XMSS_secret_key.txt\n");
+        fprintf(stderr, "Error flushing XMSS_signature.txt\n");
         return EXIT_FAILURE;
     }
-    write_hex_line(fkey, sk_seed, sizeof sk_seed);
-    write_hex_line(fkey, pk_seed, sizeof pk_seed);
-    fprintf(fkey, "%u\n", leaf_idx);
-    fclose(fkey);
 
     printf("\nXMSS_signature.txt generated\n\n");
     printf("Reminder: XMSS_signature = (leaf_index, nonce, WOTS+ chain values, XMSS path)\n\n");

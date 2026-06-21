@@ -180,6 +180,8 @@ void mpc_sha256(unsigned char *inputs[3], int numBits, unsigned char *randomness
         padded[i] = (unsigned char *)calloc(totalLen, 1);
         if (!padded[i])
         {
+            for (int j = 0; j < i; j++)
+                free(padded[j]);
             return;
         }
         if (srcBytes)

@@ -27,14 +27,14 @@
 #define XMSS_NODE_BYTES 16    /* SHA-256 truncated to 128 bits */
 #define XMSS_PK_SEED_BYTES 16 /* domain parameter */
 #define XMSS_H 10             /* tree height: 2^10 = 1024 leaves */
-#define XMSS_WOTS_W 4         /* Winternitz parameter (2-bit coords) */
-#define XMSS_WOTS_LOGW 2
-#define XMSS_WOTS_LEN 72      /* number of WOTS+ chains */
-#define XMSS_WOTS_MAX_STEPS 3 /* W - 1 */
-#define XMSS_TARGET_SUM 132   /* required sum of the LEN coordinates */
+#define XMSS_WOTS_W 2         /* Winternitz parameter (1-bit coords) */
+#define XMSS_WOTS_LOGW 1
+#define XMSS_WOTS_LEN 144     /* number of WOTS+ chains */
+#define XMSS_WOTS_MAX_STEPS 1 /* W - 1 */
+#define XMSS_TARGET_SUM 72    /* required sum of the LEN coordinates */
 #define XMSS_NONCE_LEN 6      /* grinding nonce length */
 #define XMSS_MSG_HASH_LEN 18  /* low bytes of msg hash feeding the codeword */
-#define XMSS_COORD_RES_BITS 2
+#define XMSS_COORD_RES_BITS 1
 
 /* Tweak (domain-separation) bytes. */
 #define XMSS_TWEAK_CHAIN 0x00

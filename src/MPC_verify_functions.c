@@ -133,6 +133,8 @@ void mpc_sha256_verify(unsigned char *inputs[2], int numBits, unsigned char *res
         padded[i] = (unsigned char *)calloc(totalLen, 1);
         if (!padded[i])
         {
+            if (i == 1)
+                free(padded[0]);
             return;
         }
         if (srcBytes)

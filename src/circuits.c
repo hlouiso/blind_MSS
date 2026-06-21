@@ -29,12 +29,17 @@ static void mpc_thash(View *views[3], unsigned char *randomness[3], int *countY,
                       const unsigned char *suffix, int suffix_len, unsigned char *out[3], int out_len)
 {
     int total = prefix_len + sec_len + suffix_len;
-    unsigned char *inp[3];
-    unsigned char *res[3];
+    unsigned char *inp[3] = {NULL, NULL, NULL};
+    unsigned char *res[3] = {NULL, NULL, NULL};
     for (int k = 0; k < 3; k++)
     {
         inp[k] = calloc(total, 1);
         res[k] = malloc(32);
+        if (!inp[k] || !res[k])
+        {
+            for (int j = 0; j < 3; j++) { free(inp[j]); free(res[j]); }
+            return;
+        }
         if (prefix_len && k == 0)
             memcpy(inp[0], prefix, prefix_len);
         memcpy(inp[k] + prefix_len, sec[k], sec_len);
@@ -120,6 +125,13 @@ void building_views(a *a, unsigned char message_digest[32], unsigned char pk_see
 {
     int *countY = calloc(1, sizeof(int));
     int *randCount = calloc(1, sizeof(int));
+    if (!countY || !randCount)
+    {
+        free(countY);
+        free(randCount);
+        memset(a->yp, 0, sizeof(a->yp));
+        return;
+    }
 
     /* =================== (1) Halevi–Micali commitment → digest d =================== */
     unsigned char dsh[3][32];
@@ -203,35 +215,41 @@ void building_views(a *a, unsigned char message_digest[32], unsigned char pk_see
         memcpy(chain_prefix, pk_seed, XMSS_PK_SEED_BYTES);
         chain_prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_CHAIN;
 
-        const int cpb = 8 / XMSS_COORD_RES_BITS; /* coords per byte = 4 */
+        const int cpb = 8 / XMSS_COORD_RES_BITS;
         for (int i = 0; i < XMSS_WOTS_LEN; i++)
         {
             unsigned char x[3][16];
             for (int k = 0; k < 3; k++)
                 memcpy(x[k], shares[k] + W_SIG_OFF + i * XMSS_NODE_BYTES, XMSS_NODE_BYTES);
 
-            /* coordinate bits c0,c1 (LSB-first) from mh share bytes */
+            /* coordinate bits from mh share bytes (LSB-first) */
             int byte_idx = i / cpb;
             int shift = (i % cpb) * XMSS_COORD_RES_BITS;
-            uint32_t c0[3], c1[3];
+            uint32_t c0[3];
             for (int k = 0; k < 3; k++)
-            {
-                unsigned char b = mh[k][byte_idx];
-                c0[k] = (uint32_t)((b >> shift) & 1u);
-                c1[k] = (uint32_t)((b >> (shift + 1)) & 1u);
-            }
+                c0[k] = (uint32_t)((mh[k][byte_idx] >> shift) & 1u);
 
-            /* predicates: sel(p) = (p > coord). p=1: NOR(c0,c1); p=2: ~c1; p=3: NAND(c0,c1) */
+#if XMSS_WOTS_MAX_STEPS == 1
+            /* W=2: coord ∈ {0,1}. sel(p=1) = (1 > coord) = NOT c0 — no AND gate */
+            uint32_t nc0[3];
+            mpc_NEGATE(c0, nc0);
+            uint32_t *sels[1] = {nc0};
+#else
+            /* W=4: coord ∈ {0,1,2,3}, bits c1c0. */
+            uint32_t c1[3];
+            for (int k = 0; k < 3; k++)
+                c1[k] = (uint32_t)((mh[k][byte_idx] >> (shift + 1)) & 1u);
+            /* sel(p) = (p > coord): p=1 NOR(c0,c1), p=2 ~c1, p=3 NAND(c0,c1) */
             uint32_t nc0[3], nc1[3], sel1[3], and3[3], sel3[3];
             mpc_NEGATE(c0, nc0);
             mpc_NEGATE(c1, nc1);
-            mpc_AND(nc0, nc1, sel1, randomness, randCount, views, countY); /* sel for p=1 */
+            mpc_AND(nc0, nc1, sel1, randomness, randCount, views, countY);
             uint32_t sel2[3];
-            mpc_NEGATE(c1, sel2); /* sel for p=2 */
+            mpc_NEGATE(c1, sel2);
             mpc_AND(c0, c1, and3, randomness, randCount, views, countY);
-            mpc_NEGATE(and3, sel3); /* sel for p=3 */
-
+            mpc_NEGATE(and3, sel3);
             uint32_t *sels[3] = {sel1, sel2, sel3};
+#endif
             for (int stage = 0; stage < XMSS_WOTS_MAX_STEPS; stage++)
             {
                 int p = stage + 1;
@@ -376,11 +394,17 @@ static void mpc_thash_verify(View ve, View ve1, unsigned char *randomness[2], in
                              int out_len)
 {
     int total = prefix_len + sec_len + suffix_len;
-    unsigned char *inp[2], *res[2];
+    unsigned char *inp[2] = {NULL, NULL};
+    unsigned char *res[2] = {NULL, NULL};
     for (int j = 0; j < 2; j++)
     {
         inp[j] = calloc(total, 1);
         res[j] = malloc(32);
+        if (!inp[j] || !res[j])
+        {
+            free(inp[0]); free(res[0]); free(inp[1]); free(res[1]);
+            return;
+        }
         memcpy(inp[j] + prefix_len, sec[j], sec_len);
         if (opened[j] == 0)
         {
@@ -460,11 +484,27 @@ void verify(unsigned char message_digest[32], unsigned char pk_seed[XMSS_PK_SEED
     unsigned char *randomness[2];
     randomness[0] = malloc(Random_Bytes_Needed);
     randomness[1] = malloc(Random_Bytes_Needed);
+    if (!randomness[0] || !randomness[1])
+    {
+        free(randomness[0]);
+        free(randomness[1]);
+        *error = true;
+        return;
+    }
     getAllRandomness(z->ke, randomness[0]);
     getAllRandomness(z->ke1, randomness[1]);
 
     int *randCount = calloc(1, sizeof(int));
     int *countY = calloc(1, sizeof(int));
+    if (!randCount || !countY)
+    {
+        free(randCount);
+        free(countY);
+        free(randomness[0]);
+        free(randomness[1]);
+        *error = true;
+        return;
+    }
 
     View ve = z->ve, ve1 = z->ve1;
     unsigned char *vx[2] = {z->ve.x, z->ve1.x};
@@ -564,14 +604,18 @@ void verify(unsigned char message_digest[32], unsigned char pk_seed[XMSS_PK_SEED
 
             int byte_idx = i / cpb;
             int shift = (i % cpb) * XMSS_COORD_RES_BITS;
-            uint32_t c0[2], c1[2];
+            uint32_t c0[2];
             for (int j = 0; j < 2; j++)
-            {
-                unsigned char b = mh[j][byte_idx];
-                c0[j] = (uint32_t)((b >> shift) & 1u);
-                c1[j] = (uint32_t)((b >> (shift + 1)) & 1u);
-            }
+                c0[j] = (uint32_t)((mh[j][byte_idx] >> shift) & 1u);
 
+#if XMSS_WOTS_MAX_STEPS == 1
+            uint32_t nc0[2];
+            mpc_NEGATE2(c0, nc0);
+            uint32_t *sels[1] = {nc0};
+#else
+            uint32_t c1[2];
+            for (int j = 0; j < 2; j++)
+                c1[j] = (uint32_t)((mh[j][byte_idx] >> (shift + 1)) & 1u);
             uint32_t nc0[2], nc1[2], sel1[2], sel2[2], and3[2], sel3[2];
             mpc_NEGATE2(c0, nc0);
             mpc_NEGATE2(c1, nc1);
@@ -579,8 +623,8 @@ void verify(unsigned char message_digest[32], unsigned char pk_seed[XMSS_PK_SEED
             mpc_NEGATE2(c1, sel2);
             mpc_AND_verify(c0, c1, and3, ve, ve1, randomness, randCount, countY);
             mpc_NEGATE2(and3, sel3);
-
             uint32_t *sels[3] = {sel1, sel2, sel3};
+#endif
             for (int stage = 0; stage < XMSS_WOTS_MAX_STEPS; stage++)
             {
                 int p = stage + 1;

@@ -25,10 +25,12 @@
 #define W_LEAFIDX_LEN 4
 #define W_NONCE_OFF (W_LEAFIDX_OFF + W_LEAFIDX_LEN) /* 292 */
 #define W_SIG_OFF (W_NONCE_OFF + XMSS_NONCE_LEN)    /* 298 */
-#define W_SIG_LEN (XMSS_WOTS_LEN * XMSS_NODE_BYTES) /* 1152 */
-#define W_PATH_OFF (W_SIG_OFF + W_SIG_LEN)          /* 1450 */
+#define W_SIG_LEN (XMSS_WOTS_LEN * XMSS_NODE_BYTES) /* 2304 (W=2,LEN=144) */
+#define W_PATH_OFF (W_SIG_OFF + W_SIG_LEN)          /* 2602 */
 #define W_PATH_LEN (XMSS_H * XMSS_NODE_BYTES)       /* 160 */
-#define W_END (W_PATH_OFF + W_PATH_LEN)             /* 1610 */
+#define W_END (W_PATH_OFF + W_PATH_LEN)             /* 2762 */
+
+_Static_assert(W_END == 2762, "W_END changed — update INPUT_LEN in shared.c");
 
 /* The circuit's public output (a->yp), per share:
  *   words 0..3 : XMSS root (16 bytes)

@@ -48,7 +48,7 @@ int main(void)
         {
             uint8_t r;
             RAND_bytes(&r, 1);
-            coords[i] = r & 0x3; /* random 0..3 */
+            coords[i] = r & (uint8_t)(XMSS_WOTS_W - 1);
         }
         xmss_wots_sign(pk_seed, sk, coords, sig);
         xmss_wots_pk_from_sig(pk_seed, sig, coords, pk_a);

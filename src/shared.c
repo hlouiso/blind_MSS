@@ -11,15 +11,13 @@
 const int COMMIT_KEY_LEN = 32;
 const int NUM_ROUNDS = 219; // Usually 137
 // ySize = number of nonlinear-gate transcript words per view; Random_Bytes_Needed = 4 * ySize.
-// Measured exactly by test_circuit: 253 SHA-256 blocks x 728 + 7264 standalone gates.
-// Commitment SHA blocks: y=SHA256(r) (2) + d=SHA256(a||b||y) (5); the 7264 standalone
-// gates include the 12 GF(2^128) line multiplies (512 ANDs each = 6144) + 1120 XMSS gates.
-const int ySize = 191448;
-const int Random_Bytes_Needed = 765792;
+// Measured exactly by test_circuit (run after any parameter change to re-derive these values).
+const int ySize = 151776;
+const int Random_Bytes_Needed = 607104;
 
 /* INPUT_LEN = r (HM nonces, 6*16=96) + a (HM matrix, 2*6*16=192) + leaf_index (4)
- *           + nonce (XMSS_NONCE_LEN=6) + sig_hashes (72*16) + path (10*16) = 1610 */
-const int INPUT_LEN = 1610;
+ *           + nonce (XMSS_NONCE_LEN=6) + sig_hashes (144*16) + path (10*16) = 2762 */
+const int INPUT_LEN = 2762;
 
 const uint32_t hA[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
 
@@ -50,26 +48,29 @@ int prf_aes256_ctr_32(const unsigned char sk_seed[32], uint32_t leaf, uint32_t j
 
     iv[12] = iv[13] = iv[14] = iv[15] = 0;
 
-    unsigned char zeros[32] = {0}; // The ciphered input is 32 bytes of zeros
+    unsigned char zeros[32] = {0};
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    int outl = 0;
-    int tmplen = 0;
-    EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, sk_seed, iv);
-    EVP_EncryptUpdate(ctx, out32, &outl, zeros, sizeof zeros);
-    EVP_EncryptFinal_ex(ctx, out32 + outl, &tmplen);
+    if (!ctx)
+        return 0;
+    int outl = 0, tmplen = 0;
+    int ok = EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, sk_seed, iv) == 1 &&
+             EVP_EncryptUpdate(ctx, out32, &outl, zeros, sizeof zeros) == 1 &&
+             EVP_EncryptFinal_ex(ctx, out32 + outl, &tmplen) == 1;
     EVP_CIPHER_CTX_free(ctx);
-    return 1;
+    return ok;
 }
 
 int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32])
 {
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx)
+        return 0;
     unsigned int outl = 0;
-    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-    EVP_DigestUpdate(ctx, in, inlen);
-    EVP_DigestFinal_ex(ctx, out32, &outl);
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+             EVP_DigestUpdate(ctx, in, inlen) == 1 &&
+             EVP_DigestFinal_ex(ctx, out32, &outl) == 1;
     EVP_MD_CTX_free(ctx);
-    return 1;
+    return ok;
 }
 
 void getAllRandomness(unsigned char key[32], unsigned char *randomness)
@@ -78,7 +79,13 @@ void getAllRandomness(unsigned char key[32], unsigned char *randomness)
     iv[0] = iv[1] = iv[2] = iv[3] = 0xA5;
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, key, iv);
+    if (!ctx)
+        return;
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, key, iv) != 1)
+    {
+        EVP_CIPHER_CTX_free(ctx);
+        return;
+    }
 
     size_t total = Random_Bytes_Needed;
     size_t offset = 0;
@@ -129,7 +136,7 @@ int alloc_structures_prove(unsigned char *shares[NUM_ROUNDS][3], a *as[NUM_ROUND
             if (!shares[i][j])
                 goto alloc_error;
 
-            localViews[i][j] = malloc(sizeof(View));
+            localViews[i][j] = calloc(1, sizeof(View));
             if (!localViews[i][j])
                 goto alloc_error;
 
@@ -201,34 +208,38 @@ void free_structures_prove(unsigned char *shares[NUM_ROUNDS][3], a *as[NUM_ROUND
 void H_com(unsigned char k[32], View *v, unsigned char r[32], unsigned char hash[SHA256_DIGEST_LENGTH])
 {
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) { memset(hash, 0, SHA256_DIGEST_LENGTH); return; }
     unsigned int outl = 0;
 
-    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-    EVP_DigestUpdate(ctx, k, 32);
-    EVP_DigestUpdate(ctx, v->x, INPUT_LEN);
-    EVP_DigestUpdate(ctx, v->y, ySize * sizeof(uint32_t));
-    EVP_DigestUpdate(ctx, r, 32);
-    EVP_DigestFinal_ex(ctx, hash, &outl);
-
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+             EVP_DigestUpdate(ctx, k, 32) == 1 &&
+             EVP_DigestUpdate(ctx, v->x, INPUT_LEN) == 1 &&
+             EVP_DigestUpdate(ctx, v->y, ySize * sizeof(uint32_t)) == 1 &&
+             EVP_DigestUpdate(ctx, r, 32) == 1 &&
+             EVP_DigestFinal_ex(ctx, hash, &outl) == 1;
     EVP_MD_CTX_free(ctx);
+    if (!ok) memset(hash, 0, SHA256_DIGEST_LENGTH);
 }
 
 void H3(unsigned char message_digest[32], uint32_t y[8], a *as[NUM_ROUNDS], int s, int *es)
 {
     unsigned char hash[SHA256_DIGEST_LENGTH];
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) { memset(es, 0, s * sizeof(*es)); return; }
     unsigned int outl = 0;
 
-    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-    EVP_DigestUpdate(ctx, message_digest, 32);
-    EVP_DigestUpdate(ctx, y, 32);
-
-    for (int i = 0; i < s; i++)
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+             EVP_DigestUpdate(ctx, message_digest, 32) == 1 &&
+             EVP_DigestUpdate(ctx, y, 32) == 1;
+    for (int i = 0; i < s && ok; i++)
+        ok = EVP_DigestUpdate(ctx, as[i], sizeof(a)) == 1;
+    ok = ok && EVP_DigestFinal_ex(ctx, hash, &outl) == 1;
+    if (!ok)
     {
-        EVP_DigestUpdate(ctx, as[i], sizeof(a));
+        EVP_MD_CTX_free(ctx);
+        memset(es, 0, s * sizeof(*es));
+        return;
     }
-
-    EVP_DigestFinal_ex(ctx, hash, &outl);
 
     int i = 0;
     int bitTracker = 0;
@@ -236,9 +247,15 @@ void H3(unsigned char message_digest[32], uint32_t y[8], a *as[NUM_ROUNDS], int 
     {
         if (bitTracker >= SHA256_DIGEST_LENGTH * 8)
         {
-            EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-            EVP_DigestUpdate(ctx, hash, sizeof(hash));
-            EVP_DigestFinal_ex(ctx, hash, &outl);
+            ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+                 EVP_DigestUpdate(ctx, hash, sizeof(hash)) == 1 &&
+                 EVP_DigestFinal_ex(ctx, hash, &outl) == 1;
+            if (!ok)
+            {
+                EVP_MD_CTX_free(ctx);
+                memset(es, 0, s * sizeof(*es));
+                return;
+            }
             bitTracker = 0;
         }
 
@@ -293,7 +310,7 @@ int alloc_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
         if (!as[i])
             goto alloc_error;
 
-        zs[i] = malloc(sizeof(z));
+        zs[i] = calloc(1, sizeof(z));
         if (!zs[i])
             goto alloc_error;
 

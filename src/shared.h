@@ -18,7 +18,7 @@ extern const int INPUT_LEN;
 
 #define RIGHTROTATE(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
 #define GETBIT(x, i) (((x) >> (i)) & 0x01)
-#define SETBIT(x, i, b) x = (b) & 1 ? (x) | (1 << (i)) : (x) & (~(1 << (i)))
+#define SETBIT(x, i, b) x = (b) & 1 ? (x) | (1u << (i)) : (x) & (~(1u << (i)))
 
 // Initial hash value for SHA-256
 extern const uint32_t hA[8];
