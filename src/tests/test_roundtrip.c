@@ -134,6 +134,21 @@ int main(void)
     for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
     free(broadcast); free(aux);
 
+    /* ── H3 range check ── */
+    {
+        a *as_arr[NUM_ROUNDS];
+        for (int r = 0; r < NUM_ROUNDS; r++) as_arr[r] = &A;
+        unsigned char fake_digest[32] = {0};
+        uint32_t fake_pubout[8] = {0};
+        int es[NUM_ROUNDS];
+        H3(fake_digest, fake_pubout, as_arr, NUM_ROUNDS, es);
+        int range_ok = 1;
+        for (int r = 0; r < NUM_ROUNDS; r++)
+            if (es[r] < 0 || es[r] >= N_PARTIES) { range_ok = 0; break; }
+        CHECK(range_ok, "H3: all challenges in [0, N_PARTIES)");
+        printf("  (N_PARTIES=%d, NUM_ROUNDS=%d)\n", N_PARTIES, NUM_ROUNDS);
+    }
+
     printf("\n%s (%d failure%s)\n", failures ? "FAILURES" : "ALL PASS",
            failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

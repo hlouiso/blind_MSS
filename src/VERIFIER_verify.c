@@ -122,11 +122,14 @@ int main(int argc, char *argv[])
     bool error = false;
     int round_ctr = 0;
 
-#pragma omp parallel for
+#pragma omp parallel for schedule(dynamic, 1)
     for (int i = 0; i < NUM_ROUNDS; i++) {
         bool verify_error = false;
         verify(m_hat, pk_seed, &verify_error, as[i], es[i], zs[i]);
-        if (verify_error) error = true;
+        if (verify_error) {
+#pragma omp atomic write
+            error = true;
+        }
 #pragma omp atomic
         round_ctr++;
         printf("KKW round verified: %d/%d\r", round_ctr, NUM_ROUNDS);

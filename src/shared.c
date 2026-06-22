@@ -1,5 +1,6 @@
 #include "shared.h"
 
+#include <math.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 #include <stdbool.h>
@@ -9,7 +10,7 @@
 #include <string.h>
 
 /* ── KKW parameters ─────────────────────────────────────────────────────── */
-const int NUM_ROUNDS = 32;
+const int NUM_ROUNDS = (int)ceil(128.0 / log2((double)N_PARTIES));
 /* ySize: number of nonlinear gates (word-level) in one circuit execution.
  * Measured by test_circuit after any parameter change. */
 const int ySize = 151776;
@@ -133,9 +134,12 @@ void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
         return;
     }
 
-    /* Extract challenges in {0 .. N_PARTIES-1}.
-     * Use 4 bits per challenge (N_PARTIES=16 is a power of two → no rejection). */
-    int i = 0, byteIdx = 0, nibble = 0;
+    /* Extract challenges in {0 .. N_PARTIES-1} using rejection sampling.
+     * threshold = largest multiple of N_PARTIES that fits in a byte (0..255).
+     * For power-of-2 N_PARTIES (≤256), threshold == 256 → no byte is ever
+     * rejected and the distribution is perfectly uniform. */
+    const unsigned int threshold = (unsigned int)N_PARTIES * (256u / (unsigned int)N_PARTIES);
+    int i = 0, byteIdx = 0;
     while (i < s) {
         if (byteIdx >= SHA256_DIGEST_LENGTH) {
             ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
@@ -146,19 +150,11 @@ void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
                 memset(es, 0, s * sizeof(*es));
                 return;
             }
-            byteIdx = 0; nibble = 0;
+            byteIdx = 0;
         }
-        /* Extract one 4-bit nibble from current byte. */
-        int val;
-        if (nibble == 0) {
-            val = (hash[byteIdx] >> 4) & 0xF;
-            nibble = 1;
-        } else {
-            val = hash[byteIdx] & 0xF;
-            nibble = 0;
-            byteIdx++;
-        }
-        es[i++] = val; /* val ∈ {0..15} = {0..N_PARTIES-1} */
+        unsigned int val = (unsigned char)hash[byteIdx++];
+        if (val < threshold)
+            es[i++] = (int)(val % (unsigned int)N_PARTIES);
     }
     EVP_MD_CTX_free(ctx);
 }
