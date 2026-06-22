@@ -94,7 +94,7 @@ int main(int argc, char *argv[])
 
     /* Re-derive Fiat–Shamir challenges */
     int es[NUM_ROUNDS];
-    H3(m_hat, pubout, as, NUM_ROUNDS, es);
+    H3(m_hat, pubout, as, zs, NUM_ROUNDS, es);
 
     /* Check each round's XOR of all yp shares equals pubout.
      * yp_e is the hidden party's committed share (from proof). */

@@ -39,11 +39,24 @@ void mpc_AND_verify(uint32_t x[N_PARTIES-1], uint32_t y[N_PARTIES-1],
                     const uint32_t *broadcast, const uint32_t *aux,
                     int *gateCount)
 {
-    /* KKW: z_j is determined by tapes and broadcast alone; x,y not needed. */
-    (void)x; (void)y;
     int g = *gateCount;
     uint32_t da = broadcast[2*g];
     uint32_t db = broadcast[2*g+1];
+
+    /* Trou 2 partial fix: compute revealed parties' broadcast contributions
+     * da_rev = XOR_j(x[j]^u[j]), db_rev = XOR_j(y[j]^v[j]).
+     * da_e = da^da_rev is the hidden party's online message.
+     * Security: H3 now binds da/db (Trou 3), so they cannot be altered post-
+     * commitment.  Full fix requires including da_e/db_e in H_com so the
+     * verifier can independently check the hidden party's contribution. */
+    uint32_t da_rev = 0, db_rev = 0;
+    for (int j = 0; j < N_PARTIES-1; j++) {
+        da_rev ^= x[j] ^ tape_u(tapes[j], g);
+        db_rev ^= y[j] ^ tape_v(tapes[j], g);
+    }
+    /* Hidden party's broadcast shares (da_e, db_e) — not yet bound in H_com. */
+    (void)(da ^ da_rev);
+    (void)(db ^ db_rev);
 
     for (int j = 0; j < N_PARTIES-1; j++) {
         int o = orig(j, e);

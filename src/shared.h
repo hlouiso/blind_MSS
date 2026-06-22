@@ -78,10 +78,14 @@ void H_com(const unsigned char seed[SEED_SIZE], const unsigned char *x, const ui
 
 /**
  * Fiat–Shamir challenge derivation.
- * Produces es[0..s-1] ∈ {0 .. N_PARTIES-1} from message_digest, pubout, and
- * the per-round commitment metadata as[0..s-1].
+ * Produces es[0..s-1] ∈ {0 .. N_PARTIES-1} by hashing:
+ *   message_digest || pubout || as[0..s-1] || broadcast[0..s-1] || aux[0..s-1]
+ * Binding broadcast and aux prevents the prover from adapting them post-commitment
+ * (Trou 3 fix).  Full soundness additionally requires preprocessing cut-and-choose
+ * to verify Beaver triple correctness (Trou 1 — future work).
  */
-void H3(const unsigned char message_digest[32], const uint32_t pubout[8], a *as[NUM_ROUNDS], int s, int *es);
+void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
+        a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS], int s, int *es);
 
 /* ── Allocation helpers ─────────────────────────────────────────────────── */
 

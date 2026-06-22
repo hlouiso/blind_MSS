@@ -136,17 +136,27 @@ int main(void)
 
     /* ── H3 range check ── */
     {
+        /* Allocate zero-filled broadcast/aux for the range test. */
+        uint32_t *bcast_fake = calloc((size_t)(2 * ySize), sizeof(uint32_t));
+        uint32_t *aux_fake   = calloc((size_t)ySize,       sizeof(uint32_t));
+        z fake_z;
+        memset(&fake_z, 0, sizeof fake_z);
+        fake_z.broadcast = bcast_fake;
+        fake_z.aux       = aux_fake;
+
         a *as_arr[NUM_ROUNDS];
-        for (int r = 0; r < NUM_ROUNDS; r++) as_arr[r] = &A;
+        z *zs_arr[NUM_ROUNDS];
+        for (int r = 0; r < NUM_ROUNDS; r++) { as_arr[r] = &A; zs_arr[r] = &fake_z; }
         unsigned char fake_digest[32] = {0};
         uint32_t fake_pubout[8] = {0};
         int es[NUM_ROUNDS];
-        H3(fake_digest, fake_pubout, as_arr, NUM_ROUNDS, es);
+        H3(fake_digest, fake_pubout, as_arr, zs_arr, NUM_ROUNDS, es);
         int range_ok = 1;
         for (int r = 0; r < NUM_ROUNDS; r++)
             if (es[r] < 0 || es[r] >= N_PARTIES) { range_ok = 0; break; }
         CHECK(range_ok, "H3: all challenges in [0, N_PARTIES)");
         printf("  (N_PARTIES=%d, NUM_ROUNDS=%d)\n", N_PARTIES, NUM_ROUNDS);
+        free(bcast_fake); free(aux_fake);
     }
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILURES" : "ALL PASS",

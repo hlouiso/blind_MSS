@@ -106,7 +106,7 @@ void H_com(const unsigned char seed[SEED_SIZE],
 /* ── Fiat–Shamir challenge ─────────────────────────────────────────────── */
 
 void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
-        a *as[NUM_ROUNDS], int s, int *es)
+        a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS], int s, int *es)
 {
     /* Encode pubout as 32 big-endian bytes. */
     unsigned char pubout_bytes[32];
@@ -125,8 +125,17 @@ void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
     int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
              EVP_DigestUpdate(ctx, message_digest, 32) == 1 &&
              EVP_DigestUpdate(ctx, pubout_bytes, 32) == 1;
-    for (int i = 0; i < s && ok; i++)
+    for (int i = 0; i < s && ok; i++) {
         ok = EVP_DigestUpdate(ctx, as[i], sizeof(a)) == 1;
+        /* Trou 3 fix: bind broadcast and aux so the prover cannot adapt them
+         * after committing to the yp/commitment transcript. */
+        if (ok)
+            ok = EVP_DigestUpdate(ctx, zs[i]->broadcast,
+                                  (size_t)(2 * ySize) * sizeof(uint32_t)) == 1;
+        if (ok)
+            ok = EVP_DigestUpdate(ctx, zs[i]->aux,
+                                  (size_t)ySize * sizeof(uint32_t)) == 1;
+    }
     ok = ok && EVP_DigestFinal_ex(ctx, hash, &outl) == 1;
     if (!ok) {
         EVP_MD_CTX_free(ctx);

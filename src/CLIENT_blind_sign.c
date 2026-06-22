@@ -250,7 +250,7 @@ int main(int argc, char *argv[])
 
     /* ── Fiat–Shamir challenges ── */
     int es[NUM_ROUNDS];
-    H3(m_hat, pubout, as, NUM_ROUNDS, es);
+    H3(m_hat, pubout, as, zs, NUM_ROUNDS, es);
 
     /* ── Fill proof z structs ── */
     for (int round = 0; round < NUM_ROUNDS; round++)
