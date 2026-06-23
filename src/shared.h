@@ -46,6 +46,10 @@ typedef struct
 {
     uint32_t yp[N_PARTIES][8];      /* circuit output shares */
     unsigned char h[N_PARTIES][32]; /* com_i = H(seed_i || x_i || yp_i) */
+    /* KKW h'_j: H2(broadcast || msgs_0 || … || msgs_{N-1}).
+     * msgs_i[g] = w_i[g] ^ (da[g]&v_i[g]) ^ (db[g]&u_i[g]) for each AND gate g.
+     * Included in sizeof(a), so H3 commits to it before the challenge is derived. */
+    unsigned char h_prime[32];
 } a;
 
 /* ── Per-round revealed proof data ─────────────────────────────────────── */
@@ -60,7 +64,40 @@ typedef struct
     uint32_t yp_e[8];                           /* hidden party's output share */
     uint32_t *broadcast;                        /* 2 * ySize uint32_t, malloc'd */
     uint32_t *aux;                              /* ySize uint32_t, malloc'd */
+    /* KKW Trou 2 fix: hidden party's per-gate messages (ySize uint32_t, malloc'd).
+     * msgs_e[g] = w_e[g] ^ (da[g]&v_e[g]) ^ (db[g]&u_e[g]).
+     * Verifier recomputes revealed parties' msgs and checks h'_j = H(broadcast||all). */
+    uint32_t *msgs_e;
 } z;
+
+/* ── KKW online-transcript helpers ─────────────────────────────────────── */
+
+/**
+ * Compute h'_j = H2(broadcast || msgs_0 || … || msgs_{N-1}).
+ * msgs_i[g] = w_i[g] ^ (da[g]&v_i[g]) ^ (db[g]&u_i[g]) for each gate g.
+ * Called inside building_views (all N tapes available) to fill a->h_prime.
+ */
+void compute_h_prime(const unsigned char *tapes[N_PARTIES],
+                     const uint32_t *broadcast, const uint32_t *aux,
+                     unsigned char h_prime[32]);
+
+/**
+ * Compute the per-gate messages for a single party (used after H3 to fill msgs_e).
+ * msgs_e_out[g] = w_e[g] ^ (da[g]&v_e[g]) ^ (db[g]&u_e[g]).
+ */
+void compute_msgs_e(int e, const unsigned char *tape_e,
+                    const uint32_t *broadcast, const uint32_t *aux,
+                    uint32_t *msgs_e_out);
+
+/**
+ * Recompute h'_j on the verifier side using N-1 revealed tapes + msgs_e from proof.
+ * tapes[N-1]: revealed party tapes (slot j = orig party (j<e?j:j+1)).
+ */
+void recompute_h_prime_verify(int e,
+                               const unsigned char *tapes[N_PARTIES - 1],
+                               const uint32_t *broadcast, const uint32_t *aux,
+                               const uint32_t *msgs_e,
+                               unsigned char h_prime_out[32]);
 
 /* ── PRF / hash helpers ─────────────────────────────────────────────────── */
 
@@ -80,9 +117,13 @@ void H_com(const unsigned char seed[SEED_SIZE], const unsigned char *x, const ui
  * Fiat–Shamir challenge derivation.
  * Produces es[0..s-1] ∈ {0 .. N_PARTIES-1} by hashing:
  *   message_digest || pubout || as[0..s-1] || broadcast[0..s-1] || aux[0..s-1]
- * Binding broadcast and aux prevents the prover from adapting them post-commitment
- * (Trou 3 fix).  Full soundness additionally requires preprocessing cut-and-choose
- * to verify Beaver triple correctness (Trou 1 — future work).
+ *
+ * Security fixes implemented:
+ *   Trou 3: broadcast+aux bound in this hash (prevents post-commitment adaptation).
+ *   Trou 2: as[i]->h_prime = H2(broadcast||all_msgs) included via sizeof(a);
+ *            verifier checks h_prime by recomputing from revealed tapes + msgs_e.
+ *   Trou 1: preprocessing cut-and-choose (M >> τ opened instances verify aux
+ *            correctness from master seed) — future work, requires M >> NUM_ROUNDS.
  */
 void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
         a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS], int s, int *es);

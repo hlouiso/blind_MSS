@@ -252,6 +252,17 @@ int main(int argc, char *argv[])
     int es[NUM_ROUNDS];
     H3(m_hat, pubout, as, zs, NUM_ROUNDS, es);
 
+    /* ── KKW Trou 2: compute hidden party's per-gate messages (msgs_e) ── */
+    for (int round = 0; round < NUM_ROUNDS; round++)
+    {
+        int e = es[round];
+        unsigned char *tape_e = malloc((size_t)TAPE_SIZE);
+        if (!tape_e) { error = true; continue; }
+        expand_tape(seeds[round][e], tape_e);
+        compute_msgs_e(e, tape_e, zs[round]->broadcast, zs[round]->aux, zs[round]->msgs_e);
+        free(tape_e);
+    }
+
     /* ── Fill proof z structs ── */
     for (int round = 0; round < NUM_ROUNDS; round++)
     {

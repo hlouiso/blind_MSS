@@ -335,6 +335,11 @@ void building_views(
 
     g_circuit_gates = *gc;
     free(gc);
+
+    /* KKW Trou 2: commit to all N parties' per-gate online messages.
+     * h'_j = H2(broadcast || msgs_0 || … || msgs_{N-1}).
+     * Stored in a->h_prime so H3 includes it in the Fiat–Shamir hash. */
+    compute_h_prime((const unsigned char **)tapes, broadcast, aux, a->h_prime);
 }
 
 /* ── Verify-side helpers ────────────────────────────────────────────────── */
@@ -667,6 +672,15 @@ void verify(
         unsigned char hash[32];
         H_com(z_proof->ke[j], vx[j], a_struct->yp[o], hash);
         if (memcmp(a_struct->h[o], hash, 32) != 0) { *error = true; }
+    }
+
+    /* ── KKW Trou 2: verify h'_j = H2(broadcast || all N parties' msgs) ── */
+    {
+        unsigned char h_prime_check[32];
+        recompute_h_prime_verify(e, (const unsigned char **)tapes,
+                                 z_proof->broadcast, z_proof->aux,
+                                 z_proof->msgs_e, h_prime_check);
+        if (memcmp(h_prime_check, a_struct->h_prime, 32) != 0) { *error = true; }
     }
 
     for (int j = 0; j < N_PARTIES-1; j++) free(tapes[j]);

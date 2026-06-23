@@ -103,12 +103,19 @@ int main(void)
         Z.broadcast  = broadcast;
         Z.aux        = aux;
         Z.x_revealed = malloc((size_t)(N_PARTIES-1) * INPUT_LEN);
+        Z.msgs_e     = malloc((size_t)ySize * sizeof(uint32_t));
         for (int j = 0; j < N_PARTIES-1; j++) {
             int orig = (j < e) ? j : j+1;
             memcpy(Z.ke[j], seeds[orig], SEED_SIZE);
             memcpy(Z.x_revealed + (size_t)j * INPUT_LEN, x_shares[orig], INPUT_LEN);
         }
         memcpy(Z.yp_e, A.yp[e], 8 * sizeof(uint32_t));
+        {
+            unsigned char *tape_e = malloc((size_t)TAPE_SIZE);
+            expand_tape(seeds[e], tape_e);
+            compute_msgs_e(e, tape_e, broadcast, aux, Z.msgs_e);
+            free(tape_e);
+        }
 
         bool err = false;
         verify(m_hat, pk_seed, &err, &A, e, &Z);
@@ -116,6 +123,7 @@ int main(void)
         snprintf(msg, sizeof msg, "verify accepts honest proof (e=%d)", e);
         CHECK(!err, msg);
         free(Z.x_revealed);
+        free(Z.msgs_e);
     }
 
     /* ── Tamper: corrupt a sig_hash share, expect output mismatch ── */
@@ -139,10 +147,12 @@ int main(void)
         /* Allocate zero-filled broadcast/aux for the range test. */
         uint32_t *bcast_fake = calloc((size_t)(2 * ySize), sizeof(uint32_t));
         uint32_t *aux_fake   = calloc((size_t)ySize,       sizeof(uint32_t));
+        uint32_t *msgs_fake  = calloc((size_t)ySize,       sizeof(uint32_t));
         z fake_z;
         memset(&fake_z, 0, sizeof fake_z);
         fake_z.broadcast = bcast_fake;
         fake_z.aux       = aux_fake;
+        fake_z.msgs_e    = msgs_fake;
 
         a *as_arr[NUM_ROUNDS];
         z *zs_arr[NUM_ROUNDS];
@@ -156,7 +166,7 @@ int main(void)
             if (es[r] < 0 || es[r] >= N_PARTIES) { range_ok = 0; break; }
         CHECK(range_ok, "H3: all challenges in [0, N_PARTIES)");
         printf("  (N_PARTIES=%d, NUM_ROUNDS=%d)\n", N_PARTIES, NUM_ROUNDS);
-        free(bcast_fake); free(aux_fake);
+        free(bcast_fake); free(aux_fake); free(msgs_fake);
     }
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILURES" : "ALL PASS",

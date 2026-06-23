@@ -84,6 +84,8 @@ int main(int argc, char *argv[])
             { read_error = true; break; }
         if (fread(zs[i]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
             { read_error = true; break; }
+        if (fread(zs[i]->msgs_e, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
+            { read_error = true; break; }
     }
     fclose(file);
 

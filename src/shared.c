@@ -103,6 +103,85 @@ void H_com(const unsigned char seed[SEED_SIZE],
     if (!ok) memset(hash, 0, 32);
 }
 
+/* ── KKW online-transcript helpers ─────────────────────────────────────── */
+
+/* Per-gate message for party p at gate g (without the public da&db correction):
+ *   msgs[g] = w_corrected[g] ^ (da[g] & v[g]) ^ (db[g] & u[g])
+ * where w_corrected = tape_w ^ aux[g] for party 0, tape_w otherwise.
+ * This is s_i (the broadcast share) from the KKW/Beaver-triple AND formula. */
+static inline uint32_t gate_msg(int p, const unsigned char *tape, int g,
+                                 const uint32_t *broadcast, const uint32_t *aux)
+{
+    uint32_t w = tape_w(tape, g);
+    if (p == 0) w ^= aux[g];
+    return w ^ (broadcast[2*g] & tape_v(tape, g))
+             ^ (broadcast[2*g+1] & tape_u(tape, g));
+}
+
+void compute_h_prime(const unsigned char *tapes[N_PARTIES],
+                     const uint32_t *broadcast, const uint32_t *aux,
+                     unsigned char h_prime[32])
+{
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) { memset(h_prime, 0, 32); return; }
+    unsigned int outl = 0;
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+             EVP_DigestUpdate(ctx, broadcast,
+                              (size_t)(2 * ySize) * sizeof(uint32_t)) == 1;
+    uint32_t *tmp = malloc((size_t)ySize * sizeof(uint32_t));
+    if (!tmp) { EVP_MD_CTX_free(ctx); memset(h_prime, 0, 32); return; }
+    for (int p = 0; p < N_PARTIES && ok; p++) {
+        for (int g = 0; g < ySize; g++)
+            tmp[g] = gate_msg(p, tapes[p], g, broadcast, aux);
+        ok = EVP_DigestUpdate(ctx, tmp, (size_t)ySize * sizeof(uint32_t)) == 1;
+    }
+    free(tmp);
+    ok = ok && EVP_DigestFinal_ex(ctx, h_prime, &outl) == 1;
+    EVP_MD_CTX_free(ctx);
+    if (!ok) memset(h_prime, 0, 32);
+}
+
+void compute_msgs_e(int e, const unsigned char *tape_e,
+                    const uint32_t *broadcast, const uint32_t *aux,
+                    uint32_t *msgs_e_out)
+{
+    for (int g = 0; g < ySize; g++)
+        msgs_e_out[g] = gate_msg(e, tape_e, g, broadcast, aux);
+}
+
+void recompute_h_prime_verify(int e,
+                               const unsigned char *tapes[N_PARTIES - 1],
+                               const uint32_t *broadcast, const uint32_t *aux,
+                               const uint32_t *msgs_e,
+                               unsigned char h_prime_out[32])
+{
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) { memset(h_prime_out, 0, 32); return; }
+    unsigned int outl = 0;
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+             EVP_DigestUpdate(ctx, broadcast,
+                              (size_t)(2 * ySize) * sizeof(uint32_t)) == 1;
+    uint32_t *tmp = malloc((size_t)ySize * sizeof(uint32_t));
+    if (!tmp) { EVP_MD_CTX_free(ctx); memset(h_prime_out, 0, 32); return; }
+    /* Emit parties 0..N-1 in order; hidden party e uses msgs_e from proof. */
+    for (int p = 0; p < N_PARTIES && ok; p++) {
+        if (p == e) {
+            ok = EVP_DigestUpdate(ctx, msgs_e,
+                                  (size_t)ySize * sizeof(uint32_t)) == 1;
+        } else {
+            int slot = (p < e) ? p : p - 1;
+            for (int g = 0; g < ySize; g++)
+                tmp[g] = gate_msg(p, tapes[slot], g, broadcast, aux);
+            ok = EVP_DigestUpdate(ctx, tmp,
+                                  (size_t)ySize * sizeof(uint32_t)) == 1;
+        }
+    }
+    free(tmp);
+    ok = ok && EVP_DigestFinal_ex(ctx, h_prime_out, &outl) == 1;
+    EVP_MD_CTX_free(ctx);
+    if (!ok) memset(h_prime_out, 0, 32);
+}
+
 /* ── Fiat–Shamir challenge ─────────────────────────────────────────────── */
 
 void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
@@ -196,13 +275,15 @@ int alloc_structures_prove(
         zs[i] = calloc(1, sizeof(z));
         if (!zs[i]) goto err;
 
-        /* Allocate z internals (broadcast and aux; x_revealed set later). */
+        /* Allocate z internals (broadcast, aux, msgs_e; x_revealed set later). */
         zs[i]->broadcast = malloc((size_t)2 * ySize * sizeof(uint32_t));
         if (!zs[i]->broadcast) goto err;
         zs[i]->aux = malloc((size_t)ySize * sizeof(uint32_t));
         if (!zs[i]->aux) goto err;
         zs[i]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
         if (!zs[i]->x_revealed) goto err;
+        zs[i]->msgs_e = malloc((size_t)ySize * sizeof(uint32_t));
+        if (!zs[i]->msgs_e) goto err;
     }
     return 0;
 
@@ -214,6 +295,7 @@ err:
             free(zs[i]->broadcast);
             free(zs[i]->aux);
             free(zs[i]->x_revealed);
+            free(zs[i]->msgs_e);
             free(zs[i]);
         }
     }
@@ -232,6 +314,7 @@ void free_structures_prove(
             free(zs[i]->broadcast);
             free(zs[i]->aux);
             free(zs[i]->x_revealed);
+            free(zs[i]->msgs_e);
             free(zs[i]);
         }
     }
@@ -256,6 +339,8 @@ int alloc_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
         if (!zs[i]->aux) goto err;
         zs[i]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
         if (!zs[i]->x_revealed) goto err;
+        zs[i]->msgs_e = malloc((size_t)ySize * sizeof(uint32_t));
+        if (!zs[i]->msgs_e) goto err;
     }
     return 0;
 
@@ -266,6 +351,7 @@ err:
             free(zs[i]->broadcast);
             free(zs[i]->aux);
             free(zs[i]->x_revealed);
+            free(zs[i]->msgs_e);
             free(zs[i]);
         }
     }
@@ -280,6 +366,7 @@ void free_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
             free(zs[i]->broadcast);
             free(zs[i]->aux);
             free(zs[i]->x_revealed);
+            free(zs[i]->msgs_e);
             free(zs[i]);
         }
     }
@@ -314,6 +401,10 @@ bool write_to_file(FILE *file, a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
         /* Aux: ySize uint32_t. */
         if (fwrite(zs[i]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize) {
             fprintf(stderr, "fwrite aux[%d] failed\n", i); ok = false;
+        }
+        /* Hidden party's per-gate messages: ySize uint32_t. */
+        if (fwrite(zs[i]->msgs_e, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize) {
+            fprintf(stderr, "fwrite msgs_e[%d] failed\n", i); ok = false;
         }
     }
     return ok;
