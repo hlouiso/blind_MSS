@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <openssl/evp.h>
 #include <openssl/sha.h>
 #include <omp.h>
 
@@ -30,9 +31,10 @@ int main(int argc, char *argv[])
 {
     if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
         printf("VERIFIER_verify\n\n"
-               "  Verifies signature_proof.bin against XMSS_public_key.txt for a message m.\n\n"
+               "  Verifies signature_proof.bin (KKW, M=%d, τ=%d) against XMSS_public_key.txt.\n\n"
                "  Prompts: message m (stdin)\n"
-               "  Reads:   XMSS_public_key.txt, signature_proof.bin\n");
+               "  Reads:   XMSS_public_key.txt, signature_proof.bin\n",
+               M_KKW, NUM_ROUNDS);
         return 0;
     }
 
@@ -64,86 +66,225 @@ int main(int argc, char *argv[])
     file = fopen("signature_proof.bin", "rb");
     if (!file) { perror("Error opening signature_proof.bin"); return 1; }
 
-    a *as[NUM_ROUNDS];
-    z *zs[NUM_ROUNDS];
-    if (alloc_structures_verify(as, zs) != 0) {
-        fprintf(stderr, "Error allocating verification structures\n");
-        fclose(file); return EXIT_FAILURE;
+    /* ── Read h* from proof header ── */
+    unsigned char h_star[32];
+    if (fread(h_star, 32, 1, file) != 1) {
+        fprintf(stderr, "Error reading h_star\n"); fclose(file); return EXIT_FAILURE;
     }
 
+    /* ── Re-derive Fiat–Shamir challenge ── */
+    int C_out[NUM_ROUNDS], p_out[NUM_ROUNDS];
+    kkw_fiat_shamir(m_hat, pubout, h_star, C_out, p_out);
+
+    /* Build lookup: is instance j an online instance? */
+    bool in_C[M_KKW];
+    memset(in_C, 0, sizeof(in_C));
+    for (int k = 0; k < NUM_ROUNDS; k++) in_C[C_out[k]] = true;
+
+    /* Accumulators for h* check. */
+    unsigned char h_j_all[M_KKW][32];
+    unsigned char h_prime_all[M_KKW][32];
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * Phase 1: Preprocessing check (M_KKW - NUM_ROUNDS instances, j ∉ C).
+     * Read seed*_j, re-derive aux, verify h_j via preprocessing commitment.
+     * ═══════════════════════════════════════════════════════════════════════ */
+    printf("Verifying preprocessing (%d instances)...\n", M_KKW - NUM_ROUNDS);
+
+    uint32_t *aux_pp = malloc((size_t)ySize * sizeof(uint32_t));
+    if (!aux_pp) {
+        fprintf(stderr, "OOM for aux_pp\n"); fclose(file); return EXIT_FAILURE;
+    }
+
+    bool preproc_error = false;
+    for (int j = 0; j < M_KKW; j++) {
+        if (in_C[j]) continue;
+
+        unsigned char seed_star_j[SEED_SIZE], h_prime_j[32];
+        if (fread(seed_star_j, SEED_SIZE, 1, file) != 1 ||
+            fread(h_prime_j,   32,        1, file) != 1) {
+            fprintf(stderr, "Read error at preprocessing entry j=%d\n", j);
+            preproc_error = true; break;
+        }
+
+        unsigned char seeds_j[N_PARTIES][SEED_SIZE];
+        expand_seed_star(seed_star_j, seeds_j);
+
+        compute_aux_from_seeds(seeds_j, aux_pp);
+        preproc_commit_instance(seeds_j, aux_pp, h_j_all[j]);
+        memcpy(h_prime_all[j], h_prime_j, 32);
+    }
+    free(aux_pp);
+
+    if (preproc_error) { fclose(file); return EXIT_FAILURE; }
+    printf("Preprocessing OK.\n\n");
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * Phase 2: Online verification (NUM_ROUNDS instances, j ∈ C).
+     * Read proof data, call verify(), recompute h_j from commitments.
+     * ═══════════════════════════════════════════════════════════════════════ */
+    a *as[NUM_ROUNDS];
+    z *zs[NUM_ROUNDS];
+    for (int k = 0; k < NUM_ROUNDS; k++) { as[k] = NULL; zs[k] = NULL; }
+
+    bool alloc_ok = true;
+    for (int k = 0; k < NUM_ROUNDS; k++) {
+        as[k] = calloc(1, sizeof(a));
+        zs[k] = calloc(1, sizeof(z));
+        if (!as[k] || !zs[k]) { alloc_ok = false; break; }
+        zs[k]->broadcast  = malloc((size_t)2 * ySize * sizeof(uint32_t));
+        zs[k]->aux        = malloc((size_t)ySize * sizeof(uint32_t));
+        zs[k]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
+        zs[k]->msgs_e     = malloc((size_t)ySize * sizeof(uint32_t));
+        if (!zs[k]->broadcast || !zs[k]->aux || !zs[k]->x_revealed || !zs[k]->msgs_e) {
+            alloc_ok = false; break;
+        }
+    }
+    if (!alloc_ok) {
+        fprintf(stderr, "OOM allocating verification structures\n");
+        fclose(file);
+        for (int k = 0; k < NUM_ROUNDS; k++) {
+            free(as[k]);
+            if (zs[k]) {
+                free(zs[k]->broadcast); free(zs[k]->aux);
+                free(zs[k]->x_revealed); free(zs[k]->msgs_e);
+                free(zs[k]);
+            }
+        }
+        return EXIT_FAILURE;
+    }
+
+    /* Read online proof entries (ordered by k, i.e. by C_out[k] ascending). */
     bool read_error = false;
-    for (int i = 0; i < NUM_ROUNDS; i++) {
-        if (fread(as[i], sizeof(a), 1, file) != 1) { read_error = true; break; }
-        if (fread(zs[i]->ke, SEED_SIZE, N_PARTIES - 1, file) != (size_t)(N_PARTIES - 1))
+    for (int k = 0; k < NUM_ROUNDS; k++) {
+        if (fread(zs[k]->com_hidden, 32, 1, file) != 1) { read_error = true; break; }
+        if (fread(as[k], sizeof(a), 1, file) != 1)       { read_error = true; break; }
+        if (fread(zs[k]->ke, SEED_SIZE, N_PARTIES - 1, file) != (size_t)(N_PARTIES - 1))
             { read_error = true; break; }
-        if (fread(zs[i]->x_revealed, (size_t)INPUT_LEN, N_PARTIES - 1, file) != (size_t)(N_PARTIES - 1))
+        if (fread(zs[k]->x_revealed, (size_t)INPUT_LEN, N_PARTIES - 1, file) != (size_t)(N_PARTIES - 1))
             { read_error = true; break; }
-        if (fread(zs[i]->yp_e, sizeof(uint32_t), 8, file) != 8)
+        if (fread(zs[k]->yp_e, sizeof(uint32_t), 8, file) != 8)
             { read_error = true; break; }
-        if (fread(zs[i]->broadcast, sizeof(uint32_t), (size_t)(2 * ySize), file) != (size_t)(2 * ySize))
+        if (fread(zs[k]->broadcast, sizeof(uint32_t), (size_t)(2 * ySize), file) != (size_t)(2 * ySize))
             { read_error = true; break; }
-        if (fread(zs[i]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
+        if (fread(zs[k]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
             { read_error = true; break; }
-        if (fread(zs[i]->msgs_e, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
+        if (fread(zs[k]->msgs_e, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
             { read_error = true; break; }
     }
     fclose(file);
 
     if (read_error) {
-        fprintf(stderr, "Error reading signature_proof.bin\n");
-        free_structures_verify(as, zs); return EXIT_FAILURE;
+        fprintf(stderr, "Error reading signature_proof.bin (online section)\n");
+        goto free_and_fail;
     }
 
-    /* Re-derive Fiat–Shamir challenges */
-    int es[NUM_ROUNDS];
-    H3(m_hat, pubout, as, zs, NUM_ROUNDS, es);
-
-    /* Check each round's XOR of all yp shares equals pubout.
-     * yp_e is the hidden party's committed share (from proof). */
-    for (int i = 0; i < NUM_ROUNDS; i++) {
-        int e = es[i];
-        for (int j = 0; j < 8; j++) {
-            uint32_t xorv = zs[i]->yp_e[j];
-            for (int p = 0; p < N_PARTIES; p++) {
-                if (p == e) continue;
-                xorv ^= as[i]->yp[p][j];
-            }
-            if (xorv != pubout[j]) {
-                fprintf(stderr, "Output XOR check failed at round %d word %d\n", i+1, j);
-                free_structures_verify(as, zs); return EXIT_FAILURE;
-            }
-        }
-        /* Also verify that yp_e matches the committed value in a->yp[e] */
-        if (memcmp(zs[i]->yp_e, as[i]->yp[e], 8 * sizeof(uint32_t)) != 0) {
-            fprintf(stderr, "yp_e mismatch at round %d\n", i+1);
-            free_structures_verify(as, zs); return EXIT_FAILURE;
-        }
-    }
-
-    printf("===========================================================================\n\n");
-    bool error = false;
+    printf("=========================================================================\n\n");
+    bool online_error = false;
     int round_ctr = 0;
 
 #pragma omp parallel for schedule(dynamic, 1)
-    for (int i = 0; i < NUM_ROUNDS; i++) {
-        bool verify_error = false;
-        verify(m_hat, pk_seed, &verify_error, as[i], es[i], zs[i]);
-        if (verify_error) {
+    for (int k = 0; k < NUM_ROUNDS; k++) {
+        int e = p_out[k];
+        bool round_err = false;
+
+        /* Circuit verification (checks h'_j via Trou 2). */
+        verify(m_hat, pk_seed, &round_err, as[k], e, zs[k]);
+        if (round_err) {
 #pragma omp atomic write
-            error = true;
+            online_error = true;
         }
+
+        /* Recompute h_j for this online instance from revealed coms + com_hidden.
+         * For each party p ≠ e: recompute preproc_com_party from revealed seed.
+         * For party e:          use com_hidden directly. */
+        unsigned char coms[N_PARTIES][32];
+        for (int p = 0; p < N_PARTIES; p++) {
+            if (p == e) {
+                memcpy(coms[p], zs[k]->com_hidden, 32);
+            } else {
+                int slot = (p < e) ? p : p - 1;
+                /* For party 0, include the revealed aux in the commitment. */
+                const uint32_t *aux_arg = (p == 0) ? zs[k]->aux : NULL;
+                preproc_com_party(p, zs[k]->ke[slot], aux_arg, coms[p]);
+            }
+        }
+
+        /* h_j = H(com_0 || ... || com_{N-1}) */
+        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+        if (ctx) {
+            unsigned int outl = 0;
+            EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+            for (int p = 0; p < N_PARTIES; p++)
+                EVP_DigestUpdate(ctx, coms[p], 32);
+            EVP_DigestFinal_ex(ctx, h_j_all[C_out[k]], &outl);
+            EVP_MD_CTX_free(ctx);
+        } else {
+#pragma omp atomic write
+            online_error = true;
+        }
+
+        /* h'_j is already in as[k]->h_prime (verified by verify() via Trou 2). */
+        memcpy(h_prime_all[C_out[k]], as[k]->h_prime, 32);
+
 #pragma omp atomic
         round_ctr++;
-        printf("KKW round verified: %d/%d\r", round_ctr, NUM_ROUNDS);
+        printf("Online verification: %d/%d\r", round_ctr, NUM_ROUNDS);
     }
-    printf("KKW round verified: %d/%d\n\n", NUM_ROUNDS, NUM_ROUNDS);
+    printf("Online verification: %d/%d\n\n", NUM_ROUNDS, NUM_ROUNDS);
 
-    free_structures_verify(as, zs);
-
-    printf("===========================================================================\n\n");
-    if (error) {
-        fprintf(stderr, "Error: invalid signature-proof\n\n"); return EXIT_FAILURE;
+    if (online_error) {
+        fprintf(stderr, "Error: online circuit verification failed\n");
+        goto free_and_fail;
     }
+
+    /* ── Final h* check: reconstruct from all h_j and h'_j ── */
+    {
+        unsigned char h_check[32], h_prime_check[32], h_star_check[32];
+        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+        if (!ctx) { fprintf(stderr, "OOM\n"); goto free_and_fail; }
+        unsigned int outl = 0;
+
+        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+        for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_j_all[j], 32);
+        EVP_DigestFinal_ex(ctx, h_check, &outl);
+
+        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+        for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_prime_all[j], 32);
+        EVP_DigestFinal_ex(ctx, h_prime_check, &outl);
+        EVP_MD_CTX_free(ctx);
+
+        unsigned char in64[64];
+        memcpy(in64, h_check, 32); memcpy(in64 + 32, h_prime_check, 32);
+        sha256_once(in64, 64, h_star_check);
+
+        if (memcmp(h_star_check, h_star, 32) != 0) {
+            fprintf(stderr, "Error: global commitment h* mismatch (Trou 1 check failed)\n");
+            goto free_and_fail;
+        }
+    }
+
+    for (int k = 0; k < NUM_ROUNDS; k++) {
+        free(as[k]);
+        if (zs[k]) {
+            free(zs[k]->broadcast); free(zs[k]->aux);
+            free(zs[k]->x_revealed); free(zs[k]->msgs_e);
+            free(zs[k]);
+        }
+    }
+
+    printf("=========================================================================\n\n");
     printf("Signature proof verified successfully. The signature is valid.\n\n");
     return EXIT_SUCCESS;
+
+free_and_fail:
+    for (int k = 0; k < NUM_ROUNDS; k++) {
+        free(as[k]);
+        if (zs[k]) {
+            free(zs[k]->broadcast); free(zs[k]->aux);
+            free(zs[k]->x_revealed); free(zs[k]->msgs_e);
+            free(zs[k]);
+        }
+    }
+    return EXIT_FAILURE;
 }

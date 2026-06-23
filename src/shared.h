@@ -7,30 +7,64 @@
 #include <stdio.h>
 #include <string.h>
 
-/* ── KKW parameters ────────────────────────────────────────────────────────
- * Override N_PARTIES at build time: make N=8  (or -DN_PARTIES=8).
- * Must be a power of 2 in {2,4,8,16,32,64,128,256}.
- * NUM_ROUNDS = ceil(128 / log2(N_PARTIES)) — guarantees 2^{-128} soundness.
- * SEED_SIZE  = 32 bytes per party seed.
- * TAPE_SIZE  = 3 * ySize * 4 (Beaver triple words: u, v, w_raw per gate).
- * Commitments: com_i = SHA256(seed_i || x_i || yp_i_as_bytes).
- * Proof per round: N coms + (N-1) seeds + (N-1) x-shares + yp_e
- *                + broadcast[2*ySize] + aux[ySize]. */
+/* ── KKW parameters (Table 1, KKW CCS 2018, ρ=128) ─────────────────────────
+ * Override N_PARTIES at build time: make N=4  (or -DN_PARTIES=4).
+ * Must be a power of 2 in {4,8,16,32,64,128,256}.
+ *
+ * M_KKW    : total instances the prover evaluates (preprocessing + online).
+ * NUM_ROUNDS: τ — online instances included in the proof.
+ *
+ * Soundness: ε(M,n,τ) = max_{M-τ≤k≤M} C(k,M-τ)/(C(M,M-τ)·n^{k-M+τ}) ≤ 2^{-128}.
+ *
+ * Trou 1 (preprocessing cut-and-choose): IMPLEMENTED.
+ *   Prover runs M_KKW circuit evaluations.  Verifier opens M_KKW−τ of them
+ *   (using the master seed seed*_j) to check that aux is consistent with the
+ *   Beaver triples derived from the party seeds.  The τ remaining ("online")
+ *   instances are verified as before.  The global commitment
+ *   h* = H(H(h_0,…,h_{M-1}), H(h'_0,…,h'_{M-1})) binds both the
+ *   preprocessing state and the online execution before the challenge C⊂[M].
+ *
+ * Trou 2 (h'_j commitment): IMPLEMENTED (commit 8be2c95).
+ * Trou 3 (H3 binding broadcast+aux): IMPLEMENTED (commit 5b61db5). */
+
 #ifndef N_PARTIES
-#define N_PARTIES 256
+#define N_PARTIES 4
 #endif
 
-/* NUM_ROUNDS = ceil(128 / log2(N_PARTIES)) — computed in shared.c via <math.h>.
- * Any N_PARTIES in [2, 256] is valid. */
-_Static_assert(N_PARTIES >= 2 && N_PARTIES <= 256, "N_PARTIES must be between 2 and 256");
+#if   N_PARTIES == 4
+#  define M_KKW      218
+#  define NUM_ROUNDS  65
+#elif N_PARTIES == 8
+#  define M_KKW      252
+#  define NUM_ROUNDS  44
+#elif N_PARTIES == 16
+#  define M_KKW      352
+#  define NUM_ROUNDS  33
+#elif N_PARTIES == 32
+#  define M_KKW      462
+#  define NUM_ROUNDS  27
+#elif N_PARTIES == 64
+#  define M_KKW      631
+#  define NUM_ROUNDS  23
+#elif N_PARTIES == 128
+#  define M_KKW      916
+#  define NUM_ROUNDS  20
+#elif N_PARTIES == 256
+#  define M_KKW     1837
+#  define NUM_ROUNDS  16
+#else
+#  error "Unsupported N_PARTIES: no KKW (M,τ) parameters in table"
+#endif
+
+_Static_assert(N_PARTIES >= 4 && N_PARTIES <= 256, "N_PARTIES must be 4..256");
 _Static_assert((N_PARTIES & (N_PARTIES - 1)) == 0, "N_PARTIES must be a power of 2");
-extern const int NUM_ROUNDS;
+_Static_assert(NUM_ROUNDS < M_KKW, "NUM_ROUNDS must be < M_KKW");
 
 #define SEED_SIZE 32
 extern const int ySize;     /* gate count, measured by test_circuit */
 extern const int INPUT_LEN; /* witness byte length = W_END = 2762 */
 
-/* Tape size (Beaver triples only, no x share): 3 * ySize * 4 bytes. */
+/* TAPE_SIZE = 3 * ySize * 4 (u[], v[], w_raw[] blocks, each ySize uint32_t). */
 extern const int TAPE_SIZE;
 
 #define RIGHTROTATE(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
@@ -45,119 +79,123 @@ extern const uint32_t k[64];
 typedef struct
 {
     uint32_t yp[N_PARTIES][8];      /* circuit output shares */
-    unsigned char h[N_PARTIES][32]; /* com_i = H(seed_i || x_i || yp_i) */
-    /* KKW h'_j: H2(broadcast || msgs_0 || … || msgs_{N-1}).
-     * msgs_i[g] = w_i[g] ^ (da[g]&v_i[g]) ^ (db[g]&u_i[g]) for each AND gate g.
-     * Included in sizeof(a), so H3 commits to it before the challenge is derived. */
+    unsigned char h[N_PARTIES][32]; /* com_i = H_com(seed_i || x_i || yp_i) */
+    /* h'_j = H2(broadcast || msgs_0 || … || msgs_{N-1}).
+     * Committed in h* = H(H(h_j), H(h'_j)) before challenge derivation. */
     unsigned char h_prime[32];
 } a;
 
 /* ── Per-round revealed proof data ─────────────────────────────────────── */
-/* Seeds are stored in slot order: ke[j] = seed of party (j < e ? j : j+1).
- * Likewise x_revealed[j * INPUT_LEN] for the same mapping.
- * broadcast[2*g]   = da[g],  broadcast[2*g+1] = db[g]  (per gate g).
- * aux[g]           = Beaver correction word for gate g (applied to party 0). */
 typedef struct
 {
-    unsigned char ke[N_PARTIES - 1][SEED_SIZE]; /* revealed seeds */
-    unsigned char *x_revealed;                  /* (N-1) * INPUT_LEN bytes, malloc'd  */
+    unsigned char ke[N_PARTIES - 1][SEED_SIZE]; /* revealed party seeds */
+    unsigned char *x_revealed;                  /* (N-1)*INPUT_LEN bytes, malloc'd */
     uint32_t yp_e[8];                           /* hidden party's output share */
-    uint32_t *broadcast;                        /* 2 * ySize uint32_t, malloc'd */
+    uint32_t *broadcast;                        /* 2*ySize uint32_t, malloc'd */
     uint32_t *aux;                              /* ySize uint32_t, malloc'd */
-    /* KKW Trou 2 fix: hidden party's per-gate messages (ySize uint32_t, malloc'd).
-     * msgs_e[g] = w_e[g] ^ (da[g]&v_e[g]) ^ (db[g]&u_e[g]).
-     * Verifier recomputes revealed parties' msgs and checks h'_j = H(broadcast||all). */
+    /* Hidden party's per-gate messages (ySize uint32_t, malloc'd). */
     uint32_t *msgs_e;
+    /* Preprocessing commitment to hidden party: com_{j,e}. */
+    unsigned char com_hidden[32];
 } z;
+
+/* ── Tape / seed expansion ──────────────────────────────────────────────── */
+
+/** AES-256-CTR: seed → TAPE_SIZE bytes of Beaver triple data (IV domain 0xA5). */
+void expand_tape(const unsigned char seed[SEED_SIZE], unsigned char *tape);
+
+/** AES-256-CTR: master seed seed* → N_PARTIES party seeds (IV domain 0xB7). */
+void expand_seed_star(const unsigned char seed_star[SEED_SIZE],
+                      unsigned char seeds_out[N_PARTIES][SEED_SIZE]);
+
+/** AES-256-CTR: party seed → INPUT_LEN bytes of x_share (IV domain 0xC3). */
+void expand_xshare(const unsigned char seed[SEED_SIZE], unsigned char *xshare_out);
+
+/* ── Preprocessing commitment ───────────────────────────────────────────── */
+
+/**
+ * Compute com_{j,party} = H("ppcom" || party_byte || seed || [aux if party==0]).
+ * Party 0 holds aux in our implementation (gate_msg uses it for p==0).
+ */
+void preproc_com_party(int party, const unsigned char seed[SEED_SIZE],
+                        const uint32_t *aux,
+                        unsigned char com_out[32]);
+
+/**
+ * Compute h_j = H(com_{j,0} || … || com_{j,N-1}).
+ * Commits the Beaver triple seeds and aux for one KKW instance.
+ */
+void preproc_commit_instance(unsigned char seeds[N_PARTIES][SEED_SIZE],
+                              const uint32_t *aux,
+                              unsigned char h_j_out[32]);
+
+/**
+ * Compute aux from N_PARTIES seeds (for preprocessing verification).
+ * aux[g] = (XOR_i u_i[g]) AND (XOR_i v_i[g]) XOR (XOR_i w_i[g]).
+ */
+void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE],
+                             uint32_t *aux_out);
+
+/* ── Fiat–Shamir challenge (full KKW protocol) ──────────────────────────── */
+
+/**
+ * Derive the KKW challenge from the global commitment h_star:
+ *   C_out[NUM_ROUNDS]: sorted, distinct indices in [0..M_KKW-1] — online instances.
+ *   p_out[NUM_ROUNDS]: party index in [0..N_PARTIES-1] for each online instance.
+ * Uses hash-based PRG seeded by H(msg || pubout || h_star).
+ */
+void kkw_fiat_shamir(const unsigned char msg[32], const uint32_t pubout[8],
+                     const unsigned char h_star[32],
+                     int C_out[NUM_ROUNDS], int p_out[NUM_ROUNDS]);
+
+/* ── SHA-256 / commitment helpers ───────────────────────────────────────── */
+
+/** Single-shot SHA-256. Returns 1 on success. */
+int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32]);
+
+/** Commit: H(seed || x[INPUT_LEN] || yp[8] as 32 BE bytes). */
+void H_com(const unsigned char seed[SEED_SIZE], const unsigned char *x,
+           const uint32_t yp[8], unsigned char hash[32]);
+
+/**
+ * Legacy Fiat–Shamir (single-level, used by test_roundtrip H3 range check).
+ * Produces es[0..s-1] ∈ {0..N_PARTIES-1}.
+ */
+void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
+        a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS], int s, int *es);
 
 /* ── KKW online-transcript helpers ─────────────────────────────────────── */
 
-/**
- * Compute h'_j = H2(broadcast || msgs_0 || … || msgs_{N-1}).
- * msgs_i[g] = w_i[g] ^ (da[g]&v_i[g]) ^ (db[g]&u_i[g]) for each gate g.
- * Called inside building_views (all N tapes available) to fill a->h_prime.
- */
 void compute_h_prime(const unsigned char *tapes[N_PARTIES],
                      const uint32_t *broadcast, const uint32_t *aux,
                      unsigned char h_prime[32]);
 
-/**
- * Compute the per-gate messages for a single party (used after H3 to fill msgs_e).
- * msgs_e_out[g] = w_e[g] ^ (da[g]&v_e[g]) ^ (db[g]&u_e[g]).
- */
 void compute_msgs_e(int e, const unsigned char *tape_e,
                     const uint32_t *broadcast, const uint32_t *aux,
                     uint32_t *msgs_e_out);
 
-/**
- * Recompute h'_j on the verifier side using N-1 revealed tapes + msgs_e from proof.
- * tapes[N-1]: revealed party tapes (slot j = orig party (j<e?j:j+1)).
- */
 void recompute_h_prime_verify(int e,
                                const unsigned char *tapes[N_PARTIES - 1],
                                const uint32_t *broadcast, const uint32_t *aux,
                                const uint32_t *msgs_e,
                                unsigned char h_prime_out[32]);
 
-/* ── PRF / hash helpers ─────────────────────────────────────────────────── */
+/* ── Allocation helpers (for online rounds) ─────────────────────────────── */
 
-/**
- * AES-256-CTR: expand seed into TAPE_SIZE bytes of Beaver triple data.
- * Layout: first ySize*4 bytes = u[], next ySize*4 = v[], last ySize*4 = w_raw[].
- */
-void expand_tape(const unsigned char seed[SEED_SIZE], unsigned char *tape);
-
-/** Single-shot SHA-256. Returns 1 on success. */
-int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32]);
-
-/** Commit: H(seed || x[INPUT_LEN] || yp[8] as 32 bytes big-endian). */
-void H_com(const unsigned char seed[SEED_SIZE], const unsigned char *x, const uint32_t yp[8], unsigned char hash[32]);
-
-/**
- * Fiat–Shamir challenge derivation.
- * Produces es[0..s-1] ∈ {0 .. N_PARTIES-1} by hashing:
- *   message_digest || pubout || as[0..s-1] || broadcast[0..s-1] || aux[0..s-1]
- *
- * Security fixes implemented:
- *   Trou 3: broadcast+aux bound in this hash (prevents post-commitment adaptation).
- *   Trou 2: as[i]->h_prime = H2(broadcast||all_msgs) included via sizeof(a);
- *            verifier checks h_prime by recomputing from revealed tapes + msgs_e.
- *   Trou 1: preprocessing cut-and-choose (M >> τ opened instances verify aux
- *            correctness from master seed) — future work, requires M >> NUM_ROUNDS.
- */
-void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
-        a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS], int s, int *es);
-
-/* ── Allocation helpers ─────────────────────────────────────────────────── */
-
-/**
- * Allocate per-round prover structures.
- * seeds[NUM_ROUNDS][N_PARTIES][SEED_SIZE]: flat array of party seeds.
- * x_shares[NUM_ROUNDS][N_PARTIES]: pointers to INPUT_LEN-byte share buffers.
- * as[NUM_ROUNDS], zs[NUM_ROUNDS]: commitment and proof structs.
- * Returns 0 on success, -1 on OOM (partial state freed).
- */
 int alloc_structures_prove(unsigned char seeds[NUM_ROUNDS][N_PARTIES][SEED_SIZE],
-                           unsigned char *x_shares[NUM_ROUNDS][N_PARTIES], a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
+                           unsigned char *x_shares[NUM_ROUNDS][N_PARTIES],
+                           a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
 
-void free_structures_prove(unsigned char *x_shares[NUM_ROUNDS][N_PARTIES], a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
+void free_structures_prove(unsigned char *x_shares[NUM_ROUNDS][N_PARTIES],
+                           a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
 
-/**
- * Allocate per-round verifier structures (as[], zs[] with broadcast/aux).
- * Returns 0 on success, -1 on OOM.
- */
 int alloc_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
 void free_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
 
-/**
- * Serialize proof to file.
- * Format per round: a struct | ke[N-1][32] | x_revealed[(N-1)*INPUT_LEN]
- *                 | yp_e[8 uint32] | broadcast[2*ySize uint32]
- *                 | aux[ySize uint32].
- */
 bool write_to_file(FILE *file, a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
 
-/* Read a single uint32 from tape at byte position pos (big-endian from AES stream). */
+/* ── Tape accessors ─────────────────────────────────────────────────────── */
+
 static inline uint32_t tape_get32(const unsigned char *tape, int pos)
 {
     uint32_t v;
@@ -165,7 +203,6 @@ static inline uint32_t tape_get32(const unsigned char *tape, int pos)
     return v;
 }
 
-/* Retrieve u[g], v[g], w_raw[g] from a party's Beaver triple tape. */
 static inline uint32_t tape_u(const unsigned char *tape, int g) { return tape_get32(tape, g * 4); }
 static inline uint32_t tape_v(const unsigned char *tape, int g) { return tape_get32(tape, ySize * 4 + g * 4); }
 static inline uint32_t tape_w(const unsigned char *tape, int g) { return tape_get32(tape, 2 * ySize * 4 + g * 4); }

@@ -1,6 +1,6 @@
 #include "shared.h"
+#include "circuits.h"
 
-#include <math.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 #include <stdbool.h>
@@ -8,9 +8,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ── KKW parameters ─────────────────────────────────────────────────────── */
-const int NUM_ROUNDS = (int)ceil(128.0 / log2((double)N_PARTIES));
 /* ySize: number of nonlinear gates (word-level) in one circuit execution.
  * Measured by test_circuit after any parameter change. */
 const int ySize = 151776;
@@ -34,33 +31,207 @@ const uint32_t k[64] = {
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 };
 
-/* ── Tape expansion ─────────────────────────────────────────────────────── */
+/* ── Tape / seed expansion ───────────────────────────────────────────────── */
 
-void expand_tape(const unsigned char seed[SEED_SIZE], unsigned char *tape)
+static void aes_ctr_expand(const unsigned char seed[SEED_SIZE],
+                            unsigned char iv_domain,
+                            unsigned char *out, size_t outlen)
 {
-    /* AES-256-CTR: seed → TAPE_SIZE bytes of pseudo-random Beaver triple data.
-     * IV = {0xA5,0xA5,0xA5,0xA5, 0,0,...} (same domain separator as ZKBoo era). */
     unsigned char iv[16] = {0};
-    iv[0] = iv[1] = iv[2] = iv[3] = 0xA5;
+    iv[0] = iv[1] = iv[2] = iv[3] = iv_domain;
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) { memset(tape, 0, TAPE_SIZE); return; }
+    if (!ctx) { memset(out, 0, outlen); return; }
     if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, seed, iv) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        memset(tape, 0, TAPE_SIZE);
-        return;
+        EVP_CIPHER_CTX_free(ctx); memset(out, 0, outlen); return;
     }
-
     unsigned char zeros[64] = {0};
     size_t offset = 0;
-    size_t total = (size_t)TAPE_SIZE;
     int outl = 0;
-    while (offset < total) {
-        size_t chunk = (total - offset < 64) ? (total - offset) : 64;
-        EVP_EncryptUpdate(ctx, tape + offset, &outl, zeros, (int)chunk);
+    while (offset < outlen) {
+        size_t chunk = (outlen - offset < 64) ? (outlen - offset) : 64;
+        EVP_EncryptUpdate(ctx, out + offset, &outl, zeros, (int)chunk);
         offset += chunk;
     }
     EVP_CIPHER_CTX_free(ctx);
+}
+
+void expand_tape(const unsigned char seed[SEED_SIZE], unsigned char *tape)
+{
+    aes_ctr_expand(seed, 0xA5, tape, (size_t)TAPE_SIZE);
+}
+
+void expand_seed_star(const unsigned char seed_star[SEED_SIZE],
+                      unsigned char seeds_out[N_PARTIES][SEED_SIZE])
+{
+    aes_ctr_expand(seed_star, 0xB7, (unsigned char *)seeds_out,
+                   (size_t)N_PARTIES * SEED_SIZE);
+}
+
+void expand_xshare(const unsigned char seed[SEED_SIZE], unsigned char *xshare_out)
+{
+    aes_ctr_expand(seed, 0xC3, xshare_out, (size_t)INPUT_LEN);
+}
+
+/* ── Preprocessing commitment ────────────────────────────────────────────── */
+
+void preproc_com_party(int party, const unsigned char seed[SEED_SIZE],
+                        const uint32_t *aux, unsigned char com_out[32])
+{
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) { memset(com_out, 0, 32); return; }
+    unsigned int outl = 0;
+    unsigned char pbyte = (unsigned char)party;
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+             EVP_DigestUpdate(ctx, "ppcom", 5) == 1 &&
+             EVP_DigestUpdate(ctx, &pbyte, 1) == 1 &&
+             EVP_DigestUpdate(ctx, seed, SEED_SIZE) == 1;
+    /* Party 0 holds aux; including it in the commitment binds aux to this seed. */
+    if (party == 0 && aux != NULL)
+        ok = ok && EVP_DigestUpdate(ctx, aux, (size_t)ySize * sizeof(uint32_t)) == 1;
+    ok = ok && EVP_DigestFinal_ex(ctx, com_out, &outl) == 1;
+    EVP_MD_CTX_free(ctx);
+    if (!ok) memset(com_out, 0, 32);
+}
+
+void preproc_commit_instance(unsigned char seeds[N_PARTIES][SEED_SIZE],
+                              const uint32_t *aux, unsigned char h_j_out[32])
+{
+    unsigned char coms[N_PARTIES][32];
+    for (int i = 0; i < N_PARTIES; i++)
+        preproc_com_party(i, seeds[i], aux, coms[i]);
+
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) { memset(h_j_out, 0, 32); return; }
+    unsigned int outl = 0;
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1;
+    for (int i = 0; i < N_PARTIES && ok; i++)
+        ok = EVP_DigestUpdate(ctx, coms[i], 32) == 1;
+    ok = ok && EVP_DigestFinal_ex(ctx, h_j_out, &outl) == 1;
+    EVP_MD_CTX_free(ctx);
+    if (!ok) memset(h_j_out, 0, 32);
+}
+
+void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE], uint32_t *aux_out)
+{
+    /* Run building_views with dummy inputs to extract aux from the party seeds.
+     * aux[g] is set by mpc_AND and mpc_ADD using only the Beaver triple tapes
+     * (u_i, v_i, w_i) — it does NOT depend on x_shares, m_hat, or pk_seed.
+     *
+     * Using the simple formula (XOR u_i) AND (XOR v_i) XOR (XOR w_i) would be
+     * wrong for mpc_ADD gates: that function only writes bits 0..30 to aux[g]
+     * (bit 31 stays 0), but the word-level formula computes bit 31 from tape data. */
+    unsigned char *x_dummy[N_PARTIES];
+    unsigned char *tapes[N_PARTIES];
+    bool alloc_ok = true;
+    for (int p = 0; p < N_PARTIES; p++) {
+        x_dummy[p] = calloc((size_t)INPUT_LEN, 1);
+        tapes[p]   = malloc((size_t)TAPE_SIZE);
+        if (!x_dummy[p] || !tapes[p]) { alloc_ok = false; break; }
+        expand_tape(seeds[p], tapes[p]);
+    }
+    uint32_t *broadcast = alloc_ok ? calloc((size_t)2 * ySize, sizeof(uint32_t)) : NULL;
+    if (!alloc_ok || !broadcast) {
+        free(broadcast);
+        for (int p = 0; p < N_PARTIES; p++) { free(x_dummy[p]); free(tapes[p]); }
+        memset(aux_out, 0, (size_t)ySize * sizeof(uint32_t));
+        return;
+    }
+    unsigned char zero_m[32] = {0};
+    unsigned char zero_pk[16] = {0};
+    a dummy_a;
+    building_views(&dummy_a, zero_m, zero_pk, x_dummy, tapes, broadcast, aux_out);
+    free(broadcast);
+    for (int p = 0; p < N_PARTIES; p++) { free(x_dummy[p]); free(tapes[p]); }
+}
+
+/* ── Fiat–Shamir challenge (full KKW protocol) ───────────────────────────── */
+
+typedef struct {
+    unsigned char state[32];
+    uint32_t ctr;
+    unsigned char buf[32];
+    int pos;
+} prg_ctx;
+
+static void prg_fill(prg_ctx *p)
+{
+    unsigned char in[36];
+    memcpy(in, p->state, 32);
+    in[32] = (unsigned char)(p->ctr >> 24);
+    in[33] = (unsigned char)(p->ctr >> 16);
+    in[34] = (unsigned char)(p->ctr >>  8);
+    in[35] = (unsigned char)(p->ctr);
+    sha256_once(in, 36, p->buf);
+    p->ctr++;
+    p->pos = 0;
+}
+
+static void prg_init(prg_ctx *p, const unsigned char seed[32])
+{
+    memcpy(p->state, seed, 32);
+    p->ctr = 0;
+    prg_fill(p);
+}
+
+static uint32_t prg_u32(prg_ctx *p)
+{
+    uint32_t v = 0;
+    for (int i = 0; i < 4; i++) {
+        if (p->pos >= 32) prg_fill(p);
+        v = (v << 8) | (unsigned char)p->buf[p->pos++];
+    }
+    return v;
+}
+
+static int cmp_int(const void *a, const void *b)
+{
+    return *(const int *)a - *(const int *)b;
+}
+
+void kkw_fiat_shamir(const unsigned char msg[32], const uint32_t pubout[8],
+                     const unsigned char h_star[32],
+                     int C_out[NUM_ROUNDS], int p_out[NUM_ROUNDS])
+{
+    /* seed_FS = H(msg || pubout_be || h_star) */
+    unsigned char pubout_bytes[32];
+    for (int i = 0; i < 8; i++) {
+        pubout_bytes[i*4+0] = (unsigned char)(pubout[i] >> 24);
+        pubout_bytes[i*4+1] = (unsigned char)(pubout[i] >> 16);
+        pubout_bytes[i*4+2] = (unsigned char)(pubout[i] >>  8);
+        pubout_bytes[i*4+3] = (unsigned char)(pubout[i]);
+    }
+    unsigned char seed_FS[32];
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) { memset(C_out, 0, NUM_ROUNDS*sizeof(int)); memset(p_out, 0, NUM_ROUNDS*sizeof(int)); return; }
+    unsigned int outl = 0;
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+             EVP_DigestUpdate(ctx, msg, 32) == 1 &&
+             EVP_DigestUpdate(ctx, pubout_bytes, 32) == 1 &&
+             EVP_DigestUpdate(ctx, h_star, 32) == 1 &&
+             EVP_DigestFinal_ex(ctx, seed_FS, &outl) == 1;
+    EVP_MD_CTX_free(ctx);
+    if (!ok) { memset(C_out, 0, NUM_ROUNDS*sizeof(int)); memset(p_out, 0, NUM_ROUNDS*sizeof(int)); return; }
+
+    prg_ctx prg;
+    prg_init(&prg, seed_FS);
+
+    /* Fisher-Yates: pick NUM_ROUNDS distinct indices from [0..M_KKW-1]. */
+    int arr[M_KKW];
+    for (int i = 0; i < M_KKW; i++) arr[i] = i;
+    for (int i = 0; i < NUM_ROUNDS; i++) {
+        uint32_t r = prg_u32(&prg);
+        int j = i + (int)(r % (uint32_t)(M_KKW - i));
+        int tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+    }
+    memcpy(C_out, arr, NUM_ROUNDS * sizeof(int));
+    qsort(C_out, NUM_ROUNDS, sizeof(int), cmp_int);
+
+    /* Hidden party index for each online round (uniform in [0..N_PARTIES-1]). */
+    for (int k = 0; k < NUM_ROUNDS; k++) {
+        if (prg.pos >= 32) prg_fill(&prg);
+        p_out[k] = (int)((unsigned char)prg.buf[prg.pos++] & (unsigned char)(N_PARTIES - 1));
+    }
 }
 
 /* ── SHA-256 helpers ────────────────────────────────────────────────────── */
@@ -378,31 +549,27 @@ bool write_to_file(FILE *file, a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
 {
     bool ok = true;
     for (int i = 0; i < NUM_ROUNDS; i++) {
-        /* Commitment struct (yp[N][8] + h[N][32]). */
+        if (fwrite(zs[i]->com_hidden, 32, 1, file) != 1) {
+            fprintf(stderr, "fwrite com_hidden[%d] failed\n", i); ok = false;
+        }
         if (fwrite(as[i], sizeof(a), 1, file) != 1) {
             fprintf(stderr, "fwrite as[%d] failed\n", i); ok = false;
         }
-        /* Revealed seeds: (N-1) * SEED_SIZE bytes. */
         if (fwrite(zs[i]->ke, SEED_SIZE, N_PARTIES - 1, file) != (size_t)(N_PARTIES - 1)) {
             fprintf(stderr, "fwrite ke[%d] failed\n", i); ok = false;
         }
-        /* Revealed x shares: (N-1) * INPUT_LEN bytes. */
         if (fwrite(zs[i]->x_revealed, (size_t)INPUT_LEN, N_PARTIES - 1, file) != (size_t)(N_PARTIES - 1)) {
             fprintf(stderr, "fwrite x_revealed[%d] failed\n", i); ok = false;
         }
-        /* Hidden party's output share. */
         if (fwrite(zs[i]->yp_e, sizeof(uint32_t), 8, file) != 8) {
             fprintf(stderr, "fwrite yp_e[%d] failed\n", i); ok = false;
         }
-        /* Broadcast: 2*ySize uint32_t. */
         if (fwrite(zs[i]->broadcast, sizeof(uint32_t), (size_t)(2 * ySize), file) != (size_t)(2 * ySize)) {
             fprintf(stderr, "fwrite broadcast[%d] failed\n", i); ok = false;
         }
-        /* Aux: ySize uint32_t. */
         if (fwrite(zs[i]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize) {
             fprintf(stderr, "fwrite aux[%d] failed\n", i); ok = false;
         }
-        /* Hidden party's per-gate messages: ySize uint32_t. */
         if (fwrite(zs[i]->msgs_e, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize) {
             fprintf(stderr, "fwrite msgs_e[%d] failed\n", i); ok = false;
         }
