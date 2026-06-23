@@ -167,9 +167,9 @@ int kkw_prove(const unsigned char *input,
         zs[k] = calloc(1, sizeof(z));
         if (!as[k] || !zs[k]) { alloc_ok = false; break; }
         zs[k]->aux        = malloc((size_t)ySize * sizeof(uint32_t));
-        zs[k]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
+        zs[k]->x_offset   = malloc((size_t)INPUT_LEN);
         zs[k]->msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
-        if (!zs[k]->aux || !zs[k]->x_revealed || !zs[k]->msgs_e) {
+        if (!zs[k]->aux || !zs[k]->x_offset || !zs[k]->msgs_e) {
             alloc_ok = false; break;
         }
     }
@@ -241,11 +241,17 @@ int kkw_prove(const unsigned char *input,
                               (e == 0 ? zs[k]->aux : NULL),
                               zs[k]->com_hidden);
 
+            /* Revealed seeds (N-1 parties, skip e). The revealed parties' input
+             * shares are seed-derived (expand_xshare) and re-derived by the
+             * verifier, so they are NOT transmitted — except party N-1's share,
+             * which is the witness offset (not seed-derived); send it only when
+             * N-1 is revealed. */
             for (int q = 0; q < N_PARTIES - 1; q++) {
                 int orig = (q < e) ? q : q + 1;
                 memcpy(zs[k]->ke[q], seeds_j[orig], SEED_SIZE);
-                memcpy(zs[k]->x_revealed + (size_t)q * INPUT_LEN, x_shares_j[orig], INPUT_LEN);
             }
+            if (e != N_PARTIES - 1)
+                memcpy(zs[k]->x_offset, x_shares_j[N_PARTIES - 1], INPUT_LEN);
             memcpy(zs[k]->yp_e, as[k]->yp[e], 8 * sizeof(uint32_t));
 
             for (int p = 0; p < N_PARTIES; p++) { free(tapes_j[p]); free(x_shares_j[p]); }
@@ -282,8 +288,11 @@ int kkw_prove(const unsigned char *input,
             if (fwrite(as[k], sizeof(a), 1, out) != 1)      write_ok = false;
             if (fwrite(zs[k]->ke, SEED_SIZE, N_PARTIES - 1, out) != (size_t)(N_PARTIES - 1))
                 write_ok = false;
-            if (fwrite(zs[k]->x_revealed, (size_t)INPUT_LEN, N_PARTIES - 1, out) != (size_t)(N_PARTIES - 1))
-                write_ok = false;
+            /* x_offset present only when party N-1 is revealed (e != N-1). */
+            if (p_out[k] != N_PARTIES - 1) {
+                if (fwrite(zs[k]->x_offset, (size_t)INPUT_LEN, 1, out) != 1)
+                    write_ok = false;
+            }
             if (fwrite(zs[k]->yp_e, sizeof(uint32_t), 8, out) != 8) write_ok = false;
             if (p_out[k] != 0) {
                 if (fwrite(zs[k]->aux, sizeof(uint32_t), (size_t)ySize, out) != (size_t)ySize)
@@ -301,7 +310,7 @@ int kkw_prove(const unsigned char *input,
 
     for (int k = 0; k < NUM_ROUNDS; k++) {
         free(as[k]);
-        if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_revealed); free(zs[k]->msgs_e); free(zs[k]); }
+        if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
     free(seed_stars); free(h_j_all); free(h_prime_all);
     return 0;
@@ -309,7 +318,7 @@ int kkw_prove(const unsigned char *input,
 cleanup_fail:
     for (int k = 0; k < NUM_ROUNDS; k++) {
         free(as[k]);
-        if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_revealed); free(zs[k]->msgs_e); free(zs[k]); }
+        if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
     free(seed_stars); free(h_j_all); free(h_prime_all);
     return -1;

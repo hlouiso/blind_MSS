@@ -92,7 +92,10 @@ typedef struct
 typedef struct
 {
     unsigned char ke[N_PARTIES - 1][SEED_SIZE]; /* revealed party seeds */
-    unsigned char *x_revealed;                  /* (N-1)*INPUT_LEN bytes, malloc'd */
+    /* Party (N-1)'s witness-offset input share (INPUT_LEN bytes, malloc'd).
+     * Present in the proof only when the hidden party e != N-1; the other
+     * revealed parties' shares are re-derived from their seeds via expand_xshare. */
+    unsigned char *x_offset;
     uint32_t yp_e[8];                           /* hidden party's output share */
     uint32_t *aux;                              /* ySize uint32_t, malloc'd */
     /* Hidden party's per-gate (da_e, db_e) pairs: 2*ySize uint32_t, malloc'd.
@@ -197,7 +200,6 @@ void free_structures_prove(unsigned char *x_shares[NUM_ROUNDS][N_PARTIES],
 int alloc_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
 void free_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
 
-bool write_to_file(FILE *file, a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
 
 /* ── Tape accessors ─────────────────────────────────────────────────────── */
 

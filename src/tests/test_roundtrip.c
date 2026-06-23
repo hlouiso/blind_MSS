@@ -136,13 +136,16 @@ static void test_single_round(void)
         int e = test_e[ti];
         z Z;
         Z.aux        = aux;
-        Z.x_revealed = malloc((size_t)(N_PARTIES-1) * INPUT_LEN);
+        Z.x_offset   = malloc((size_t)INPUT_LEN);
         Z.msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
         for (int j = 0; j < N_PARTIES-1; j++) {
             int orig = (j < e) ? j : j+1;
             memcpy(Z.ke[j], seeds[orig], SEED_SIZE);
-            memcpy(Z.x_revealed + (size_t)j * INPUT_LEN, x_shares[orig], INPUT_LEN);
         }
+        /* Only party N-1's offset share travels in the proof (when revealed);
+         * verify() re-derives the others from their seeds. */
+        if (e != N_PARTIES - 1)
+            memcpy(Z.x_offset, x_shares[N_PARTIES - 1], INPUT_LEN);
         memcpy(Z.yp_e, A.yp[e], 8 * sizeof(uint32_t));
         compute_msgs_e(e, da_db_all, Z.msgs_e);
 
@@ -151,7 +154,7 @@ static void test_single_round(void)
         char msg[64];
         snprintf(msg, sizeof msg, "verify accepts honest proof (e=%d)", e);
         CHECK(!err, msg);
-        free(Z.x_revealed); free(Z.msgs_e);
+        free(Z.x_offset); free(Z.msgs_e);
     }
 
     for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
