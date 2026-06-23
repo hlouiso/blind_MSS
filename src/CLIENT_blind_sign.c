@@ -187,19 +187,19 @@ int main(int argc, char *argv[])
             pass1_error = true; break;
         }
 
-        uint32_t *broadcast_j = malloc((size_t)2 * ySize * sizeof(uint32_t));
-        uint32_t *aux_j       = malloc((size_t)ySize * sizeof(uint32_t));
-        if (!broadcast_j || !aux_j) {
-            free(broadcast_j); free(aux_j);
+        uint32_t *aux_j = malloc((size_t)ySize * sizeof(uint32_t));
+        if (!aux_j) {
+            free(aux_j);
             for (int p = 0; p < N_PARTIES; p++) { free(tapes_j[p]); free(x_shares_j[p]); }
             pass1_error = true; break;
         }
 
         a a_j;
+        /* Pass 1: da_db_all allocated internally (NULL). */
         building_views(&a_j, m_hat, pk_seed,
                        (unsigned char **)x_shares_j,
                        (unsigned char **)tapes_j,
-                       broadcast_j, aux_j);
+                       aux_j, NULL);
 
         /* Check circuit output XOR == pubout. */
         for (int w = 0; w < 8; w++) {
@@ -211,7 +211,7 @@ int main(int argc, char *argv[])
         preproc_commit_instance(seeds_j, aux_j, h_j_all[j]);
         memcpy(h_prime_all[j], a_j.h_prime, 32);
 
-        free(broadcast_j); free(aux_j);
+        free(aux_j);
         for (int p = 0; p < N_PARTIES; p++) { free(tapes_j[p]); free(x_shares_j[p]); }
 
         if ((j + 1) % 10 == 0 || j + 1 == M_KKW)
@@ -265,11 +265,10 @@ int main(int argc, char *argv[])
         as[k] = calloc(1, sizeof(a));
         zs[k] = calloc(1, sizeof(z));
         if (!as[k] || !zs[k]) { alloc_ok = false; break; }
-        zs[k]->broadcast = malloc((size_t)2 * ySize * sizeof(uint32_t));
-        zs[k]->aux       = malloc((size_t)ySize * sizeof(uint32_t));
+        zs[k]->aux        = malloc((size_t)ySize * sizeof(uint32_t));
         zs[k]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
-        zs[k]->msgs_e    = malloc((size_t)ySize * sizeof(uint32_t));
-        if (!zs[k]->broadcast || !zs[k]->aux || !zs[k]->x_revealed || !zs[k]->msgs_e) {
+        zs[k]->msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
+        if (!zs[k]->aux || !zs[k]->x_revealed || !zs[k]->msgs_e) {
             alloc_ok = false; break;
         }
     }
@@ -278,7 +277,7 @@ int main(int argc, char *argv[])
         for (int k = 0; k < NUM_ROUNDS; k++) {
             free(as[k]);
             if (zs[k]) {
-                free(zs[k]->broadcast); free(zs[k]->aux);
+                free(zs[k]->aux);
                 free(zs[k]->x_revealed); free(zs[k]->msgs_e);
                 free(zs[k]);
             }
@@ -327,17 +326,27 @@ int main(int argc, char *argv[])
             goto round2_done;
         }
 
+        /* Pass 2: allocate da_db_all externally to extract msgs_e without re-running. */
+        uint32_t *da_db_all_k = malloc((size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t));
+        if (!da_db_all_k) {
+#pragma omp atomic write
+            pass2_error = true;
+            for (int p = 0; p < N_PARTIES; p++) { free(tapes_j[p]); free(x_shares_j[p]); }
+            goto round2_done;
+        }
+
         building_views(as[k], m_hat, pk_seed,
                        (unsigned char **)x_shares_j,
                        (unsigned char **)tapes_j,
-                       zs[k]->broadcast, zs[k]->aux);
+                       zs[k]->aux, da_db_all_k);
 
         /* Commitments H_com for all parties. */
         for (int p = 0; p < N_PARTIES; p++)
             H_com(seeds_j[p], x_shares_j[p], as[k]->yp[p], as[k]->h[p]);
 
-        /* Hidden party's per-gate messages. */
-        compute_msgs_e(e, tapes_j[e], zs[k]->broadcast, zs[k]->aux, zs[k]->msgs_e);
+        /* Hidden party's (da_e, db_e) pairs extracted from da_db_all. */
+        compute_msgs_e(e, da_db_all_k, zs[k]->msgs_e);
+        free(da_db_all_k);
 
         /* Preprocessing commitment to hidden party e. */
         preproc_com_party(e, seeds_j[e],
@@ -392,11 +401,14 @@ int main(int argc, char *argv[])
             if (fwrite(zs[k]->x_revealed, (size_t)INPUT_LEN, N_PARTIES - 1, file) != (size_t)(N_PARTIES - 1))
                 write_ok = false;
             if (fwrite(zs[k]->yp_e, sizeof(uint32_t), 8, file) != 8) write_ok = false;
-            if (fwrite(zs[k]->broadcast, sizeof(uint32_t), (size_t)(2 * ySize), file) != (size_t)(2 * ySize))
-                write_ok = false;
-            if (fwrite(zs[k]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
-                write_ok = false;
-            if (fwrite(zs[k]->msgs_e, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
+            /* Aux only when e≠0: party 0 is revealed and its correction is needed.
+             * When e=0, party 0 is hidden and aux is never read during verification. */
+            if (p_out[k] != 0) {
+                if (fwrite(zs[k]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
+                    write_ok = false;
+            }
+            /* msgs_e: hidden party's (da_e, db_e) pairs = 2*ySize words. */
+            if (fwrite(zs[k]->msgs_e, sizeof(uint32_t), (size_t)(2 * ySize), file) != (size_t)(2 * ySize))
                 write_ok = false;
         }
 
@@ -411,7 +423,7 @@ int main(int argc, char *argv[])
     for (int k = 0; k < NUM_ROUNDS; k++) {
         free(as[k]);
         if (zs[k]) {
-            free(zs[k]->broadcast); free(zs[k]->aux);
+            free(zs[k]->aux);
             free(zs[k]->x_revealed); free(zs[k]->msgs_e);
             free(zs[k]);
         }
@@ -426,7 +438,7 @@ cleanup_and_fail:
     for (int k = 0; k < NUM_ROUNDS; k++) {
         free(as[k]);
         if (zs[k]) {
-            free(zs[k]->broadcast); free(zs[k]->aux);
+            free(zs[k]->aux);
             free(zs[k]->x_revealed); free(zs[k]->msgs_e);
             free(zs[k]);
         }

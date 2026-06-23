@@ -77,7 +77,8 @@ static void run_instance(const unsigned char seed_star[SEED_SIZE],
                           unsigned char *x_shares_out[N_PARTIES],
                           unsigned char *tapes_out[N_PARTIES],
                           a *a_out,
-                          uint32_t *broadcast_out, uint32_t *aux_out)
+                          uint32_t *aux_out,
+                          uint32_t *da_db_all_out)  /* N*2*ySize words, or NULL */
 {
     expand_seed_star(seed_star, seeds_out);
     for (int p = 0; p < N_PARTIES - 1; p++)
@@ -91,7 +92,7 @@ static void run_instance(const unsigned char seed_star[SEED_SIZE],
     building_views(a_out, m_hat, pk_seed,
                    (unsigned char **)x_shares_out,
                    (unsigned char **)tapes_out,
-                   broadcast_out, aux_out);
+                   aux_out, da_db_all_out);
 }
 
 /* ── Test 1: single-round prove+verify for e=0 and e=N_PARTIES-1 only ── */
@@ -113,11 +114,11 @@ static void test_single_round(void)
         x_shares[p] = malloc(INPUT_LEN);
         tapes[p]    = malloc(TAPE_SIZE);
     }
-    uint32_t *broadcast = malloc(2 * ySize * sizeof(uint32_t));
-    uint32_t *aux       = malloc(ySize * sizeof(uint32_t));
+    uint32_t *aux         = malloc(ySize * sizeof(uint32_t));
+    uint32_t *da_db_all   = malloc((size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t));
     a A;
     run_instance(seed_star, input, m_hat, pk_seed, seeds,
-                 x_shares, tapes, &A, broadcast, aux);
+                 x_shares, tapes, &A, aux, da_db_all);
 
     int out_ok = 1;
     for (int j = 0; j < 8; j++) {
@@ -134,17 +135,16 @@ static void test_single_round(void)
     for (int ti = 0; ti < 2; ti++) {
         int e = test_e[ti];
         z Z;
-        Z.broadcast  = broadcast;
         Z.aux        = aux;
         Z.x_revealed = malloc((size_t)(N_PARTIES-1) * INPUT_LEN);
-        Z.msgs_e     = malloc((size_t)ySize * sizeof(uint32_t));
+        Z.msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
         for (int j = 0; j < N_PARTIES-1; j++) {
             int orig = (j < e) ? j : j+1;
             memcpy(Z.ke[j], seeds[orig], SEED_SIZE);
             memcpy(Z.x_revealed + (size_t)j * INPUT_LEN, x_shares[orig], INPUT_LEN);
         }
         memcpy(Z.yp_e, A.yp[e], 8 * sizeof(uint32_t));
-        compute_msgs_e(e, tapes[e], broadcast, aux, Z.msgs_e);
+        compute_msgs_e(e, da_db_all, Z.msgs_e);
 
         bool err = false;
         verify(m_hat, pk_seed, &err, &A, e, &Z);
@@ -155,7 +155,7 @@ static void test_single_round(void)
     }
 
     for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
-    free(broadcast); free(aux);
+    free(aux); free(da_db_all);
 }
 
 /* ── Test 2: preprocessing function smoke test ── */
@@ -257,8 +257,7 @@ static void test_tamper(void)
         x_shares[p] = malloc(INPUT_LEN);
         tapes[p]    = malloc(TAPE_SIZE);
     }
-    uint32_t *broadcast = malloc(2 * ySize * sizeof(uint32_t));
-    uint32_t *aux       = malloc(ySize * sizeof(uint32_t));
+    uint32_t *aux = malloc(ySize * sizeof(uint32_t));
 
     unsigned char seeds_j[N_PARTIES][SEED_SIZE];
     expand_seed_star(seed_star, seeds_j);
@@ -271,7 +270,7 @@ static void test_tamper(void)
 
     for (int p = 0; p < N_PARTIES; p++) expand_tape(seeds_j[p], tapes[p]);
     a A;
-    building_views(&A, m_hat, pk_seed, (unsigned char **)x_shares, (unsigned char **)tapes, broadcast, aux);
+    building_views(&A, m_hat, pk_seed, (unsigned char **)x_shares, (unsigned char **)tapes, aux, NULL);
 
     int still_root = 1;
     for (int w = 0; w < YP_ROOT_WORDS; w++) {
@@ -282,7 +281,7 @@ static void test_tamper(void)
     CHECK(!still_root, "tampered witness changes the circuit output");
 
     for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
-    free(broadcast); free(aux);
+    free(aux);
 }
 
 /* ── Test 4: H3 range check (legacy) ── */
@@ -291,12 +290,10 @@ static void test_h3_range(void)
 {
     printf("--- Test 4: H3 range check ---\n");
 
-    uint32_t *bcast_fake = calloc(2 * ySize, sizeof(uint32_t));
     uint32_t *aux_fake   = calloc(ySize, sizeof(uint32_t));
-    uint32_t *msgs_fake  = calloc(ySize, sizeof(uint32_t));
+    uint32_t *msgs_fake  = calloc(2 * ySize, sizeof(uint32_t));
     a A_fake; memset(&A_fake, 0, sizeof(A_fake));
     z fake_z; memset(&fake_z, 0, sizeof(fake_z));
-    fake_z.broadcast = bcast_fake;
     fake_z.aux       = aux_fake;
     fake_z.msgs_e    = msgs_fake;
 
@@ -312,7 +309,7 @@ static void test_h3_range(void)
         if (es[r] < 0 || es[r] >= N_PARTIES) { range_ok = 0; break; }
     CHECK(range_ok, "H3: all challenges in [0, N_PARTIES)");
     printf("  (N_PARTIES=%d, NUM_ROUNDS=%d, M_KKW=%d)\n", N_PARTIES, NUM_ROUNDS, M_KKW);
-    free(bcast_fake); free(aux_fake); free(msgs_fake);
+    free(aux_fake); free(msgs_fake);
 }
 
 int main(void)

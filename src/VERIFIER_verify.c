@@ -132,11 +132,10 @@ int main(int argc, char *argv[])
         as[k] = calloc(1, sizeof(a));
         zs[k] = calloc(1, sizeof(z));
         if (!as[k] || !zs[k]) { alloc_ok = false; break; }
-        zs[k]->broadcast  = malloc((size_t)2 * ySize * sizeof(uint32_t));
         zs[k]->aux        = malloc((size_t)ySize * sizeof(uint32_t));
         zs[k]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
-        zs[k]->msgs_e     = malloc((size_t)ySize * sizeof(uint32_t));
-        if (!zs[k]->broadcast || !zs[k]->aux || !zs[k]->x_revealed || !zs[k]->msgs_e) {
+        zs[k]->msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
+        if (!zs[k]->aux || !zs[k]->x_revealed || !zs[k]->msgs_e) {
             alloc_ok = false; break;
         }
     }
@@ -146,7 +145,7 @@ int main(int argc, char *argv[])
         for (int k = 0; k < NUM_ROUNDS; k++) {
             free(as[k]);
             if (zs[k]) {
-                free(zs[k]->broadcast); free(zs[k]->aux);
+                free(zs[k]->aux);
                 free(zs[k]->x_revealed); free(zs[k]->msgs_e);
                 free(zs[k]);
             }
@@ -165,11 +164,16 @@ int main(int argc, char *argv[])
             { read_error = true; break; }
         if (fread(zs[k]->yp_e, sizeof(uint32_t), 8, file) != 8)
             { read_error = true; break; }
-        if (fread(zs[k]->broadcast, sizeof(uint32_t), (size_t)(2 * ySize), file) != (size_t)(2 * ySize))
-            { read_error = true; break; }
-        if (fread(zs[k]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
-            { read_error = true; break; }
-        if (fread(zs[k]->msgs_e, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
+        /* Aux present only when e≠0 (party 0 revealed). When e=0 it is absent
+         * from the proof and never read during verification. */
+        if (p_out[k] != 0) {
+            if (fread(zs[k]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize)
+                { read_error = true; break; }
+        } else {
+            memset(zs[k]->aux, 0, (size_t)ySize * sizeof(uint32_t));
+        }
+        /* msgs_e: hidden party's (da_e, db_e) pairs = 2*ySize words. */
+        if (fread(zs[k]->msgs_e, sizeof(uint32_t), (size_t)(2 * ySize), file) != (size_t)(2 * ySize))
             { read_error = true; break; }
     }
     fclose(file);
@@ -267,7 +271,7 @@ int main(int argc, char *argv[])
     for (int k = 0; k < NUM_ROUNDS; k++) {
         free(as[k]);
         if (zs[k]) {
-            free(zs[k]->broadcast); free(zs[k]->aux);
+            free(zs[k]->aux);
             free(zs[k]->x_revealed); free(zs[k]->msgs_e);
             free(zs[k]);
         }
@@ -281,7 +285,7 @@ free_and_fail:
     for (int k = 0; k < NUM_ROUNDS; k++) {
         free(as[k]);
         if (zs[k]) {
-            free(zs[k]->broadcast); free(zs[k]->aux);
+            free(zs[k]->aux);
             free(zs[k]->x_revealed); free(zs[k]->msgs_e);
             free(zs[k]);
         }

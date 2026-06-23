@@ -21,7 +21,7 @@ int g_circuit_gates = 0;
  * prefix and suffix are public (placed into party 0's input share only).
  * All N party buffers are allocated/freed internally. */
 static void mpc_thash(
-    unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gc,
+    unsigned char *tapes[N_PARTIES], uint32_t *aux, uint32_t *da_db_all, int *gc,
     const unsigned char *prefix, int prefix_len,
     unsigned char *sec[N_PARTIES], int sec_len,
     const unsigned char *suffix, int suffix_len,
@@ -43,7 +43,7 @@ static void mpc_thash(
     if (prefix_len) memcpy(inp[0], prefix, prefix_len);
     if (suffix_len) memcpy(inp[0] + prefix_len + sec_len, suffix, suffix_len);
 
-    mpc_sha256(inp, total * 8, res, tapes, broadcast, aux, gc);
+    mpc_sha256(inp, total * 8, res, tapes, aux, da_db_all, gc);
 
     for (int i = 0; i < N_PARTIES; i++) {
         memcpy(out[i], res[i], out_len);
@@ -75,7 +75,7 @@ static void mask_from_neg_bit(const uint32_t selw[N_PARTIES], uint32_t mask[N_PA
 static void mpc_mux16(
     unsigned char x[N_PARTIES][16], unsigned char h[N_PARTIES][16],
     const uint32_t mask[N_PARTIES],
-    unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gc)
+    unsigned char *tapes[N_PARTIES], uint32_t *aux, uint32_t *da_db_all, int *gc)
 {
     for (int w = 0; w < 4; w++) {
         uint32_t xt[N_PARTIES], ht[N_PARTIES], t[N_PARTIES], mt[N_PARTIES];
@@ -84,7 +84,7 @@ static void mpc_mux16(
             memcpy(&ht[i], h[i] + w*4, 4);
         }
         mpc_XOR(xt, ht, t);
-        mpc_AND((uint32_t *)mask, t, mt, tapes, broadcast, aux, gc);
+        mpc_AND((uint32_t *)mask, t, mt, tapes, aux, da_db_all, gc);
         mpc_XOR(xt, mt, xt);
         for (int i = 0; i < N_PARTIES; i++) memcpy(x[i] + w*4, &xt[i], 4);
     }
@@ -94,7 +94,7 @@ static void mpc_mux16(
 static void mpc_gf128_mul(
     const uint32_t X[N_PARTIES][4], const uint32_t Y[N_PARTIES][4],
     uint32_t out[N_PARTIES][4],
-    unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gc)
+    unsigned char *tapes[N_PARTIES], uint32_t *aux, uint32_t *da_db_all, int *gc)
 {
     uint32_t acc[N_PARTIES][8];
     for (int i = 0; i < N_PARTIES; i++) memset(acc[i], 0, sizeof(acc[i]));
@@ -105,7 +105,7 @@ static void mpc_gf128_mul(
         for (int w = 0; w < 4; w++) {
             uint32_t xw[N_PARTIES], mw[N_PARTIES];
             for (int i = 0; i < N_PARTIES; i++) xw[i] = X[i][w];
-            mpc_AND(mask, xw, mw, tapes, broadcast, aux, gc);
+            mpc_AND(mask, xw, mw, tapes, aux, da_db_all, gc);
             for (int i = 0; i < N_PARTIES; i++)
                 gf128_word_shift_xor(acc[i], mw[i], 32 * w + j);
         }
@@ -119,10 +119,23 @@ void building_views(
     a *a, unsigned char message_digest[32], unsigned char pk_seed[XMSS_PK_SEED_BYTES],
     unsigned char *x_shares[N_PARTIES],
     unsigned char *tapes[N_PARTIES],
-    uint32_t *broadcast, uint32_t *aux)
+    uint32_t *aux, uint32_t *da_db_all_out)
 {
     int *gc = calloc(1, sizeof(int));
     if (!gc) { memset(a->yp, 0, sizeof(a->yp)); return; }
+
+    /* Allocate da_db_all internally if caller passed NULL (Pass 1). */
+    uint32_t *da_db_all = da_db_all_out;
+    bool da_db_internal = false;
+    if (!da_db_all) {
+        da_db_all = malloc((size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t));
+        if (!da_db_all) {
+            free(gc);
+            memset(a->yp, 0, sizeof(a->yp));
+            return;
+        }
+        da_db_internal = true;
+    }
 
     /* ── (1) Halevi–Micali commitment → certified digest d ── */
     unsigned char dsh[N_PARTIES][32];
@@ -135,7 +148,7 @@ void building_views(
                 sec[i] = x_shares[i] + W_R_OFF;
                 out[i] = ysh[i];
             }
-            mpc_thash(tapes, broadcast, aux, gc, NULL, 0, sec, HM_R_BYTES, NULL, 0, out, 32);
+            mpc_thash(tapes, aux, da_db_all, gc, NULL, 0, sec, HM_R_BYTES, NULL, 0, out, 32);
         }
 
         /* (1b) b_k = m̂_k + Σ_i a_{k,i}·r_i  over GF(2^128) */
@@ -149,7 +162,7 @@ void building_views(
                     gf128_load(A[i], x_shares[i] + W_A_OFF + (line * HM_NONCES + idx) * HM_ELT);
                     gf128_load(R[i], x_shares[i] + W_R_OFF + idx * HM_ELT);
                 }
-                mpc_gf128_mul(A, R, P, tapes, broadcast, aux, gc);
+                mpc_gf128_mul(A, R, P, tapes, aux, da_db_all, gc);
                 for (int i = 0; i < N_PARTIES; i++)
                     for (int w = 0; w < 4; w++) acc[i][w] ^= P[i][w];
             }
@@ -170,7 +183,7 @@ void building_views(
             memcpy(secbuf[i] + HM_A_BYTES + HM_B_BYTES, ysh[i], HM_Y_BYTES);
             sec[i] = secbuf[i]; out[i] = dsh[i];
         }
-        mpc_thash(tapes, broadcast, aux, gc, NULL, 0, sec, HM_COM_BYTES, NULL, 0, out, 32);
+        mpc_thash(tapes, aux, da_db_all, gc, NULL, 0, sec, HM_COM_BYTES, NULL, 0, out, 32);
     }
 
     /* ── (2) mh = SHA256(pk_seed ‖ 0x02 ‖ nonce ‖ d) ── */
@@ -186,7 +199,7 @@ void building_views(
             memcpy(secbuf[i] + XMSS_NONCE_LEN, dsh[i], 32);
             sec[i] = secbuf[i]; out[i] = mh[i];
         }
-        mpc_thash(tapes, broadcast, aux, gc, prefix, XMSS_PK_SEED_BYTES + 1,
+        mpc_thash(tapes, aux, da_db_all, gc, prefix, XMSS_PK_SEED_BYTES + 1,
                   sec, XMSS_NONCE_LEN + 32, NULL, 0, out, 32);
     }
 
@@ -220,9 +233,9 @@ void building_views(
             uint32_t nc0[N_PARTIES], nc1[N_PARTIES];
             uint32_t sel1[N_PARTIES], sel2[N_PARTIES], and3[N_PARTIES], sel3[N_PARTIES];
             mpc_NEGATE(c0, nc0); mpc_NEGATE(c1, nc1);
-            mpc_AND(nc0, nc1, sel1, tapes, broadcast, aux, gc);
+            mpc_AND(nc0, nc1, sel1, tapes, aux, da_db_all, gc);
             mpc_NEGATE(c1, sel2);
-            mpc_AND(c0, c1, and3, tapes, broadcast, aux, gc);
+            mpc_AND(c0, c1, and3, tapes, aux, da_db_all, gc);
             mpc_NEGATE(and3, sel3);
             uint32_t *sels[3] = {sel1, sel2, sel3};
 #endif
@@ -231,11 +244,11 @@ void building_views(
                 unsigned char suffix[2] = {(unsigned char)ci, (unsigned char)(stage + 1)};
                 unsigned char *secp[N_PARTIES], *outp[N_PARTIES];
                 for (int i = 0; i < N_PARTIES; i++) { secp[i] = x[i]; outp[i] = h[i]; }
-                mpc_thash(tapes, broadcast, aux, gc, chain_prefix, XMSS_PK_SEED_BYTES + 1,
+                mpc_thash(tapes, aux, da_db_all, gc, chain_prefix, XMSS_PK_SEED_BYTES + 1,
                           secp, XMSS_NODE_BYTES, suffix, 2, outp, 16);
                 uint32_t mask[N_PARTIES];
                 mask_from_neg_bit(sels[stage], mask);
-                mpc_mux16(x, h, mask, tapes, broadcast, aux, gc);
+                mpc_mux16(x, h, mask, tapes, aux, da_db_all, gc);
             }
             for (int i = 0; i < N_PARTIES; i++)
                 memcpy(pkh[i] + ci * XMSS_NODE_BYTES, x[i], XMSS_NODE_BYTES);
@@ -250,7 +263,7 @@ void building_views(
         prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_TREE;
         unsigned char *sec[N_PARTIES], *out[N_PARTIES];
         for (int i = 0; i < N_PARTIES; i++) { sec[i] = pkh[i]; out[i] = node[i]; }
-        mpc_thash(tapes, broadcast, aux, gc, prefix, XMSS_PK_SEED_BYTES + 1,
+        mpc_thash(tapes, aux, da_db_all, gc, prefix, XMSS_PK_SEED_BYTES + 1,
                   sec, XMSS_WOTS_LEN * XMSS_NODE_BYTES, NULL, 0, out, 16);
     }
 
@@ -280,7 +293,7 @@ void building_views(
                     memcpy(&sb[i], sib[i]  + w*4, 4);
                 }
                 mpc_XOR(nd, sb, t);
-                mpc_AND((uint32_t *)mask, t, mt, tapes, broadcast, aux, gc);
+                mpc_AND((uint32_t *)mask, t, mt, tapes, aux, da_db_all, gc);
                 mpc_XOR(nd, mt, lw);
                 mpc_XOR(sb, mt, rw);
                 for (int i = 0; i < N_PARTIES; i++) {
@@ -303,7 +316,7 @@ void building_views(
                 memcpy(secbuf[i] + 2 + 16, right[i], 16);
                 sec[i] = secbuf[i]; out[i] = node[i];
             }
-            mpc_thash(tapes, broadcast, aux, gc,
+            mpc_thash(tapes, aux, da_db_all, gc,
                       prefix, XMSS_PK_SEED_BYTES + 2,
                       sec, 2 + 16 + 16, NULL, 0, out, 16);
         }
@@ -321,7 +334,7 @@ void building_views(
             uint32_t coord[N_PARTIES];
             for (int i = 0; i < N_PARTIES; i++)
                 coord[i] = (uint32_t)((mh[i][byte_idx] >> shift) & cmask);
-            mpc_ADD(acc, coord, acc, tapes, broadcast, aux, gc);
+            mpc_ADD(acc, coord, acc, tapes, aux, da_db_all, gc);
         }
     }
 
@@ -336,10 +349,11 @@ void building_views(
     g_circuit_gates = *gc;
     free(gc);
 
-    /* KKW Trou 2: commit to all N parties' per-gate online messages.
-     * h'_j = H2(broadcast || msgs_0 || … || msgs_{N-1}).
-     * Stored in a->h_prime so H3 includes it in the Fiat–Shamir hash. */
-    compute_h_prime((const unsigned char **)tapes, broadcast, aux, a->h_prime);
+    /* KKW Trou 2: h'_j = H(da_db_all) — symmetric across all parties.
+     * Committed in h* before challenge derivation. */
+    compute_h_prime(da_db_all, a->h_prime);
+
+    if (da_db_internal) free(da_db_all);
 }
 
 /* ── Verify-side helpers ────────────────────────────────────────────────── */
@@ -350,7 +364,8 @@ void building_views(
 
 static void mpc_thash_verify(
     unsigned char *tapes[N_PARTIES-1], int e,
-    const uint32_t *broadcast, const uint32_t *aux, int *gc,
+    const uint32_t *msgs_e, const uint32_t *aux,
+    uint32_t *per_party_da_db, int *gc,
     const unsigned char *prefix, int prefix_len,
     unsigned char *sec[N_PARTIES-1], int sec_len,
     const unsigned char *suffix, int suffix_len,
@@ -373,7 +388,7 @@ static void mpc_thash_verify(
             if (suffix_len) memcpy(inp[j] + prefix_len + sec_len, suffix, suffix_len);
         }
     }
-    mpc_sha256_verify(inp, total * 8, res, tapes, e, broadcast, aux, gc);
+    mpc_sha256_verify(inp, total * 8, res, tapes, e, msgs_e, aux, per_party_da_db, gc);
     for (int j = 0; j < N_PARTIES-1; j++) {
         memcpy(out[j], res[j], out_len);
         free(inp[j]); free(res[j]);
@@ -384,7 +399,8 @@ static void mpc_mux16_verify(
     unsigned char x[N_PARTIES-1][16], unsigned char h[N_PARTIES-1][16],
     const uint32_t mask[N_PARTIES-1],
     unsigned char *tapes[N_PARTIES-1], int e,
-    const uint32_t *broadcast, const uint32_t *aux, int *gc)
+    const uint32_t *msgs_e, const uint32_t *aux,
+    uint32_t *per_party_da_db, int *gc)
 {
     for (int w = 0; w < 4; w++) {
         uint32_t xt[N_PARTIES-1], ht[N_PARTIES-1], t[N_PARTIES-1], mt[N_PARTIES-1];
@@ -393,7 +409,7 @@ static void mpc_mux16_verify(
             memcpy(&ht[j], h[j] + w*4, 4);
         }
         mpc_XOR_v(xt, ht, t);
-        mpc_AND_verify((uint32_t *)mask, t, mt, tapes, e, broadcast, aux, gc);
+        mpc_AND_verify((uint32_t *)mask, t, mt, tapes, e, msgs_e, aux, per_party_da_db, gc);
         mpc_XOR_v(xt, mt, xt);
         for (int j = 0; j < N_PARTIES-1; j++) memcpy(x[j] + w*4, &xt[j], 4);
     }
@@ -403,7 +419,8 @@ static void mpc_gf128_mul_verify(
     const uint32_t X[N_PARTIES-1][4], const uint32_t Y[N_PARTIES-1][4],
     uint32_t out[N_PARTIES-1][4],
     unsigned char *tapes[N_PARTIES-1], int e,
-    const uint32_t *broadcast, const uint32_t *aux, int *gc)
+    const uint32_t *msgs_e, const uint32_t *aux,
+    uint32_t *per_party_da_db, int *gc)
 {
     uint32_t acc[N_PARTIES-1][8];
     for (int j = 0; j < N_PARTIES-1; j++) memset(acc[j], 0, sizeof(acc[j]));
@@ -414,7 +431,7 @@ static void mpc_gf128_mul_verify(
         for (int w = 0; w < 4; w++) {
             uint32_t xw[N_PARTIES-1], mw[N_PARTIES-1];
             for (int j = 0; j < N_PARTIES-1; j++) xw[j] = X[j][w];
-            mpc_AND_verify(mask, xw, mw, tapes, e, broadcast, aux, gc);
+            mpc_AND_verify(mask, xw, mw, tapes, e, msgs_e, aux, per_party_da_db, gc);
             for (int j = 0; j < N_PARTIES-1; j++)
                 gf128_word_shift_xor(acc[j], mw[j], 32 * w + bit);
         }
@@ -440,12 +457,20 @@ void verify(
         expand_tape(z_proof->ke[j], tapes[j]);
     }
 
+    /* Allocate per_party_da_db for h_prime recomputation. */
+    uint32_t *per_party_da_db = malloc((size_t)(N_PARTIES-1) * 2 * ySize * sizeof(uint32_t));
+    if (!per_party_da_db) {
+        for (int j = 0; j < N_PARTIES-1; j++) free(tapes[j]);
+        *error = true; return;
+    }
+
     /* Build pointer array into x_revealed for circuit use. */
     unsigned char *vx[N_PARTIES-1];
     for (int j = 0; j < N_PARTIES-1; j++)
         vx[j] = z_proof->x_revealed + (size_t)j * INPUT_LEN;
 
     int gc = 0;
+    const uint32_t *msgs_e = z_proof->msgs_e;
 
     /* ── (1) Halevi–Micali commitment → d ── */
     unsigned char dsh[N_PARTIES-1][32];
@@ -454,7 +479,7 @@ void verify(
         {
             unsigned char *sec[N_PARTIES-1], *out[N_PARTIES-1];
             for (int j = 0; j < N_PARTIES-1; j++) { sec[j] = vx[j] + W_R_OFF; out[j] = ysh[j]; }
-            mpc_thash_verify(tapes, e, z_proof->broadcast, z_proof->aux, &gc,
+            mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc,
                              NULL, 0, sec, HM_R_BYTES, NULL, 0, out, 32);
         }
 
@@ -468,7 +493,7 @@ void verify(
                     gf128_load(A[j], vx[j] + W_A_OFF + (line * HM_NONCES + idx) * HM_ELT);
                     gf128_load(R[j], vx[j] + W_R_OFF + idx * HM_ELT);
                 }
-                mpc_gf128_mul_verify(A, R, P, tapes, e, z_proof->broadcast, z_proof->aux, &gc);
+                mpc_gf128_mul_verify(A, R, P, tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc);
                 for (int j = 0; j < N_PARTIES-1; j++)
                     for (int w = 0; w < 4; w++) acc[j][w] ^= P[j][w];
             }
@@ -489,7 +514,7 @@ void verify(
             memcpy(secbuf[j] + HM_A_BYTES + HM_B_BYTES, ysh[j], HM_Y_BYTES);
             sec[j] = secbuf[j]; out[j] = dsh[j];
         }
-        mpc_thash_verify(tapes, e, z_proof->broadcast, z_proof->aux, &gc,
+        mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc,
                          NULL, 0, sec, HM_COM_BYTES, NULL, 0, out, 32);
     }
 
@@ -506,7 +531,7 @@ void verify(
             memcpy(secbuf[j] + XMSS_NONCE_LEN, dsh[j], 32);
             sec[j] = secbuf[j]; out[j] = mh[j];
         }
-        mpc_thash_verify(tapes, e, z_proof->broadcast, z_proof->aux, &gc,
+        mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc,
                          prefix, XMSS_PK_SEED_BYTES + 1, sec, XMSS_NONCE_LEN + 32, NULL, 0, out, 32);
     }
 
@@ -541,9 +566,9 @@ void verify(
             uint32_t sel1[N_PARTIES-1], sel2[N_PARTIES-1];
             uint32_t and3[N_PARTIES-1], sel3[N_PARTIES-1];
             mpc_NEGATE_v(c0, nc0); mpc_NEGATE_v(c1, nc1);
-            mpc_AND_verify(nc0, nc1, sel1, tapes, e, z_proof->broadcast, z_proof->aux, &gc);
+            mpc_AND_verify(nc0, nc1, sel1, tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc);
             mpc_NEGATE_v(c1, sel2);
-            mpc_AND_verify(c0, c1, and3, tapes, e, z_proof->broadcast, z_proof->aux, &gc);
+            mpc_AND_verify(c0, c1, and3, tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc);
             mpc_NEGATE_v(and3, sel3);
             uint32_t *sels[3] = {sel1, sel2, sel3};
 #endif
@@ -552,13 +577,19 @@ void verify(
                 unsigned char suffix[2] = {(unsigned char)ci, (unsigned char)(stage + 1)};
                 unsigned char *secp[N_PARTIES-1], *outp[N_PARTIES-1];
                 for (int j = 0; j < N_PARTIES-1; j++) { secp[j] = x[j]; outp[j] = h[j]; }
-                mpc_thash_verify(tapes, e, z_proof->broadcast, z_proof->aux, &gc,
+                mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc,
                                  chain_prefix, XMSS_PK_SEED_BYTES + 1,
                                  secp, XMSS_NODE_BYTES, suffix, 2, outp, 16);
                 uint32_t mask[N_PARTIES-1];
                 for (int j = 0; j < N_PARTIES-1; j++)
                     mask[j] = 0u - (sels[stage][j] & 1u);
-                mpc_mux16_verify(x, h, mask, tapes, e, z_proof->broadcast, z_proof->aux, &gc);
+#if (N_PARTIES % 2 == 0)
+                /* mask_from_neg_bit correction: party 0's mask gets XOR'd with
+                 * 0xFFFF... to flip the polarity for even N.  Apply to the slot
+                 * for party 0, which is slot 0 whenever e != 0. */
+                if (e != 0) mask[0] ^= 0xFFFFFFFFu;
+#endif
+                mpc_mux16_verify(x, h, mask, tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc);
             }
             for (int j = 0; j < N_PARTIES-1; j++)
                 memcpy(pkh[j] + ci * XMSS_NODE_BYTES, x[j], XMSS_NODE_BYTES);
@@ -573,7 +604,7 @@ void verify(
         prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_TREE;
         unsigned char *sec[N_PARTIES-1], *out[N_PARTIES-1];
         for (int j = 0; j < N_PARTIES-1; j++) { sec[j] = pkh[j]; out[j] = node[j]; }
-        mpc_thash_verify(tapes, e, z_proof->broadcast, z_proof->aux, &gc,
+        mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc,
                          prefix, XMSS_PK_SEED_BYTES + 1,
                          sec, XMSS_WOTS_LEN * XMSS_NODE_BYTES, NULL, 0, out, 16);
     }
@@ -606,7 +637,7 @@ void verify(
                 }
                 mpc_XOR_v(nd, sb, t);
                 mpc_AND_verify((uint32_t *)mask, t, mt,
-                               tapes, e, z_proof->broadcast, z_proof->aux, &gc);
+                               tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc);
                 mpc_XOR_v(nd, mt, lw);
                 mpc_XOR_v(sb, mt, rw);
                 for (int j = 0; j < N_PARTIES-1; j++) {
@@ -629,7 +660,7 @@ void verify(
                 memcpy(secbuf[j] + 2 + 16, right[j], 16);
                 sec[j] = secbuf[j]; out[j] = node[j];
             }
-            mpc_thash_verify(tapes, e, z_proof->broadcast, z_proof->aux, &gc,
+            mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc,
                              prefix, XMSS_PK_SEED_BYTES + 2,
                              sec, 2 + 16 + 16, NULL, 0, out, 16);
         }
@@ -647,7 +678,7 @@ void verify(
             uint32_t coord[N_PARTIES-1];
             for (int j = 0; j < N_PARTIES-1; j++)
                 coord[j] = (uint32_t)((mh[j][byte_idx] >> shift) & cmask);
-            mpc_ADD_verify(sum, coord, sum, tapes, e, z_proof->broadcast, z_proof->aux, &gc);
+            mpc_ADD_verify(sum, coord, sum, tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc);
         }
     }
 
@@ -662,10 +693,6 @@ void verify(
         if (sum[j] != a_struct->yp[o][YP_SUM_WORD]) { *error = true; }
     }
 
-    /* ── Check XOR of all yp == pubout (caller already does this globally,
-     *    but we verify the hidden party yp_e is consistent) ── */
-    /* (Already checked in VERIFIER_verify.c before calling verify()) */
-
     /* ── Check commitments for each revealed party ── */
     for (int j = 0; j < N_PARTIES-1; j++) {
         int o = (j < e) ? j : j + 1;
@@ -674,14 +701,13 @@ void verify(
         if (memcmp(a_struct->h[o], hash, 32) != 0) { *error = true; }
     }
 
-    /* ── KKW Trou 2: verify h'_j = H2(broadcast || all N parties' msgs) ── */
+    /* ── KKW Trou 2: verify h'_j = H(da_db_all) ── */
     {
         unsigned char h_prime_check[32];
-        recompute_h_prime_verify(e, (const unsigned char **)tapes,
-                                 z_proof->broadcast, z_proof->aux,
-                                 z_proof->msgs_e, h_prime_check);
+        recompute_h_prime_verify(e, per_party_da_db, msgs_e, h_prime_check);
         if (memcmp(h_prime_check, a_struct->h_prime, 32) != 0) { *error = true; }
     }
 
+    free(per_party_da_db);
     for (int j = 0; j < N_PARTIES-1; j++) free(tapes[j]);
 }

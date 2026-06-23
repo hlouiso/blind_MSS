@@ -91,9 +91,9 @@ typedef struct
     unsigned char ke[N_PARTIES - 1][SEED_SIZE]; /* revealed party seeds */
     unsigned char *x_revealed;                  /* (N-1)*INPUT_LEN bytes, malloc'd */
     uint32_t yp_e[8];                           /* hidden party's output share */
-    uint32_t *broadcast;                        /* 2*ySize uint32_t, malloc'd */
     uint32_t *aux;                              /* ySize uint32_t, malloc'd */
-    /* Hidden party's per-gate messages (ySize uint32_t, malloc'd). */
+    /* Hidden party's per-gate (da_e, db_e) pairs: 2*ySize uint32_t, malloc'd.
+     * msgs_e[2*g] = da_e[g], msgs_e[2*g+1] = db_e[g]. */
     uint32_t *msgs_e;
     /* Preprocessing commitment to hidden party: com_{j,e}. */
     unsigned char com_hidden[32];
@@ -166,17 +166,19 @@ void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
 
 /* ── KKW online-transcript helpers ─────────────────────────────────────── */
 
-void compute_h_prime(const unsigned char *tapes[N_PARTIES],
-                     const uint32_t *broadcast, const uint32_t *aux,
-                     unsigned char h_prime[32]);
+/* Compute h'_j = H(da_db_all) where da_db_all is N×2×ySize uint32_t:
+ *   da_db_all[i*2*ySize + 2*g]   = da_i[g] = x_i[g] XOR u_i[g]
+ *   da_db_all[i*2*ySize + 2*g+1] = db_i[g] = y_i[g] XOR v_i[g] */
+void compute_h_prime(const uint32_t *da_db_all, unsigned char h_prime[32]);
 
-void compute_msgs_e(int e, const unsigned char *tape_e,
-                    const uint32_t *broadcast, const uint32_t *aux,
-                    uint32_t *msgs_e_out);
+/* Extract party e's (da_e, db_e) pairs from da_db_all into msgs_e_out (2*ySize). */
+void compute_msgs_e(int e, const uint32_t *da_db_all, uint32_t *msgs_e_out);
 
+/* Recompute h'_j on the verify side.
+ * per_party_da_db: (N-1)×2×ySize array filled during circuit execution.
+ * msgs_e:         2*ySize array from proof (hidden party's (da_e, db_e)). */
 void recompute_h_prime_verify(int e,
-                               const unsigned char *tapes[N_PARTIES - 1],
-                               const uint32_t *broadcast, const uint32_t *aux,
+                               const uint32_t *per_party_da_db,
                                const uint32_t *msgs_e,
                                unsigned char h_prime_out[32]);
 

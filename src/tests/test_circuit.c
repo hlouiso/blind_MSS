@@ -80,14 +80,14 @@ int main(void)
         expand_tape(seeds[p], tapes[p]);
     }
 
-    /* broadcast[2*ySize], aux[ySize] — use generous initial sizes */
+    /* aux[ySize] — use generous initial size; da_db_all allocated internally. */
     int YBIG = 300000;
-    uint32_t *broadcast = calloc((size_t)(2 * YBIG), sizeof(uint32_t));
-    uint32_t *aux       = calloc((size_t)YBIG,       sizeof(uint32_t));
-    if (!broadcast || !aux) { printf("FAIL: OOM\n"); return 1; }
+    uint32_t *aux = calloc((size_t)YBIG, sizeof(uint32_t));
+    if (!aux) { printf("FAIL: OOM\n"); return 1; }
 
     a A;
-    building_views(&A, m_hat, pk_seed, x_shares, tapes, broadcast, aux);
+    /* Pass NULL for da_db_all_out; building_views allocates internally. */
+    building_views(&A, m_hat, pk_seed, x_shares, tapes, aux, NULL);
 
     /* Reconstruct output and compare */
     unsigned char circ_root[16];
@@ -107,7 +107,7 @@ int main(void)
     printf("  gate count = %d  -> set ySize=%d in shared.c\n", g_circuit_gates, g_circuit_gates);
 
     for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
-    free(broadcast); free(aux);
+    free(aux);
 
     if (ok_root && ok_sum) { printf("\nCIRCUIT OK\n"); return 0; }
     printf("\nCIRCUIT FAILED\n"); return 1;

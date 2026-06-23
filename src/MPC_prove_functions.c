@@ -30,7 +30,8 @@ void mpc_RIGHTSHIFT(uint32_t x[N_PARTIES], int n, uint32_t z[N_PARTIES])
 /* ── Word-level Beaver AND ──────────────────────────────────────────────── */
 
 void mpc_AND(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES],
-             unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gateCount)
+             unsigned char *tapes[N_PARTIES], uint32_t *aux,
+             uint32_t *da_db_all, int *gateCount)
 {
     int g = *gateCount;
 
@@ -47,11 +48,19 @@ void mpc_AND(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
     aux[g] = corr;
     w[0] ^= corr;
 
-    /* Broadcast: da = XOR_i(x[i] XOR u[i]), db = XOR_i(y[i] XOR v[i]). */
+    /* Compute per-party contributions da_i = x_i XOR u_i, db_i = y_i XOR v_i.
+     * da = XOR_i(da_i), db = XOR_i(db_i) are the broadcast values used for output. */
     uint32_t da = 0, db = 0;
-    for (int i = 0; i < N_PARTIES; i++) { da ^= x[i] ^ u[i]; db ^= y[i] ^ v[i]; }
-    broadcast[2*g]   = da;
-    broadcast[2*g+1] = db;
+    for (int i = 0; i < N_PARTIES; i++) {
+        uint32_t da_i = x[i] ^ u[i];
+        uint32_t db_i = y[i] ^ v[i];
+        da ^= da_i;
+        db ^= db_i;
+        if (da_db_all) {
+            da_db_all[(size_t)i * 2 * ySize + (size_t)(2*g)  ] = da_i;
+            da_db_all[(size_t)i * 2 * ySize + (size_t)(2*g+1)] = db_i;
+        }
+    }
 
     /* Output shares. */
     for (int i = 0; i < N_PARTIES; i++) {
@@ -66,7 +75,8 @@ void mpc_AND(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
  * Carry propagation uses bit b of the word-triple for carry bit b. */
 
 void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES],
-             unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gateCount)
+             unsigned char *tapes[N_PARTIES], uint32_t *aux,
+             uint32_t *da_db_all, int *gateCount)
 {
     int g = *gateCount;
 
@@ -80,6 +90,11 @@ void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
     /* Carry shares: c[i][bit b] = party i's share of carry into position b+1. */
     uint32_t c[N_PARTIES];
     memset(c, 0, sizeof(c));
+
+    /* Per-party accumulated (da_i, db_i) words (one bit per iteration). */
+    uint32_t pda[N_PARTIES], pdb[N_PARTIES];
+    memset(pda, 0, sizeof(pda));
+    memset(pdb, 0, sizeof(pdb));
 
     uint32_t da_word = 0, db_word = 0, aux_word = 0;
 
@@ -99,8 +114,12 @@ void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
         for (int i = 0; i < N_PARTIES; i++) {
             uint32_t a_b = ((x[i] ^ c[i]) >> b) & 1;
             uint32_t b_b = ((y[i] ^ c[i]) >> b) & 1;
-            da_b ^= a_b ^ ((u[i] >> b) & 1);
-            db_b ^= b_b ^ ((v[i] >> b) & 1);
+            uint32_t da_i_b = a_b ^ ((u[i] >> b) & 1);
+            uint32_t db_i_b = b_b ^ ((v[i] >> b) & 1);
+            da_b ^= da_i_b;
+            db_b ^= db_i_b;
+            pda[i] |= (da_i_b & 1u) << b;
+            pdb[i] |= (db_i_b & 1u) << b;
         }
         da_b &= 1; db_b &= 1;
         da_word |= da_b << b;
@@ -125,46 +144,55 @@ void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
     }
 
     for (int i = 0; i < N_PARTIES; i++) z[i] = x[i] ^ y[i] ^ c[i];
-    broadcast[2*g]   = da_word;
-    broadcast[2*g+1] = db_word;
-    aux[g]           = aux_word;
+
+    if (da_db_all) {
+        for (int i = 0; i < N_PARTIES; i++) {
+            da_db_all[(size_t)i * 2 * ySize + (size_t)(2*g)  ] = pda[i];
+            da_db_all[(size_t)i * 2 * ySize + (size_t)(2*g+1)] = pdb[i];
+        }
+    }
+
+    aux[g] = aux_word;
     (*gateCount)++;
 }
 
 /* ── ADD with public constant ───────────────────────────────────────────── */
 
 void mpc_ADDK(uint32_t x[N_PARTIES], uint32_t K, uint32_t z[N_PARTIES],
-              unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gateCount)
+              unsigned char *tapes[N_PARTIES], uint32_t *aux,
+              uint32_t *da_db_all, int *gateCount)
 {
     /* K is public: party 0 holds K; other parties hold 0. */
     uint32_t y[N_PARTIES];
     memset(y, 0, sizeof(y));
     y[0] = K;
-    mpc_ADD(x, y, z, tapes, broadcast, aux, gateCount);
+    mpc_ADD(x, y, z, tapes, aux, da_db_all, gateCount);
 }
 
 /* ── SHA-256 derived gates ──────────────────────────────────────────────── */
 
 void mpc_MAJ(uint32_t a[N_PARTIES], uint32_t b[N_PARTIES], uint32_t c[N_PARTIES],
              uint32_t z[N_PARTIES],
-             unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gateCount)
+             unsigned char *tapes[N_PARTIES], uint32_t *aux,
+             uint32_t *da_db_all, int *gateCount)
 {
     /* MAJ(a,b,c) = (a XOR b) AND (a XOR c) XOR a */
     uint32_t t0[N_PARTIES], t1[N_PARTIES];
     mpc_XOR(a, b, t0);
     mpc_XOR(a, c, t1);
-    mpc_AND(t0, t1, z, tapes, broadcast, aux, gateCount);
+    mpc_AND(t0, t1, z, tapes, aux, da_db_all, gateCount);
     mpc_XOR(z, a, z);
 }
 
 void mpc_CH(uint32_t e[N_PARTIES], uint32_t f[N_PARTIES], uint32_t g[N_PARTIES],
             uint32_t z[N_PARTIES],
-            unsigned char *tapes[N_PARTIES], uint32_t *broadcast, uint32_t *aux, int *gateCount)
+            unsigned char *tapes[N_PARTIES], uint32_t *aux,
+            uint32_t *da_db_all, int *gateCount)
 {
     /* CH(e,f,g) = (e AND (f XOR g)) XOR g */
     uint32_t t[N_PARTIES];
     mpc_XOR(f, g, t);
-    mpc_AND(e, t, t, tapes, broadcast, aux, gateCount);
+    mpc_AND(e, t, t, tapes, aux, da_db_all, gateCount);
     mpc_XOR(t, g, z);
 }
 
@@ -173,7 +201,7 @@ void mpc_CH(uint32_t e[N_PARTIES], uint32_t f[N_PARTIES], uint32_t g[N_PARTIES],
 void mpc_sha256(unsigned char *inputs[N_PARTIES], int numBits,
                 unsigned char *results[N_PARTIES],
                 unsigned char *tapes[N_PARTIES],
-                uint32_t *broadcast, uint32_t *aux, int *gateCount)
+                uint32_t *aux, uint32_t *da_db_all, int *gateCount)
 {
     const uint64_t bitlen64 = (uint64_t)((numBits < 0) ? 0 : numBits);
     const size_t fullBytes = (size_t)(bitlen64 >> 3);
@@ -242,9 +270,9 @@ void mpc_sha256(unsigned char *inputs[N_PARTIES], int numBits,
             mpc_RIGHTROTATE(w[j-2], 19, t1); mpc_XOR(t0, t1, t0);
             mpc_RIGHTSHIFT( w[j-2], 10, t1); mpc_XOR(t0, t1, s1);
 
-            mpc_ADD(w[j-16], s0,   t1, tapes, broadcast, aux, gateCount);
-            mpc_ADD(w[j-7],  t1,   t1, tapes, broadcast, aux, gateCount);
-            mpc_ADD(t1,      s1, w[j], tapes, broadcast, aux, gateCount);
+            mpc_ADD(w[j-16], s0,   t1, tapes, aux, da_db_all, gateCount);
+            mpc_ADD(w[j-7],  t1,   t1, tapes, aux, da_db_all, gateCount);
+            mpc_ADD(t1,      s1, w[j], tapes, aux, da_db_all, gateCount);
         }
 
         for (int i = 0; i < N_PARTIES; i++) {
@@ -257,38 +285,38 @@ void mpc_sha256(unsigned char *inputs[N_PARTIES], int numBits,
             mpc_RIGHTROTATE(E, 11, t1); mpc_XOR(t0, t1, t0);
             mpc_RIGHTROTATE(E, 25, t1); mpc_XOR(t0, t1, s1);
 
-            mpc_ADD(Hv, s1, t0, tapes, broadcast, aux, gateCount);
-            mpc_CH(E, F, G, t1, tapes, broadcast, aux, gateCount);
-            mpc_ADD(t0, t1, t1, tapes, broadcast, aux, gateCount);
-            mpc_ADDK(t1, k[j], t1, tapes, broadcast, aux, gateCount);
-            mpc_ADD(t1, w[j], temp1, tapes, broadcast, aux, gateCount);
+            mpc_ADD(Hv, s1, t0, tapes, aux, da_db_all, gateCount);
+            mpc_CH(E, F, G, t1, tapes, aux, da_db_all, gateCount);
+            mpc_ADD(t0, t1, t1, tapes, aux, da_db_all, gateCount);
+            mpc_ADDK(t1, k[j], t1, tapes, aux, da_db_all, gateCount);
+            mpc_ADD(t1, w[j], temp1, tapes, aux, da_db_all, gateCount);
 
             mpc_RIGHTROTATE(A, 2,  t0);
             mpc_RIGHTROTATE(A, 13, t1); mpc_XOR(t0, t1, t0);
             mpc_RIGHTROTATE(A, 22, t1); mpc_XOR(t0, t1, s0);
 
-            mpc_MAJ(A, B, C, maj, tapes, broadcast, aux, gateCount);
-            mpc_ADD(s0, maj, temp2, tapes, broadcast, aux, gateCount);
+            mpc_MAJ(A, B, C, maj, tapes, aux, da_db_all, gateCount);
+            mpc_ADD(s0, maj, temp2, tapes, aux, da_db_all, gateCount);
 
             for (int i = 0; i < N_PARTIES; i++) Hv[i] = G[i];
             for (int i = 0; i < N_PARTIES; i++) G[i]  = F[i];
             for (int i = 0; i < N_PARTIES; i++) F[i]  = E[i];
-            mpc_ADD(D, temp1, E, tapes, broadcast, aux, gateCount);
+            mpc_ADD(D, temp1, E, tapes, aux, da_db_all, gateCount);
             for (int i = 0; i < N_PARTIES; i++) D[i] = C[i];
             for (int i = 0; i < N_PARTIES; i++) C[i] = B[i];
             for (int i = 0; i < N_PARTIES; i++) B[i] = A[i];
-            mpc_ADD(temp1, temp2, A, tapes, broadcast, aux, gateCount);
+            mpc_ADD(temp1, temp2, A, tapes, aux, da_db_all, gateCount);
         }
 
         uint32_t tmp[N_PARTIES];
-        mpc_ADD(H[0], A,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[0][i]=tmp[i];
-        mpc_ADD(H[1], B,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[1][i]=tmp[i];
-        mpc_ADD(H[2], C,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[2][i]=tmp[i];
-        mpc_ADD(H[3], D,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[3][i]=tmp[i];
-        mpc_ADD(H[4], E,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[4][i]=tmp[i];
-        mpc_ADD(H[5], F,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[5][i]=tmp[i];
-        mpc_ADD(H[6], G,  tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[6][i]=tmp[i];
-        mpc_ADD(H[7], Hv, tmp, tapes, broadcast, aux, gateCount); for(int i=0;i<N_PARTIES;i++) H[7][i]=tmp[i];
+        mpc_ADD(H[0], A,  tmp, tapes, aux, da_db_all, gateCount); for(int i=0;i<N_PARTIES;i++) H[0][i]=tmp[i];
+        mpc_ADD(H[1], B,  tmp, tapes, aux, da_db_all, gateCount); for(int i=0;i<N_PARTIES;i++) H[1][i]=tmp[i];
+        mpc_ADD(H[2], C,  tmp, tapes, aux, da_db_all, gateCount); for(int i=0;i<N_PARTIES;i++) H[2][i]=tmp[i];
+        mpc_ADD(H[3], D,  tmp, tapes, aux, da_db_all, gateCount); for(int i=0;i<N_PARTIES;i++) H[3][i]=tmp[i];
+        mpc_ADD(H[4], E,  tmp, tapes, aux, da_db_all, gateCount); for(int i=0;i<N_PARTIES;i++) H[4][i]=tmp[i];
+        mpc_ADD(H[5], F,  tmp, tapes, aux, da_db_all, gateCount); for(int i=0;i<N_PARTIES;i++) H[5][i]=tmp[i];
+        mpc_ADD(H[6], G,  tmp, tapes, aux, da_db_all, gateCount); for(int i=0;i<N_PARTIES;i++) H[6][i]=tmp[i];
+        mpc_ADD(H[7], Hv, tmp, tapes, aux, da_db_all, gateCount); for(int i=0;i<N_PARTIES;i++) H[7][i]=tmp[i];
     }
 
     for (int i = 0; i < N_PARTIES; i++) free(padded[i]);

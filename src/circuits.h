@@ -44,16 +44,18 @@ extern int g_circuit_gates;
 
 /**
  * Build N-party KKW views for one round of the target-sum WOTS+/XMSS circuit.
- * x_shares[N_PARTIES]: XOR-secret-shared witness (INPUT_LEN bytes each).
- * tapes[N_PARTIES]:    expanded Beaver triple tapes (TAPE_SIZE bytes each).
- * broadcast, aux:      output arrays (2*ySize and ySize uint32_t respectively).
- * Writes output shares into a->yp[N_PARTIES][8].
+ * x_shares[N_PARTIES]:  XOR-secret-shared witness (INPUT_LEN bytes each).
+ * tapes[N_PARTIES]:     expanded Beaver triple tapes (TAPE_SIZE bytes each).
+ * aux:                  output array (ySize uint32_t) for Beaver corrections.
+ * da_db_all_out:        output array (N*2*ySize uint32_t) for per-party (da,db)
+ *                       contributions; pass NULL to allocate internally (Pass 1).
+ * Writes output shares into a->yp[N_PARTIES][8] and h_prime into a->h_prime.
  */
 void building_views(a *a, unsigned char message_digest[32],
                     unsigned char pk_seed[XMSS_PK_SEED_BYTES],
                     unsigned char *x_shares[N_PARTIES],
                     unsigned char *tapes[N_PARTIES],
-                    uint32_t *broadcast, uint32_t *aux);
+                    uint32_t *aux, uint32_t *da_db_all_out);
 
 /**
  * Verify one KKW round.

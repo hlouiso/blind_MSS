@@ -73,7 +73,8 @@ static void run_instance(const unsigned char seed_star[SEED_SIZE],
                           unsigned char *x_shares_out[N_PARTIES],
                           unsigned char *tapes_out[N_PARTIES],
                           a *a_out,
-                          uint32_t *broadcast_out, uint32_t *aux_out)
+                          uint32_t *aux_out,
+                          uint32_t *da_db_all_out)  /* N*2*ySize words, or NULL */
 {
     expand_seed_star(seed_star, seeds_out);
     for (int p = 0; p < N_PARTIES - 1; p++)
@@ -87,7 +88,7 @@ static void run_instance(const unsigned char seed_star[SEED_SIZE],
     building_views(a_out, m_hat, pk_seed,
                    (unsigned char **)x_shares_out,
                    (unsigned char **)tapes_out,
-                   broadcast_out, aux_out);
+                   aux_out, da_db_all_out);
 }
 
 static void test_full_kkw(const unsigned char *input,
@@ -111,8 +112,7 @@ static void test_full_kkw(const unsigned char *input,
         x_shares[p] = malloc(INPUT_LEN);
         tapes[p]    = malloc(TAPE_SIZE);
     }
-    uint32_t *broadcast = malloc(2 * ySize * sizeof(uint32_t));
-    uint32_t *aux       = malloc(ySize * sizeof(uint32_t));
+    uint32_t *aux = malloc(ySize * sizeof(uint32_t));
 
     printf("  Pass 1: generating %d instances...\n", M_KKW);
     bool pass1_ok = true;
@@ -120,8 +120,9 @@ static void test_full_kkw(const unsigned char *input,
         RAND_bytes(seed_stars[j], SEED_SIZE);
         unsigned char seeds_j[N_PARTIES][SEED_SIZE];
         a a_j;
+        /* Pass 1: da_db_all allocated internally (NULL). */
         run_instance(seed_stars[j], input, m_hat, pk_seed,
-                     seeds_j, x_shares, tapes, &a_j, broadcast, aux);
+                     seeds_j, x_shares, tapes, &a_j, aux, NULL);
 
         for (int w = 0; w < 8; w++) {
             uint32_t xorv = 0;
@@ -201,24 +202,27 @@ static void test_full_kkw(const unsigned char *input,
 
         unsigned char seeds_j[N_PARTIES][SEED_SIZE];
         a a_j;
+        /* Pass 2: allocate da_db_all externally to extract msgs_e. */
+        uint32_t *da_db_all_j = malloc((size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t));
+        if (!da_db_all_j) { online_ok = false; continue; }
         run_instance(seed_stars[j], input, m_hat, pk_seed,
-                     seeds_j, x_shares, tapes, &a_j, broadcast, aux);
+                     seeds_j, x_shares, tapes, &a_j, aux, da_db_all_j);
 
         for (int p = 0; p < N_PARTIES; p++)
             H_com(seeds_j[p], x_shares[p], a_j.yp[p], a_j.h[p]);
 
         z Z;
-        Z.broadcast  = broadcast;
         Z.aux        = aux;
         Z.x_revealed = malloc((size_t)(N_PARTIES-1) * INPUT_LEN);
-        Z.msgs_e     = malloc((size_t)ySize * sizeof(uint32_t));
+        Z.msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
         for (int q = 0; q < N_PARTIES-1; q++) {
             int orig = (q < e) ? q : q+1;
             memcpy(Z.ke[q], seeds_j[orig], SEED_SIZE);
             memcpy(Z.x_revealed + (size_t)q * INPUT_LEN, x_shares[orig], INPUT_LEN);
         }
         memcpy(Z.yp_e, a_j.yp[e], 8 * sizeof(uint32_t));
-        compute_msgs_e(e, tapes[e], broadcast, aux, Z.msgs_e);
+        compute_msgs_e(e, da_db_all_j, Z.msgs_e);
+        free(da_db_all_j);
         preproc_com_party(e, seeds_j[e], (e == 0 ? aux : NULL), Z.com_hidden);
 
         bool err = false;
@@ -270,7 +274,7 @@ static void test_full_kkw(const unsigned char *input,
           "h* check: verifier reconstructs same h_star (Trou 1)");
 
     for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
-    free(broadcast); free(aux);
+    free(aux);
     free(seed_stars); free(h_j_all); free(h_prime_all);
 }
 

@@ -130,9 +130,7 @@ void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE], uint32_t 
         if (!x_dummy[p] || !tapes[p]) { alloc_ok = false; break; }
         expand_tape(seeds[p], tapes[p]);
     }
-    uint32_t *broadcast = alloc_ok ? calloc((size_t)2 * ySize, sizeof(uint32_t)) : NULL;
-    if (!alloc_ok || !broadcast) {
-        free(broadcast);
+    if (!alloc_ok) {
         for (int p = 0; p < N_PARTIES; p++) { free(x_dummy[p]); free(tapes[p]); }
         memset(aux_out, 0, (size_t)ySize * sizeof(uint32_t));
         return;
@@ -140,8 +138,8 @@ void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE], uint32_t 
     unsigned char zero_m[32] = {0};
     unsigned char zero_pk[16] = {0};
     a dummy_a;
-    building_views(&dummy_a, zero_m, zero_pk, x_dummy, tapes, broadcast, aux_out);
-    free(broadcast);
+    /* Pass NULL for da_db_all_out; building_views allocates internally. */
+    building_views(&dummy_a, zero_m, zero_pk, x_dummy, tapes, aux_out, NULL);
     for (int p = 0; p < N_PARTIES; p++) { free(x_dummy[p]); free(tapes[p]); }
 }
 
@@ -276,78 +274,51 @@ void H_com(const unsigned char seed[SEED_SIZE],
 
 /* ── KKW online-transcript helpers ─────────────────────────────────────── */
 
-/* Per-gate message for party p at gate g (without the public da&db correction):
- *   msgs[g] = w_corrected[g] ^ (da[g] & v[g]) ^ (db[g] & u[g])
- * where w_corrected = tape_w ^ aux[g] for party 0, tape_w otherwise.
- * This is s_i (the broadcast share) from the KKW/Beaver-triple AND formula. */
-static inline uint32_t gate_msg(int p, const unsigned char *tape, int g,
-                                 const uint32_t *broadcast, const uint32_t *aux)
+void compute_h_prime(const uint32_t *da_db_all, unsigned char h_prime[32])
 {
-    uint32_t w = tape_w(tape, g);
-    if (p == 0) w ^= aux[g];
-    return w ^ (broadcast[2*g] & tape_v(tape, g))
-             ^ (broadcast[2*g+1] & tape_u(tape, g));
-}
-
-void compute_h_prime(const unsigned char *tapes[N_PARTIES],
-                     const uint32_t *broadcast, const uint32_t *aux,
-                     unsigned char h_prime[32])
-{
+    /* h'_j = H(da_db_all) where da_db_all is N×2×ySize uint32_t.
+     * da_db_all[i*2*ySize + 2*g]   = da_i[g] = x_i[g] XOR u_i[g]
+     * da_db_all[i*2*ySize + 2*g+1] = db_i[g] = y_i[g] XOR v_i[g] */
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (!ctx) { memset(h_prime, 0, 32); return; }
     unsigned int outl = 0;
     int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, broadcast,
-                              (size_t)(2 * ySize) * sizeof(uint32_t)) == 1;
-    uint32_t *tmp = malloc((size_t)ySize * sizeof(uint32_t));
-    if (!tmp) { EVP_MD_CTX_free(ctx); memset(h_prime, 0, 32); return; }
-    for (int p = 0; p < N_PARTIES && ok; p++) {
-        for (int g = 0; g < ySize; g++)
-            tmp[g] = gate_msg(p, tapes[p], g, broadcast, aux);
-        ok = EVP_DigestUpdate(ctx, tmp, (size_t)ySize * sizeof(uint32_t)) == 1;
-    }
-    free(tmp);
-    ok = ok && EVP_DigestFinal_ex(ctx, h_prime, &outl) == 1;
+             EVP_DigestUpdate(ctx, da_db_all,
+                              (size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t)) == 1 &&
+             EVP_DigestFinal_ex(ctx, h_prime, &outl) == 1;
     EVP_MD_CTX_free(ctx);
     if (!ok) memset(h_prime, 0, 32);
 }
 
-void compute_msgs_e(int e, const unsigned char *tape_e,
-                    const uint32_t *broadcast, const uint32_t *aux,
-                    uint32_t *msgs_e_out)
+void compute_msgs_e(int e, const uint32_t *da_db_all, uint32_t *msgs_e_out)
 {
-    for (int g = 0; g < ySize; g++)
-        msgs_e_out[g] = gate_msg(e, tape_e, g, broadcast, aux);
+    /* msgs_e = (da_e[0], db_e[0], ..., da_e[ySize-1], db_e[ySize-1]) */
+    memcpy(msgs_e_out, da_db_all + (size_t)e * 2 * ySize,
+           (size_t)2 * ySize * sizeof(uint32_t));
 }
 
 void recompute_h_prime_verify(int e,
-                               const unsigned char *tapes[N_PARTIES - 1],
-                               const uint32_t *broadcast, const uint32_t *aux,
+                               const uint32_t *per_party_da_db,
                                const uint32_t *msgs_e,
                                unsigned char h_prime_out[32])
 {
+    /* Reconstruct the prover's da_db_all in party order 0..N-1, then hash it. */
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (!ctx) { memset(h_prime_out, 0, 32); return; }
     unsigned int outl = 0;
-    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, broadcast,
-                              (size_t)(2 * ySize) * sizeof(uint32_t)) == 1;
-    uint32_t *tmp = malloc((size_t)ySize * sizeof(uint32_t));
-    if (!tmp) { EVP_MD_CTX_free(ctx); memset(h_prime_out, 0, 32); return; }
-    /* Emit parties 0..N-1 in order; hidden party e uses msgs_e from proof. */
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1;
     for (int p = 0; p < N_PARTIES && ok; p++) {
         if (p == e) {
+            /* Hidden party: use msgs_e from proof (2*ySize words). */
             ok = EVP_DigestUpdate(ctx, msgs_e,
-                                  (size_t)ySize * sizeof(uint32_t)) == 1;
+                                  (size_t)2 * ySize * sizeof(uint32_t)) == 1;
         } else {
             int slot = (p < e) ? p : p - 1;
-            for (int g = 0; g < ySize; g++)
-                tmp[g] = gate_msg(p, tapes[slot], g, broadcast, aux);
-            ok = EVP_DigestUpdate(ctx, tmp,
-                                  (size_t)ySize * sizeof(uint32_t)) == 1;
+            ok = EVP_DigestUpdate(ctx,
+                                  per_party_da_db + (size_t)slot * 2 * ySize,
+                                  (size_t)2 * ySize * sizeof(uint32_t)) == 1;
         }
     }
-    free(tmp);
     ok = ok && EVP_DigestFinal_ex(ctx, h_prime_out, &outl) == 1;
     EVP_MD_CTX_free(ctx);
     if (!ok) memset(h_prime_out, 0, 32);
@@ -377,10 +348,11 @@ void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
              EVP_DigestUpdate(ctx, pubout_bytes, 32) == 1;
     for (int i = 0; i < s && ok; i++) {
         ok = EVP_DigestUpdate(ctx, as[i], sizeof(a)) == 1;
-        /* Trou 3 fix: bind broadcast and aux so the prover cannot adapt them
-         * after committing to the yp/commitment transcript. */
+        /* Trou 3 fix: bind msgs_e (hidden party's da_e/db_e) and aux so the
+         * prover cannot adapt them after committing to the yp/commitment transcript.
+         * msgs_e is 2*ySize words; aux is ySize words. */
         if (ok)
-            ok = EVP_DigestUpdate(ctx, zs[i]->broadcast,
+            ok = EVP_DigestUpdate(ctx, zs[i]->msgs_e,
                                   (size_t)(2 * ySize) * sizeof(uint32_t)) == 1;
         if (ok)
             ok = EVP_DigestUpdate(ctx, zs[i]->aux,
@@ -446,14 +418,12 @@ int alloc_structures_prove(
         zs[i] = calloc(1, sizeof(z));
         if (!zs[i]) goto err;
 
-        /* Allocate z internals (broadcast, aux, msgs_e; x_revealed set later). */
-        zs[i]->broadcast = malloc((size_t)2 * ySize * sizeof(uint32_t));
-        if (!zs[i]->broadcast) goto err;
+        /* Allocate z internals (aux, msgs_e=2*ySize; x_revealed set later). */
         zs[i]->aux = malloc((size_t)ySize * sizeof(uint32_t));
         if (!zs[i]->aux) goto err;
         zs[i]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
         if (!zs[i]->x_revealed) goto err;
-        zs[i]->msgs_e = malloc((size_t)ySize * sizeof(uint32_t));
+        zs[i]->msgs_e = malloc((size_t)2 * ySize * sizeof(uint32_t));
         if (!zs[i]->msgs_e) goto err;
     }
     return 0;
@@ -463,7 +433,6 @@ err:
         for (int j = 0; j < N_PARTIES; j++) { free(x_shares[i][j]); x_shares[i][j] = NULL; }
         free(as[i]);
         if (zs[i]) {
-            free(zs[i]->broadcast);
             free(zs[i]->aux);
             free(zs[i]->x_revealed);
             free(zs[i]->msgs_e);
@@ -482,7 +451,6 @@ void free_structures_prove(
         for (int j = 0; j < N_PARTIES; j++) free(x_shares[i][j]);
         free(as[i]);
         if (zs[i]) {
-            free(zs[i]->broadcast);
             free(zs[i]->aux);
             free(zs[i]->x_revealed);
             free(zs[i]->msgs_e);
@@ -504,13 +472,11 @@ int alloc_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
         if (!as[i]) goto err;
         zs[i] = calloc(1, sizeof(z));
         if (!zs[i]) goto err;
-        zs[i]->broadcast = malloc((size_t)2 * ySize * sizeof(uint32_t));
-        if (!zs[i]->broadcast) goto err;
         zs[i]->aux = malloc((size_t)ySize * sizeof(uint32_t));
         if (!zs[i]->aux) goto err;
         zs[i]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
         if (!zs[i]->x_revealed) goto err;
-        zs[i]->msgs_e = malloc((size_t)ySize * sizeof(uint32_t));
+        zs[i]->msgs_e = malloc((size_t)2 * ySize * sizeof(uint32_t));
         if (!zs[i]->msgs_e) goto err;
     }
     return 0;
@@ -519,7 +485,6 @@ err:
     for (int i = 0; i <= round; i++) {
         free(as[i]);
         if (zs[i]) {
-            free(zs[i]->broadcast);
             free(zs[i]->aux);
             free(zs[i]->x_revealed);
             free(zs[i]->msgs_e);
@@ -534,7 +499,6 @@ void free_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
     for (int i = 0; i < NUM_ROUNDS; i++) {
         free(as[i]);
         if (zs[i]) {
-            free(zs[i]->broadcast);
             free(zs[i]->aux);
             free(zs[i]->x_revealed);
             free(zs[i]->msgs_e);
@@ -564,13 +528,10 @@ bool write_to_file(FILE *file, a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
         if (fwrite(zs[i]->yp_e, sizeof(uint32_t), 8, file) != 8) {
             fprintf(stderr, "fwrite yp_e[%d] failed\n", i); ok = false;
         }
-        if (fwrite(zs[i]->broadcast, sizeof(uint32_t), (size_t)(2 * ySize), file) != (size_t)(2 * ySize)) {
-            fprintf(stderr, "fwrite broadcast[%d] failed\n", i); ok = false;
-        }
         if (fwrite(zs[i]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize) {
             fprintf(stderr, "fwrite aux[%d] failed\n", i); ok = false;
         }
-        if (fwrite(zs[i]->msgs_e, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize) {
+        if (fwrite(zs[i]->msgs_e, sizeof(uint32_t), (size_t)(2 * ySize), file) != (size_t)(2 * ySize)) {
             fprintf(stderr, "fwrite msgs_e[%d] failed\n", i); ok = false;
         }
     }
