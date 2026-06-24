@@ -14,9 +14,9 @@
  * M_KKW    : total instances the prover evaluates (preprocessing + online).
  * NUM_ROUNDS: τ — online instances included in the proof.
  *
- * Soundness: ε = C(M,τ)·(N-1)^τ / N^M ≤ 2^{-136} (≥128-bit security).
- * Parameters chosen by minimising M (hence prover time) subject to ε≤2^{-136}.
- * τ = ⌈128/log₂N⌉+1 gives (1/N)^τ ≤ 2^{-130} as a secondary check.
+ * Soundness: ε = C(M,τ)·(N-1)^τ / N^M ≤ 2^{-128}.
+ * M is the strict minimum satisfying this bound for each (N,τ) pair.
+ * τ = ⌈128/log₂N⌉+1.
  *
  * Trou 1 (preprocessing cut-and-choose): IMPLEMENTED.
  * Trou 2 (h'_j commitment): IMPLEMENTED.
@@ -27,35 +27,35 @@
 #endif
 
 #if   N_PARTIES == 4
-#  define M_KKW      218   /* soundness 2^{-145}, τ=65  */
+#  define M_KKW      207   /* soundness 2^{-129}, τ=65  */
 #  define NUM_ROUNDS  65
 #elif N_PARTIES == 5
-#  define M_KKW      180   /* soundness 2^{-146}, τ=57  */
+#  define M_KKW      170   /* soundness 2^{-128}, τ=57  */
 #  define NUM_ROUNDS  57
 #elif N_PARTIES == 6
-#  define M_KKW      156   /* soundness 2^{-147}, τ=51  */
+#  define M_KKW      147   /* soundness 2^{-129}, τ=51  */
 #  define NUM_ROUNDS  51
 #elif N_PARTIES == 7
-#  define M_KKW      140   /* soundness 2^{-147}, τ=47  */
+#  define M_KKW      132   /* soundness 2^{-129}, τ=47  */
 #  define NUM_ROUNDS  47
 #elif N_PARTIES == 8
-#  define M_KKW      125   /* soundness 2^{-138}, τ=44  */
+#  define M_KKW      121   /* soundness 2^{-129}, τ=44  */
 #  define NUM_ROUNDS  44
 #elif N_PARTIES == 16
-#  define M_KKW      352
+#  define M_KKW       84   /* soundness 2^{-129}, τ=33  */
 #  define NUM_ROUNDS  33
 #elif N_PARTIES == 32
-#  define M_KKW      462
+#  define M_KKW       65   /* soundness 2^{-131}, τ=27  */
 #  define NUM_ROUNDS  27
 #elif N_PARTIES == 64
-#  define M_KKW      631
+#  define M_KKW       53   /* soundness 2^{-131}, τ=23  */
 #  define NUM_ROUNDS  23
 #elif N_PARTIES == 128
-#  define M_KKW      916
+#  define M_KKW       45   /* soundness 2^{-134}, τ=20  */
 #  define NUM_ROUNDS  20
 #elif N_PARTIES == 256
-#  define M_KKW     1837
-#  define NUM_ROUNDS  16
+#  define M_KKW       38   /* soundness 2^{-133}, τ=17  */
+#  define NUM_ROUNDS  17
 #else
 #  error "Unsupported N_PARTIES: no KKW (M,τ) parameters in table"
 #endif
