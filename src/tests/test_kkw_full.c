@@ -1,12 +1,9 @@
 /* Full KKW protocol test (Trou 1): M_KKW instances, h* check.
  *
- * NOT in the default TESTS list — run manually:
- *   make N=4 && gcc -O2 -Wall -Wno-array-parameter -fopenmp \
- *     -I. tests/test_kkw_full.c circuits.o MPC_prove_functions.o \
- *     MPC_verify_functions.o shared.o xmss.o commitment.o gf128.o \
- *     -fopenmp -lssl -lcrypto -lm -o tests/test_kkw_full && ./tests/test_kkw_full
+ * NOT in the default TESTS list — run with the Makefile:
+ *   make N=4 test_kkw_full && ./tests/test_kkw_full
  *
- * With N=4: M_KKW=218 instances, NUM_ROUNDS=65. Takes ~30-120 s.
+ * All three loops (pass 1, preprocessing, online) are parallelised with OMP.
  */
 #include "../circuits.h"
 #include "../shared.h"
@@ -16,6 +13,7 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include <omp.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -74,7 +72,7 @@ static void run_instance(const unsigned char seed_star[SEED_SIZE],
                           unsigned char *tapes_out[N_PARTIES],
                           a *a_out,
                           uint32_t *aux_out,
-                          uint32_t *da_db_all_out)  /* N*2*ySize words, or NULL */
+                          uint32_t *da_db_all_out)
 {
     expand_seed_star(seed_star, seeds_out);
     for (int p = 0; p < N_PARTIES - 1; p++)
@@ -91,13 +89,30 @@ static void run_instance(const unsigned char seed_star[SEED_SIZE],
                    aux_out, da_db_all_out);
 }
 
+/* Alloc per-party buffers; all pointers zero-initialised so free() is safe on failure. */
+static bool alloc_party_bufs(unsigned char *xs[N_PARTIES], unsigned char *ts[N_PARTIES])
+{
+    for (int p = 0; p < N_PARTIES; p++) { xs[p] = NULL; ts[p] = NULL; }
+    for (int p = 0; p < N_PARTIES; p++) {
+        xs[p] = malloc(INPUT_LEN);
+        ts[p] = malloc(TAPE_SIZE);
+        if (!xs[p] || !ts[p]) return false;
+    }
+    return true;
+}
+
+static void free_party_bufs(unsigned char *xs[N_PARTIES], unsigned char *ts[N_PARTIES])
+{
+    for (int p = 0; p < N_PARTIES; p++) { free(xs[p]); free(ts[p]); }
+}
+
 static void test_full_kkw(const unsigned char *input,
                            unsigned char *m_hat,
                            unsigned char *pk_seed,
                            const uint32_t pubout[8])
 {
-    printf("--- Full KKW protocol (M=%d, τ=%d, N=%d) ---\n",
-           M_KKW, NUM_ROUNDS, N_PARTIES);
+    printf("--- Full KKW protocol (M=%d, τ=%d, N=%d, threads=%d) ---\n",
+           M_KKW, NUM_ROUNDS, N_PARTIES, omp_get_max_threads());
 
     unsigned char (*seed_stars)[SEED_SIZE] = malloc((size_t)M_KKW * SEED_SIZE);
     unsigned char (*h_j_all)[32]           = malloc((size_t)M_KKW * 32);
@@ -107,37 +122,63 @@ static void test_full_kkw(const unsigned char *input,
         free(seed_stars); free(h_j_all); free(h_prime_all); return;
     }
 
-    unsigned char *x_shares[N_PARTIES], *tapes[N_PARTIES];
-    for (int p = 0; p < N_PARTIES; p++) {
-        x_shares[p] = malloc(INPUT_LEN);
-        tapes[p]    = malloc(TAPE_SIZE);
-    }
-    uint32_t *aux = malloc(ySize * sizeof(uint32_t));
+    for (int j = 0; j < M_KKW; j++) RAND_bytes(seed_stars[j], SEED_SIZE);
 
-    printf("  Pass 1: generating %d instances...\n", M_KKW);
+    /* ── Pass 1: M_KKW circuit evaluations ────────────────────────────────── */
+    printf("  Pass 1: %d instances...\n", M_KKW);
     bool pass1_ok = true;
-    for (int j = 0; j < M_KKW; j++) {
-        RAND_bytes(seed_stars[j], SEED_SIZE);
-        unsigned char seeds_j[N_PARTIES][SEED_SIZE];
-        a a_j;
-        /* Pass 1: da_db_all allocated internally (NULL). */
-        run_instance(seed_stars[j], input, m_hat, pk_seed,
-                     seeds_j, x_shares, tapes, &a_j, aux, NULL);
+    int  pass1_ctr = 0;
 
-        for (int w = 0; w < 8; w++) {
-            uint32_t xorv = 0;
-            for (int p = 0; p < N_PARTIES; p++) xorv ^= a_j.yp[p][w];
-            if (xorv != pubout[w]) { pass1_ok = false; }
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int j = 0; j < M_KKW; j++) {
+        unsigned char seeds_j[N_PARTIES][SEED_SIZE];
+        unsigned char *xs[N_PARTIES], *ts[N_PARTIES];
+
+        if (!alloc_party_bufs(xs, ts)) {
+            free_party_bufs(xs, ts);
+#pragma omp atomic write
+            pass1_ok = false;
+            goto p1_done;
         }
-        preproc_commit_instance(seeds_j, aux, h_j_all[j]);
-        memcpy(h_prime_all[j], a_j.h_prime, 32);
-        if ((j+1) % 50 == 0 || j+1 == M_KKW)
-            printf("    %d/%d\r", j+1, M_KKW);
+
+        uint32_t *aux_j = malloc(ySize * sizeof(uint32_t));
+        if (!aux_j) {
+            free_party_bufs(xs, ts);
+#pragma omp atomic write
+            pass1_ok = false;
+            goto p1_done;
+        }
+
+        {
+            a a_j;
+            run_instance(seed_stars[j], input, m_hat, pk_seed,
+                         seeds_j, xs, ts, &a_j, aux_j, NULL);
+
+            for (int w = 0; w < 8; w++) {
+                uint32_t xorv = 0;
+                for (int p = 0; p < N_PARTIES; p++) xorv ^= a_j.yp[p][w];
+                if (xorv != pubout[w]) {
+#pragma omp atomic write
+                    pass1_ok = false;
+                }
+            }
+            preproc_commit_instance(seeds_j, aux_j, h_j_all[j]);
+            memcpy(h_prime_all[j], a_j.h_prime, 32);
+        }
+
+        free(aux_j);
+        free_party_bufs(xs, ts);
+
+    p1_done:;
+        int ctr;
+#pragma omp atomic capture
+        ctr = ++pass1_ctr;
+        if (ctr % 50 == 0 || ctr == M_KKW) printf("    %d/%d\r", ctr, M_KKW);
     }
     printf("\n");
     CHECK(pass1_ok, "pass 1: all M_KKW circuits produce correct output XOR");
 
-    /* Compute h*. */
+    /* ── Compute h* ─────────────────────────────────────────────────────── */
     unsigned char h_val[32], h_prime_val[32], h_star[32];
     {
         EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -169,24 +210,34 @@ static void test_full_kkw(const unsigned char *input,
     memset(in_C, 0, sizeof(in_C));
     for (int k = 0; k < NUM_ROUNDS; k++) in_C[C_out[k]] = true;
 
-    /* Preprocessing check. */
-    printf("  Preprocessing check (%d instances)...\n", M_KKW - NUM_ROUNDS);
-    uint32_t *aux_pp = malloc(ySize * sizeof(uint32_t));
+    /* ── Preprocessing check ─────────────────────────────────────────────── */
+    printf("  Preprocessing check: %d instances...\n", M_KKW - NUM_ROUNDS);
     bool preproc_ok = true;
+
+#pragma omp parallel for schedule(dynamic, 1)
     for (int j = 0; j < M_KKW; j++) {
         if (in_C[j]) continue;
         unsigned char seeds_j[N_PARTIES][SEED_SIZE];
         expand_seed_star(seed_stars[j], seeds_j);
+        uint32_t *aux_pp = malloc(ySize * sizeof(uint32_t));
+        if (!aux_pp) {
+#pragma omp atomic write
+            preproc_ok = false;
+            continue;
+        }
         compute_aux_from_seeds(seeds_j, aux_pp);
         unsigned char h_j_check[32];
         preproc_commit_instance(seeds_j, aux_pp, h_j_check);
-        if (memcmp(h_j_check, h_j_all[j], 32) != 0) { preproc_ok = false; }
+        free(aux_pp);
+        if (memcmp(h_j_check, h_j_all[j], 32) != 0) {
+#pragma omp atomic write
+            preproc_ok = false;
+        }
     }
-    free(aux_pp);
     CHECK(preproc_ok, "preprocessing check: h_j recomputed from seed* matches");
 
-    /* Online verification. */
-    printf("  Online verification (%d rounds)...\n", NUM_ROUNDS);
+    /* ── Online verification ─────────────────────────────────────────────── */
+    printf("  Online verification: %d rounds...\n", NUM_ROUNDS);
     unsigned char h_j_verify[M_KKW][32], h_prime_verify[M_KKW][32];
     for (int j = 0; j < M_KKW; j++) {
         if (!in_C[j]) {
@@ -196,65 +247,104 @@ static void test_full_kkw(const unsigned char *input,
     }
 
     bool online_ok = true;
+    int  online_ctr = 0;
+
+#pragma omp parallel for schedule(dynamic, 1)
     for (int k = 0; k < NUM_ROUNDS; k++) {
         int j = C_out[k];
         int e = p_out[k];
 
         unsigned char seeds_j[N_PARTIES][SEED_SIZE];
-        a a_j;
-        /* Pass 2: allocate da_db_all externally to extract msgs_e. */
-        uint32_t *da_db_all_j = malloc((size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t));
-        if (!da_db_all_j) { online_ok = false; continue; }
-        run_instance(seed_stars[j], input, m_hat, pk_seed,
-                     seeds_j, x_shares, tapes, &a_j, aux, da_db_all_j);
+        unsigned char *xs[N_PARTIES], *ts[N_PARTIES];
 
-        for (int p = 0; p < N_PARTIES; p++)
-            H_com(seeds_j[p], x_shares[p], a_j.yp[p], a_j.h[p]);
-
-        z Z;
-        Z.aux        = aux;
-        Z.x_revealed = malloc((size_t)(N_PARTIES-1) * INPUT_LEN);
-        Z.msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
-        for (int q = 0; q < N_PARTIES-1; q++) {
-            int orig = (q < e) ? q : q+1;
-            memcpy(Z.ke[q], seeds_j[orig], SEED_SIZE);
-            memcpy(Z.x_revealed + (size_t)q * INPUT_LEN, x_shares[orig], INPUT_LEN);
+        if (!alloc_party_bufs(xs, ts)) {
+            free_party_bufs(xs, ts);
+#pragma omp atomic write
+            online_ok = false;
+            goto ol_done;
         }
-        memcpy(Z.yp_e, a_j.yp[e], 8 * sizeof(uint32_t));
-        compute_msgs_e(e, da_db_all_j, Z.msgs_e);
-        free(da_db_all_j);
-        preproc_com_party(e, seeds_j[e], (e == 0 ? aux : NULL), Z.com_hidden);
 
-        bool err = false;
-        verify((unsigned char *)m_hat, (unsigned char *)pk_seed, &err, &a_j, e, &Z);
-        if (err) online_ok = false;
+        uint32_t *aux_j   = malloc(ySize * sizeof(uint32_t));
+        uint32_t *da_db_j = malloc((size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t));
+        if (!aux_j || !da_db_j) {
+            free(aux_j); free(da_db_j);
+            free_party_bufs(xs, ts);
+#pragma omp atomic write
+            online_ok = false;
+            goto ol_done;
+        }
 
-        unsigned char coms[N_PARTIES][32];
-        for (int p = 0; p < N_PARTIES; p++) {
-            if (p == e) {
-                memcpy(coms[p], Z.com_hidden, 32);
-            } else {
-                int slot = (p < e) ? p : p - 1;
-                preproc_com_party(p, Z.ke[slot], (p == 0 ? aux : NULL), coms[p]);
+        {
+            a a_j;
+            run_instance(seed_stars[j], input, m_hat, pk_seed,
+                         seeds_j, xs, ts, &a_j, aux_j, da_db_j);
+
+            for (int p = 0; p < N_PARTIES; p++)
+                H_com(seeds_j[p], xs[p], a_j.yp[p], a_j.h[p]);
+
+            z Z;
+            Z.aux        = aux_j;
+            Z.x_revealed = malloc((size_t)(N_PARTIES-1) * INPUT_LEN);
+            Z.msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
+            if (!Z.x_revealed || !Z.msgs_e) {
+                free(Z.x_revealed); free(Z.msgs_e);
+                free(aux_j); free(da_db_j);
+                free_party_bufs(xs, ts);
+#pragma omp atomic write
+                online_ok = false;
+                goto ol_done;
             }
+
+            for (int q = 0; q < N_PARTIES-1; q++) {
+                int orig = (q < e) ? q : q+1;
+                memcpy(Z.ke[q], seeds_j[orig], SEED_SIZE);
+                memcpy(Z.x_revealed + (size_t)q * INPUT_LEN, xs[orig], INPUT_LEN);
+            }
+            memcpy(Z.yp_e, a_j.yp[e], 8 * sizeof(uint32_t));
+            compute_msgs_e(e, da_db_j, Z.msgs_e);
+            preproc_com_party(e, seeds_j[e], (e == 0 ? aux_j : NULL), Z.com_hidden);
+
+            bool err = false;
+            verify((unsigned char *)m_hat, (unsigned char *)pk_seed, &err, &a_j, e, &Z);
+            if (err) {
+#pragma omp atomic write
+                online_ok = false;
+            }
+
+            /* Reconstruct h_j_verify[j] from revealed commitments. */
+            unsigned char coms[N_PARTIES][32];
+            for (int p = 0; p < N_PARTIES; p++) {
+                if (p == e) {
+                    memcpy(coms[p], Z.com_hidden, 32);
+                } else {
+                    int slot = (p < e) ? p : p - 1;
+                    preproc_com_party(p, Z.ke[slot], (p == 0 ? aux_j : NULL), coms[p]);
+                }
+            }
+            EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+            unsigned int outl = 0;
+            EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+            for (int p = 0; p < N_PARTIES; p++) EVP_DigestUpdate(ctx, coms[p], 32);
+            EVP_DigestFinal_ex(ctx, h_j_verify[j], &outl);
+            EVP_MD_CTX_free(ctx);
+            memcpy(h_prime_verify[j], a_j.h_prime, 32);
+
+            free(Z.x_revealed); free(Z.msgs_e);
         }
-        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-        unsigned int outl = 0;
-        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-        for (int p = 0; p < N_PARTIES; p++) EVP_DigestUpdate(ctx, coms[p], 32);
-        EVP_DigestFinal_ex(ctx, h_j_verify[j], &outl);
-        EVP_MD_CTX_free(ctx);
-        memcpy(h_prime_verify[j], a_j.h_prime, 32);
 
-        free(Z.x_revealed); free(Z.msgs_e);
+        free(aux_j); free(da_db_j);
+        free_party_bufs(xs, ts);
 
-        if ((k+1) % 10 == 0 || k+1 == NUM_ROUNDS)
-            printf("    %d/%d\r", k+1, NUM_ROUNDS);
+    ol_done:;
+        int ctr;
+#pragma omp atomic capture
+        ctr = ++online_ctr;
+        if (ctr % 10 == 0 || ctr == NUM_ROUNDS) printf("    %d/%d\r", ctr, NUM_ROUNDS);
     }
     printf("\n");
     CHECK(online_ok, "online verify: all τ rounds pass");
 
-    /* Final h* check. */
+    /* ── Final h* check ─────────────────────────────────────────────────── */
     unsigned char h_check[32], h_prime_check[32], h_star_check[32];
     {
         EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -273,8 +363,6 @@ static void test_full_kkw(const unsigned char *input,
     CHECK(memcmp(h_star_check, h_star, 32) == 0,
           "h* check: verifier reconstructs same h_star (Trou 1)");
 
-    for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
-    free(aux);
     free(seed_stars); free(h_j_all); free(h_prime_all);
 }
 

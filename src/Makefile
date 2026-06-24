@@ -55,10 +55,17 @@ endif
 LDFLAGS = $(OMP_LDFLAGS)
 LDLIBS = $(OMP_LIBS) $(OPENSSL_LIBS) -lm
 
+# Rebuild all objects if N changes (N-stamp encodes the active party count).
+N_ACTUAL := $(if $(N),$(N),default)
+N_STAMP  := .n_stamp_$(N_ACTUAL)
+$(N_STAMP):
+	@rm -f .n_stamp_* && touch $@
+$(LIBOBJS): $(N_STAMP)
+
 PROGS = CLIENT_blinding_message SIGNER_XMSS_keygen SIGNER_XMSS_sign CLIENT_blind_sign VERIFIER_verify
 
 # Non-main library objects shared by the binaries and the tests.
-LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o gf128.o commitment.o
+LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o gf128.o commitment.o kkw_prove.o kkw_verify.o
 # Regression tests in tests/ (built and run by `make test`).
 TESTS = test_xmss test_circuit test_roundtrip
 
@@ -75,10 +82,10 @@ SIGNER_XMSS_keygen: SIGNER_XMSS_keygen.o xmss.o
 SIGNER_XMSS_sign: SIGNER_XMSS_sign.o xmss.o commitment.o gf128.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-CLIENT_blind_sign: CLIENT_blind_sign.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o xmss.o commitment.o gf128.o
+CLIENT_blind_sign: CLIENT_blind_sign.o kkw_prove.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o xmss.o commitment.o gf128.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-VERIFIER_verify: VERIFIER_verify.o shared.o circuits.o MPC_verify_functions.o MPC_prove_functions.o commitment.o gf128.o
+VERIFIER_verify: VERIFIER_verify.o kkw_verify.o shared.o circuits.o MPC_verify_functions.o MPC_prove_functions.o commitment.o gf128.o xmss.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 %.o: %.c
@@ -92,6 +99,12 @@ test: $(LIBOBJS)
 		./tests/$$t; \
 	done
 
+test_bench: $(LIBOBJS)
+	$(CC) $(CFLAGS) -I. tests/test_bench.c $(LIBOBJS) $(LDFLAGS) $(LDLIBS) -o tests/test_bench
+
+test_kkw_full: $(LIBOBJS)
+	$(CC) $(CFLAGS) -I. tests/test_kkw_full.c $(LIBOBJS) $(LDFLAGS) $(LDLIBS) -o tests/test_kkw_full
+
 clean:
-	rm -f $(PROGS) *.o *.txt *.bin $(addprefix tests/,$(TESTS))
+	rm -f $(PROGS) *.o .n_stamp_* *.txt *.bin $(addprefix tests/,$(TESTS)) tests/test_bench tests/test_kkw_full
 
