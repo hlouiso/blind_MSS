@@ -225,10 +225,20 @@ void kkw_fiat_shamir(const unsigned char msg[32], const uint32_t pubout[8],
     memcpy(C_out, arr, NUM_ROUNDS * sizeof(int));
     qsort(C_out, NUM_ROUNDS, sizeof(int), cmp_int);
 
-    /* Hidden party index for each online round (uniform in [0..N_PARTIES-1]). */
-    for (int k = 0; k < NUM_ROUNDS; k++) {
-        if (prg.pos >= 32) prg_fill(&prg);
-        p_out[k] = (int)((unsigned char)prg.buf[prg.pos++] & (unsigned char)(N_PARTIES - 1));
+    /* Hidden party index for each online round (uniform in [0..N_PARTIES-1]).
+     * Rejection sampling: discard bytes >= threshold to get exact uniformity.
+     * For power-of-2 N, threshold==256 so no byte is ever rejected. */
+    {
+        const unsigned int p_thresh =
+            (unsigned int)N_PARTIES * (256u / (unsigned int)N_PARTIES);
+        for (int k = 0; k < NUM_ROUNDS; k++) {
+            unsigned int val;
+            do {
+                if (prg.pos >= 32) prg_fill(&prg);
+                val = (unsigned char)prg.buf[prg.pos++];
+            } while (val >= p_thresh);
+            p_out[k] = (int)(val % (unsigned int)N_PARTIES);
+        }
     }
 }
 

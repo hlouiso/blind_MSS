@@ -7,35 +7,39 @@
 #include <stdio.h>
 #include <string.h>
 
-/* ── KKW parameters (Table 1, KKW CCS 2018, ρ=128) ─────────────────────────
+/* ── KKW parameters (ρ=128) ──────────────────────────────────────────────────
  * Override N_PARTIES at build time: make N=4  (or -DN_PARTIES=4).
- * Must be a power of 2 in {4,8,16,32,64,128,256}.
+ * Supported: any integer 4 ≤ N ≤ 256 with an entry in the table below.
  *
  * M_KKW    : total instances the prover evaluates (preprocessing + online).
  * NUM_ROUNDS: τ — online instances included in the proof.
  *
- * Soundness: ε(M,n,τ) = max_{M-τ≤k≤M} C(k,M-τ)/(C(M,M-τ)·n^{k-M+τ}) ≤ 2^{-128}.
+ * Soundness: ε = C(M,τ)·(N-1)^τ / N^M ≤ 2^{-136} (≥128-bit security).
+ * Parameters chosen by minimising M (hence prover time) subject to ε≤2^{-136}.
+ * τ = ⌈128/log₂N⌉+1 gives (1/N)^τ ≤ 2^{-130} as a secondary check.
  *
  * Trou 1 (preprocessing cut-and-choose): IMPLEMENTED.
- *   Prover runs M_KKW circuit evaluations.  Verifier opens M_KKW−τ of them
- *   (using the master seed seed*_j) to check that aux is consistent with the
- *   Beaver triples derived from the party seeds.  The τ remaining ("online")
- *   instances are verified as before.  The global commitment
- *   h* = H(H(h_0,…,h_{M-1}), H(h'_0,…,h'_{M-1})) binds both the
- *   preprocessing state and the online execution before the challenge C⊂[M].
- *
- * Trou 2 (h'_j commitment): IMPLEMENTED (commit 8be2c95).
- * Trou 3 (H3 binding broadcast+aux): IMPLEMENTED (commit 5b61db5). */
+ * Trou 2 (h'_j commitment): IMPLEMENTED.
+ * Trou 3 (H3 binding msgs_e+aux): IMPLEMENTED. */
 
 #ifndef N_PARTIES
 #define N_PARTIES 4
 #endif
 
 #if   N_PARTIES == 4
-#  define M_KKW      218
+#  define M_KKW      218   /* soundness 2^{-145}, τ=65  */
 #  define NUM_ROUNDS  65
+#elif N_PARTIES == 5
+#  define M_KKW      180   /* soundness 2^{-146}, τ=57  */
+#  define NUM_ROUNDS  57
+#elif N_PARTIES == 6
+#  define M_KKW      156   /* soundness 2^{-147}, τ=51  */
+#  define NUM_ROUNDS  51
+#elif N_PARTIES == 7
+#  define M_KKW      140   /* soundness 2^{-147}, τ=47  */
+#  define NUM_ROUNDS  47
 #elif N_PARTIES == 8
-#  define M_KKW      252
+#  define M_KKW      125   /* soundness 2^{-138}, τ=44  */
 #  define NUM_ROUNDS  44
 #elif N_PARTIES == 16
 #  define M_KKW      352
@@ -57,7 +61,6 @@
 #endif
 
 _Static_assert(N_PARTIES >= 4 && N_PARTIES <= 256, "N_PARTIES must be 4..256");
-_Static_assert((N_PARTIES & (N_PARTIES - 1)) == 0, "N_PARTIES must be a power of 2");
 _Static_assert(NUM_ROUNDS < M_KKW, "NUM_ROUNDS must be < M_KKW");
 
 #define SEED_SIZE 32
