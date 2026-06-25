@@ -1,3 +1,4 @@
+#include "circuits.h"
 #include "kkw_verify.h"
 #include "shared.h"
 #include "xmss.h"

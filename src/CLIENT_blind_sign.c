@@ -1,3 +1,4 @@
+#include "circuits.h"
 #include "commitment.h"
 #include "kkw_prove.h"
 #include "shared.h"
