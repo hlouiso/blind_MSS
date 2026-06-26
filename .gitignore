@@ -1,5 +1,7 @@
 *.o
 src/*.o
+*.su
+src/*.su
 *.txt
 *.bin
 CLIENT_blinding_message
@@ -7,3 +9,4 @@ SIGNER_MSS_keygen
 SIGNER_MSS_sign
 CLIENT_blind_sign
 VERIFIER_verify
+*test*
