@@ -96,7 +96,7 @@ void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
     memset(pda, 0, sizeof(pda));
     memset(pdb, 0, sizeof(pdb));
 
-    uint32_t da_word = 0, db_word = 0, aux_word = 0;
+    uint32_t aux_word = 0;
 
     for (int b = 0; b < 31; b++) {
         /* Each party's inputs to carry AND: a_b = (x[i] XOR c[i]) >> b & 1,
@@ -122,8 +122,6 @@ void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
             pdb[i] |= (db_i_b & 1u) << b;
         }
         da_b &= 1; db_b &= 1;
-        da_word |= da_b << b;
-        db_word |= db_b << b;
 
         /* Compute carry shares for bit b+1. */
         for (int i = 0; i < N_PARTIES; i++) {

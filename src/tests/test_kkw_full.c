@@ -284,10 +284,10 @@ static void test_full_kkw(const unsigned char *input,
 
             z Z;
             Z.aux        = aux_j;
-            Z.x_revealed = malloc((size_t)(N_PARTIES-1) * INPUT_LEN);
+            Z.x_offset   = malloc((size_t)INPUT_LEN);
             Z.msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
-            if (!Z.x_revealed || !Z.msgs_e) {
-                free(Z.x_revealed); free(Z.msgs_e);
+            if (!Z.x_offset || !Z.msgs_e) {
+                free(Z.x_offset); free(Z.msgs_e);
                 free(aux_j); free(da_db_j);
                 free_party_bufs(xs, ts);
 #pragma omp atomic write
@@ -298,8 +298,11 @@ static void test_full_kkw(const unsigned char *input,
             for (int q = 0; q < N_PARTIES-1; q++) {
                 int orig = (q < e) ? q : q+1;
                 memcpy(Z.ke[q], seeds_j[orig], SEED_SIZE);
-                memcpy(Z.x_revealed + (size_t)q * INPUT_LEN, xs[orig], INPUT_LEN);
             }
+            /* Only party N-1's offset share travels in the proof (when revealed);
+             * verify() re-derives the others from their seeds. */
+            if (e != N_PARTIES - 1)
+                memcpy(Z.x_offset, xs[N_PARTIES - 1], INPUT_LEN);
             memcpy(Z.yp_e, a_j.yp[e], 8 * sizeof(uint32_t));
             compute_msgs_e(e, da_db_j, Z.msgs_e);
             preproc_com_party(e, seeds_j[e], (e == 0 ? aux_j : NULL), Z.com_hidden);
@@ -329,7 +332,7 @@ static void test_full_kkw(const unsigned char *input,
             EVP_MD_CTX_free(ctx);
             memcpy(h_prime_verify[j], a_j.h_prime, 32);
 
-            free(Z.x_revealed); free(Z.msgs_e);
+            free(Z.x_offset); free(Z.msgs_e);
         }
 
         free(aux_j); free(da_db_j);

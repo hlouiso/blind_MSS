@@ -62,9 +62,9 @@ int kkw_verify(FILE *proof,
         zs[k] = calloc(1, sizeof(z));
         if (!as[k] || !zs[k]) { alloc_ok = false; break; }
         zs[k]->aux        = malloc((size_t)ySize * sizeof(uint32_t));
-        zs[k]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
+        zs[k]->x_offset   = malloc((size_t)INPUT_LEN);
         zs[k]->msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
-        if (!zs[k]->aux || !zs[k]->x_revealed || !zs[k]->msgs_e) {
+        if (!zs[k]->aux || !zs[k]->x_offset || !zs[k]->msgs_e) {
             alloc_ok = false; break;
         }
     }
@@ -79,8 +79,11 @@ int kkw_verify(FILE *proof,
         if (fread(as[k], sizeof(a), 1, proof) != 1)       { read_error = true; break; }
         if (fread(zs[k]->ke, SEED_SIZE, N_PARTIES - 1, proof) != (size_t)(N_PARTIES - 1))
             { read_error = true; break; }
-        if (fread(zs[k]->x_revealed, (size_t)INPUT_LEN, N_PARTIES - 1, proof) != (size_t)(N_PARTIES - 1))
-            { read_error = true; break; }
+        /* x_offset (party N-1's share) present only when party N-1 is revealed. */
+        if (p_out[k] != N_PARTIES - 1) {
+            if (fread(zs[k]->x_offset, (size_t)INPUT_LEN, 1, proof) != 1)
+                { read_error = true; break; }
+        }
         if (fread(zs[k]->yp_e, sizeof(uint32_t), 8, proof) != 8)
             { read_error = true; break; }
         if (p_out[k] != 0) {
@@ -141,6 +144,31 @@ int kkw_verify(FILE *proof,
 
     if (online_error) { fprintf(stderr, "kkw_verify: circuit check failed\n"); goto free_and_fail; }
 
+    /* ── Output binding: XOR of all N output shares must equal pubout ──────
+     * verify() only checks that each revealed party's recomputed share matches
+     * its commitment; it does NOT tie the circuit output to the public key.
+     * Without this loop the proof says "I ran *some* valid circuit", not "…that
+     * outputs (root | target-sum)", and any honest proof for a different key
+     * verifies (universal forgery). For each online round reconstruct the output
+     * from the N-1 committed shares plus the hidden party's yp_e and require it
+     * equals pubout; also require yp_e matches the committed share a.yp[e]. */
+    for (int k = 0; k < NUM_ROUNDS; k++) {
+        int e = p_out[k];
+        for (int w = 0; w < 8; w++) {
+            uint32_t xorv = zs[k]->yp_e[w];
+            for (int p = 0; p < N_PARTIES; p++)
+                if (p != e) xorv ^= as[k]->yp[p][w];
+            if (xorv != pubout[w]) {
+                fprintf(stderr, "kkw_verify: circuit output != public key (round %d word %d)\n", k, w);
+                goto free_and_fail;
+            }
+        }
+        if (memcmp(zs[k]->yp_e, as[k]->yp[e], 8 * sizeof(uint32_t)) != 0) {
+            fprintf(stderr, "kkw_verify: yp_e inconsistent with committed share (round %d)\n", k);
+            goto free_and_fail;
+        }
+    }
+
     /* ── Final h* check ─────────────────────────────────────────────────── */
     {
         unsigned char h_check[32], h_prime_check[32], h_star_check[32];
@@ -164,14 +192,14 @@ int kkw_verify(FILE *proof,
 
     for (int k = 0; k < NUM_ROUNDS; k++) {
         free(as[k]);
-        if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_revealed); free(zs[k]->msgs_e); free(zs[k]); }
+        if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
     return 0;
 
 free_and_fail:
     for (int k = 0; k < NUM_ROUNDS; k++) {
         free(as[k]);
-        if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_revealed); free(zs[k]->msgs_e); free(zs[k]); }
+        if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
     return -1;
 }

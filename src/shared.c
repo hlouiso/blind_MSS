@@ -428,11 +428,11 @@ int alloc_structures_prove(
         zs[i] = calloc(1, sizeof(z));
         if (!zs[i]) goto err;
 
-        /* Allocate z internals (aux, msgs_e=2*ySize; x_revealed set later). */
+        /* Allocate z internals (aux, msgs_e=2*ySize; x_offset set later). */
         zs[i]->aux = malloc((size_t)ySize * sizeof(uint32_t));
         if (!zs[i]->aux) goto err;
-        zs[i]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
-        if (!zs[i]->x_revealed) goto err;
+        zs[i]->x_offset = malloc((size_t)INPUT_LEN);
+        if (!zs[i]->x_offset) goto err;
         zs[i]->msgs_e = malloc((size_t)2 * ySize * sizeof(uint32_t));
         if (!zs[i]->msgs_e) goto err;
     }
@@ -444,7 +444,7 @@ err:
         free(as[i]);
         if (zs[i]) {
             free(zs[i]->aux);
-            free(zs[i]->x_revealed);
+            free(zs[i]->x_offset);
             free(zs[i]->msgs_e);
             free(zs[i]);
         }
@@ -462,7 +462,7 @@ void free_structures_prove(
         free(as[i]);
         if (zs[i]) {
             free(zs[i]->aux);
-            free(zs[i]->x_revealed);
+            free(zs[i]->x_offset);
             free(zs[i]->msgs_e);
             free(zs[i]);
         }
@@ -484,8 +484,8 @@ int alloc_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
         if (!zs[i]) goto err;
         zs[i]->aux = malloc((size_t)ySize * sizeof(uint32_t));
         if (!zs[i]->aux) goto err;
-        zs[i]->x_revealed = malloc((size_t)(N_PARTIES - 1) * INPUT_LEN);
-        if (!zs[i]->x_revealed) goto err;
+        zs[i]->x_offset = malloc((size_t)INPUT_LEN);
+        if (!zs[i]->x_offset) goto err;
         zs[i]->msgs_e = malloc((size_t)2 * ySize * sizeof(uint32_t));
         if (!zs[i]->msgs_e) goto err;
     }
@@ -496,7 +496,7 @@ err:
         free(as[i]);
         if (zs[i]) {
             free(zs[i]->aux);
-            free(zs[i]->x_revealed);
+            free(zs[i]->x_offset);
             free(zs[i]->msgs_e);
             free(zs[i]);
         }
@@ -510,40 +510,9 @@ void free_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
         free(as[i]);
         if (zs[i]) {
             free(zs[i]->aux);
-            free(zs[i]->x_revealed);
+            free(zs[i]->x_offset);
             free(zs[i]->msgs_e);
             free(zs[i]);
         }
     }
-}
-
-/* ── Proof serialization ────────────────────────────────────────────────── */
-
-bool write_to_file(FILE *file, a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
-{
-    bool ok = true;
-    for (int i = 0; i < NUM_ROUNDS; i++) {
-        if (fwrite(zs[i]->com_hidden, 32, 1, file) != 1) {
-            fprintf(stderr, "fwrite com_hidden[%d] failed\n", i); ok = false;
-        }
-        if (fwrite(as[i], sizeof(a), 1, file) != 1) {
-            fprintf(stderr, "fwrite as[%d] failed\n", i); ok = false;
-        }
-        if (fwrite(zs[i]->ke, SEED_SIZE, N_PARTIES - 1, file) != (size_t)(N_PARTIES - 1)) {
-            fprintf(stderr, "fwrite ke[%d] failed\n", i); ok = false;
-        }
-        if (fwrite(zs[i]->x_revealed, (size_t)INPUT_LEN, N_PARTIES - 1, file) != (size_t)(N_PARTIES - 1)) {
-            fprintf(stderr, "fwrite x_revealed[%d] failed\n", i); ok = false;
-        }
-        if (fwrite(zs[i]->yp_e, sizeof(uint32_t), 8, file) != 8) {
-            fprintf(stderr, "fwrite yp_e[%d] failed\n", i); ok = false;
-        }
-        if (fwrite(zs[i]->aux, sizeof(uint32_t), (size_t)ySize, file) != (size_t)ySize) {
-            fprintf(stderr, "fwrite aux[%d] failed\n", i); ok = false;
-        }
-        if (fwrite(zs[i]->msgs_e, sizeof(uint32_t), (size_t)(2 * ySize), file) != (size_t)(2 * ySize)) {
-            fprintf(stderr, "fwrite msgs_e[%d] failed\n", i); ok = false;
-        }
-    }
-    return ok;
 }

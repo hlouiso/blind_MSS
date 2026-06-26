@@ -464,10 +464,25 @@ void verify(
         *error = true; return;
     }
 
-    /* Build pointer array into x_revealed for circuit use. */
+    /* Reconstruct the N-1 revealed parties' input shares.  Parties 0..N-2 are
+     * seed-derived, so re-expand them from the revealed seed; party N-1 (when
+     * revealed, i.e. e != N-1) is the witness offset carried in the proof.
+     * This avoids transmitting all N-1 shares (saves (N-2)*INPUT_LEN/round). */
+    unsigned char *xbuf = malloc((size_t)(N_PARTIES-1) * INPUT_LEN);
+    if (!xbuf) {
+        free(per_party_da_db);
+        for (int j = 0; j < N_PARTIES-1; j++) free(tapes[j]);
+        *error = true; return;
+    }
     unsigned char *vx[N_PARTIES-1];
-    for (int j = 0; j < N_PARTIES-1; j++)
-        vx[j] = z_proof->x_revealed + (size_t)j * INPUT_LEN;
+    for (int j = 0; j < N_PARTIES-1; j++) {
+        int o = (j < e) ? j : j + 1;
+        vx[j] = xbuf + (size_t)j * INPUT_LEN;
+        if (o == N_PARTIES - 1)
+            memcpy(vx[j], z_proof->x_offset, INPUT_LEN);
+        else
+            expand_xshare(z_proof->ke[j], vx[j]);
+    }
 
     int gc = 0;
     const uint32_t *msgs_e = z_proof->msgs_e;
@@ -709,5 +724,6 @@ void verify(
     }
 
     free(per_party_da_db);
+    free(xbuf);
     for (int j = 0; j < N_PARTIES-1; j++) free(tapes[j]);
 }
