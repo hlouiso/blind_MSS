@@ -129,7 +129,7 @@ static void test_single_round(void)
     CHECK(out_ok, "prover output XOR == pubout");
 
     for (int p = 0; p < N_PARTIES; p++)
-        H_com(seeds[p], x_shares[p], A.yp[p], A.h[p]);
+        H_com(seeds[p], x_shares[p], A.yp[p], A.h[p]); /* h[e] unused in proof but needed by verify() */
 
     int test_e[] = { 0, N_PARTIES - 1 };
     for (int ti = 0; ti < 2; ti++) {
@@ -146,7 +146,6 @@ static void test_single_round(void)
          * verify() re-derives the others from their seeds. */
         if (e != N_PARTIES - 1)
             memcpy(Z.x_offset, x_shares[N_PARTIES - 1], INPUT_LEN);
-        memcpy(Z.yp_e, A.yp[e], 8 * sizeof(uint32_t));
         compute_msgs_e(e, da_db_all, Z.msgs_e);
 
         bool err = false;
@@ -218,12 +217,14 @@ static void test_preproc_smoke(void)
     CHECK(memcmp(h1, h3, 32) != 0, "preproc_commit_instance: distinct for different seeds");
 
     /* kkw_fiat_shamir: C sorted, distinct, in [0,M_KKW); p in [0,N) */
-    unsigned char m_hat[32], h_star[32];
+    unsigned char m_hat[32], h_star[32], pk_seed_fs[XMSS_PK_SEED_BYTES], nonce_fs[32];
     uint32_t pubout[8] = {0};
     RAND_bytes(m_hat, 32);
     RAND_bytes(h_star, 32);
+    RAND_bytes(pk_seed_fs, XMSS_PK_SEED_BYTES);
+    RAND_bytes(nonce_fs, 32);
     int C_out[NUM_ROUNDS], p_out[NUM_ROUNDS];
-    kkw_fiat_shamir(m_hat, pubout, h_star, C_out, p_out);
+    kkw_fiat_shamir(m_hat, pubout, pk_seed_fs, nonce_fs, h_star, C_out, p_out);
     int fs_ok = 1;
     for (int k = 0; k < NUM_ROUNDS; k++) {
         if (C_out[k] < 0 || C_out[k] >= M_KKW) { fs_ok = 0; break; }
@@ -234,7 +235,7 @@ static void test_preproc_smoke(void)
 
     /* kkw_fiat_shamir: deterministic */
     int C_out2[NUM_ROUNDS], p_out2[NUM_ROUNDS];
-    kkw_fiat_shamir(m_hat, pubout, h_star, C_out2, p_out2);
+    kkw_fiat_shamir(m_hat, pubout, pk_seed_fs, nonce_fs, h_star, C_out2, p_out2);
     CHECK(memcmp(C_out, C_out2, NUM_ROUNDS * sizeof(int)) == 0 &&
           memcmp(p_out, p_out2, NUM_ROUNDS * sizeof(int)) == 0,
           "kkw_fiat_shamir: deterministic");

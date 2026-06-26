@@ -152,9 +152,17 @@ int kkw_prove(const unsigned char *input,
         sha256_once(in64, 64, h_star);
     }
 
+    /* ── Nonce (per-proof random salt) ──────────────────────────────────── */
+    unsigned char nonce[32];
+    if (RAND_bytes(nonce, 32) != 1) {
+        fprintf(stderr, "kkw_prove: RAND_bytes failed (nonce)\n");
+        free(seed_stars); free(h_j_all); free(h_prime_all);
+        return -1;
+    }
+
     /* ── Fiat–Shamir challenge ────────────────────────────────────────────── */
     int C_out[NUM_ROUNDS], p_out[NUM_ROUNDS];
-    kkw_fiat_shamir(m_hat, pubout, h_star, C_out, p_out);
+    kkw_fiat_shamir(m_hat, pubout, pk_seed, nonce, h_star, C_out, p_out);
 
     bool in_C[M_KKW];
     memset(in_C, 0, sizeof(in_C));
@@ -235,8 +243,10 @@ int kkw_prove(const unsigned char *input,
                            (unsigned char **)tapes_j,
                            zs[k]->aux, da_db_all_k);
 
+            unsigned char h_local[N_PARTIES][32];
             for (int p = 0; p < N_PARTIES; p++)
-                H_com(seeds_j[p], x_shares_j[p], as[k]->yp[p], as[k]->h[p]);
+                H_com(seeds_j[p], x_shares_j[p], as[k]->yp[p], h_local[p]);
+            memcpy(as[k]->h, h_local, sizeof(h_local));
 
             compute_msgs_e(e, da_db_all_k, zs[k]->msgs_e);
             free(da_db_all_k);
@@ -256,7 +266,7 @@ int kkw_prove(const unsigned char *input,
             }
             if (e != N_PARTIES - 1)
                 memcpy(zs[k]->x_offset, x_shares_j[N_PARTIES - 1], INPUT_LEN);
-            memcpy(zs[k]->yp_e, as[k]->yp[e], 8 * sizeof(uint32_t));
+            /* yp_e removed from proof — as[k]->yp[e] is already in struct a */
 
             for (int p = 0; p < N_PARTIES; p++) { free(tapes_j[p]); free(x_shares_j[p]); }
 
@@ -279,6 +289,13 @@ int kkw_prove(const unsigned char *input,
     {
         bool write_ok = true;
 
+        /* Header: magic "KKW1" + N + M + tau + ySize (all uint32_t LE). */
+        const unsigned char magic[4] = {'K','K','W','1'};
+        uint32_t hdr[4] = { (uint32_t)N_PARTIES, (uint32_t)M_KKW,
+                             (uint32_t)NUM_ROUNDS, (uint32_t)ySize };
+        if (fwrite(magic, 4, 1, out) != 1) write_ok = false;
+        if (fwrite(hdr,   sizeof(hdr), 1, out) != 1) write_ok = false;
+        if (fwrite(nonce, 32, 1, out) != 1) write_ok = false;
         if (fwrite(h_star, 32, 1, out) != 1) write_ok = false;
 
         for (int j = 0; j < M_KKW && write_ok; j++) {
@@ -297,7 +314,7 @@ int kkw_prove(const unsigned char *input,
                 if (fwrite(zs[k]->x_offset, (size_t)INPUT_LEN, 1, out) != 1)
                     write_ok = false;
             }
-            if (fwrite(zs[k]->yp_e, sizeof(uint32_t), 8, out) != 8) write_ok = false;
+            /* yp_e not written — verifier derives from as[k]->yp[e] */
             if (p_out[k] != 0) {
                 if (fwrite(zs[k]->aux, sizeof(uint32_t), (size_t)ySize, out) != (size_t)ySize)
                     write_ok = false;

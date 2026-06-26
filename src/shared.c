@@ -188,10 +188,12 @@ static int cmp_int(const void *a, const void *b)
 }
 
 void kkw_fiat_shamir(const unsigned char msg[32], const uint32_t pubout[8],
+                     const unsigned char pk_seed[XMSS_PK_SEED_BYTES],
+                     const unsigned char nonce[32],
                      const unsigned char h_star[32],
                      int C_out[NUM_ROUNDS], int p_out[NUM_ROUNDS])
 {
-    /* seed_FS = H(msg || pubout_be || h_star) */
+    /* seed_FS = H(msg || pubout_be || pk_seed || nonce || h_star) */
     unsigned char pubout_bytes[32];
     for (int i = 0; i < 8; i++) {
         pubout_bytes[i*4+0] = (unsigned char)(pubout[i] >> 24);
@@ -206,6 +208,8 @@ void kkw_fiat_shamir(const unsigned char msg[32], const uint32_t pubout[8],
     int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
              EVP_DigestUpdate(ctx, msg, 32) == 1 &&
              EVP_DigestUpdate(ctx, pubout_bytes, 32) == 1 &&
+             EVP_DigestUpdate(ctx, pk_seed, XMSS_PK_SEED_BYTES) == 1 &&
+             EVP_DigestUpdate(ctx, nonce, 32) == 1 &&
              EVP_DigestUpdate(ctx, h_star, 32) == 1 &&
              EVP_DigestFinal_ex(ctx, seed_FS, &outl) == 1;
     EVP_MD_CTX_free(ctx);

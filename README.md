@@ -1,8 +1,8 @@
-# Blind XMSS (target-sum WOTS+) with ZKBoo (MPC-in-the-Head)
+# Blind XMSS (target-sum WOTS+) with KKW (MPC-in-the-Head)
 
-This project implements a **blind signature** over **XMSS** (a stateful Merkle signature scheme) with **target-sum WOTS+** one-time signatures in the leaves, and a ZK proof in the **ZKBoo / MPC-in-the-head** style to prove knowledge of a valid signature **without revealing** the secret material (the commitment opening, the leaf index, or the signature).
+This project implements a **blind signature** over **XMSS** (a stateful Merkle signature scheme) with **target-sum WOTS+** one-time signatures in the leaves, and a zero-knowledge proof in the **KKW / MPC-in-the-head** style (Katz-Kolesnikov-Wang 2018) to prove knowledge of a valid signature **without revealing** the secret material (the commitment opening, the leaf index, or the signature).
 
-It is the ZKBoo-based instantiation of the generic hash-based blind signature construction: a commitment scheme, a hash-based signature scheme, and a NIZK. Here the commitment is **Halevi–Micali over GF(2¹²⁸)**, the signature is target-sum WOTS+/XMSS, and the NIZK is ZKBoo.
+The commitment scheme is **Halevi–Micali over GF(2¹²⁸)**, the signature is target-sum WOTS+/XMSS, and the NIZK is KKW (cut-and-choose over MPC preprocessing).
 
 > ⚠️ This code is for research/education. Do not use in production.
 
@@ -18,8 +18,10 @@ Requirements:
 - `make`
 
 ```bash
-make          # build everything
+make          # build everything (default N=4)
+make N=<N>    # build with N ∈ {4, 8, 16, 32, 64, 128, 256}
 make clean    # remove binaries and intermediates
+make bench    # benchmark all N values
 ```
 
 Binaries produced: `CLIENT_blinding_message`, `SIGNER_XMSS_keygen`, `SIGNER_XMSS_sign`, `CLIENT_blind_sign`, `VERIFIER_verify`.
@@ -28,9 +30,9 @@ Binaries produced: `CLIENT_blinding_message`, `SIGNER_XMSS_keygen`, `SIGNER_XMSS
 
 Signature scheme (`xmss.h`), matching the Longfellow/Binius64 instantiations:
 - `XMSS_H = 10` — Merkle tree height (`2^10 = 1024` signatures per key pair)
-- `XMSS_WOTS_W = 4` — Winternitz parameter (2-bit coordinates)
-- `XMSS_WOTS_LEN = 72` — number of WOTS+ chains (target-sum encoding, no checksum)
-- `XMSS_TARGET_SUM = 132` — required sum of the 72 coordinates
+- `XMSS_WOTS_W = 2` — Winternitz parameter (1-bit coordinates)
+- `XMSS_WOTS_LEN = 144` — number of WOTS+ chains (target-sum encoding, no checksum)
+- `XMSS_TARGET_SUM = 72` — required sum of the 144 coordinates
 - `XMSS_NODE_BYTES = 16` — every internal node is a SHA-256 output truncated to 128 bits
 - `XMSS_PK_SEED_BYTES = 16`, `XMSS_NONCE_LEN = 6`
 - All hashing is SHA-256, SPHINCS+-style keyed/tweaked (tweaks `0x00` chain, `0x01` tree/pk, `0x02` message).
@@ -39,9 +41,34 @@ Halevi–Micali commitment (`commitment.h`):
 - `HM_NONCES = 6`, `HM_LINES = 2`, field `GF(2¹²⁸)` — same layout as the Longfellow-based instantiation.
 - Opening `(r, a)` is `96 + 192 = 288` bytes; the commitment `com = a‖b‖y` is `256` bytes.
 
-ZKBoo (`shared.c`):
-- `NUM_ROUNDS = 137` parallel executions (soundness error `(2/3)^137`); raise to `219` for `2^-128`.
-- `INPUT_LEN = 1610`, `ySize = 191448` (nonlinear-gate transcript words per view).
+KKW proof (`shared.h`, selectable at build time with `N=<N>`):
+- `N_PARTIES` — number of MPC parties (default 4)
+- `NUM_ROUNDS` (`τ`) — online rounds included in the proof; drives prove/verify cost
+- `M_KKW` (`M`) — total preprocessing instances; drives pass-1 cost (offline section ≈ negligible)
+- `INPUT_LEN = 2762` — witness byte length
+- `ySize = 151776` — nonlinear-gate count in the SHA-256/WOTS/XMSS circuit
+
+### Soundness parameters (128-bit security, ROM)
+
+The KKW cut-and-choose soundness formula is:
+
+```
+ε = max_{0 ≤ s ≤ τ} C(M-s, τ-s) / C(M, τ) · N^{-(τ-s)}  ≤  2^{-128}
+```
+
+Minimum M for each N (computed by `src/params.py`; τ = ⌈128/log₂N⌉ + 1):
+
+| N | τ | M | Soundness | Offline section |
+|--:|--:|--:|:---------:|----------------:|
+| 4 | 65 | 218 | 2^{-128.00} | 9.6 KB |
+| 8 | 44 | 252 | 2^{-128.05} | 13.0 KB |
+| 16 | 33 | 352 | 2^{-128.00} | 19.9 KB |
+| 32 | 27 | 462 | 2^{-128.03} | 27.2 KB |
+| 64 | 23 | 631 | 2^{-128.03} | 38.0 KB |
+| 128 | 20 | 916 | 2^{-128.01} | 56.0 KB |
+| 256 | 17 | 1794 | 2^{-128.01} | 111.1 KB |
+
+τ controls prove/verify time; M only affects pass-1 (preprocessing) and the tiny offline proof section.
 
 ## Files & Formats
 
@@ -66,11 +93,12 @@ All hex is **UPPERCASE** without spaces.
 - **`XMSS_signature.txt`** (`SIGNER_XMSS_sign`)
   - Line 1: `leaf_index` — decimal
   - Line 2: `nonce` — 6 bytes (12 hex)
-  - Next `72` lines: WOTS+ chain values — 16 bytes (32 hex) each
+  - Next `144` lines: WOTS+ chain values — 16 bytes (32 hex) each
   - Next `10` lines: XMSS authentication path — 16 bytes (32 hex) each
 
 - **`signature_proof.bin`** (`CLIENT_blind_sign`)
-  - Binary ZKBoo proof that a valid XMSS signature exists on the committed message.
+  - Binary KKW proof. Format: `"KKW1"` magic (4 B) + header (N, M, τ, ySize as uint32_t LE, 16 B) + nonce (32 B) + h\* (32 B) + offline section ((M−τ) × 64 B) + online section (τ rounds).
+  - A verifier compiled for a different N rejects the proof immediately (parameter mismatch).
 
 ## Typical Workflow
 
@@ -82,40 +110,41 @@ All hex is **UPPERCASE** without spaces.
 
 ## Performance
 
-Message length affects only the native
-`m̂ = SHA256(m)`, so prove/verify time is independent of `|m|`.
+Measured on Intel i5-9300H @ 2.40 GHz, 8 threads, 1 iteration (N=4 default):
 
 ### Artefact sizes
 
 | Artefact | Size |
 |---|---:|
-| Public key (`pk_seed ‖ root`) | $32$ B |
-| Secret key (`sk_seed ‖ pk_seed ‖ leaf_index`) | $52$ B |
-| Commitment `com = a ‖ b ‖ y` | $256$ B |
-| Raw XMSS signature (`leaf ‖ nonce ‖ 72 chains ‖ 10 path`) | $1.29$ KB |
-| **Blind signature (ZKBoo proof)** | $\approx 168.5$ MB |
+| Public key (`pk_seed ‖ root`) | 32 B |
+| Secret key (`sk_seed ‖ pk_seed ‖ leaf_index`) | 52 B |
+| Commitment `com = a ‖ b ‖ y` | 256 B |
+| Raw XMSS signature (`leaf ‖ nonce ‖ 144 chains ‖ 10 path`) | 2.31 KB |
+| **Blind signature (KKW proof, N=4)** | ≈ 106 MB |
 
-### Timing
+### Timing (N=4, τ=65, M=218)
 
-| Phase | Mean time |
+| Phase | Time |
 |---|---:|
-| Commitment computation | $< 1$ ms |
-| Key generation | $\approx 130$ ms |
-| Signing | $\approx 130$ ms |
-| Proof generation | $\approx 1.7$ s |
-| Proof verification | $\approx 0.9$ s |
+| Commitment computation | < 1 ms |
+| Key generation | ≈ 130 ms |
+| Signing | ≈ 130 ms |
+| Proof generation | ≈ 4 s |
+| Proof verification | ≈ 4 s |
 
-The proof is huge because it is inherent to ZKBoo: each of the `NUM_ROUNDS` rounds
-serialises one full per-view nonlinear-gate transcript, so
+The proof is large because the online section dominates: each of the τ rounds serialises `aux` (ySize words) and `msgs_e` (2·ySize words) for the hidden party, plus the committed output shares for all N parties:
 
 ```
-proof ≈ NUM_ROUNDS · (ySize·4 + 2·INPUT_LEN + sizeof(a) + 128)
-      = 219 · (765792 + 3220 + 192 + 128) ≈ 168.5 MB
+proof ≈ header(20) + nonce(32) + h*(32) + (M−τ)·64          [offline, tiny]
+       + τ · (sizeof(a) + (N−1)·SEED_SIZE + INPUT_LEN + aux + 2·aux)
+       ≈ τ · 3·ySize·4  [dominant term]
+       = 65 · 3 · 151776 · 4  ≈  119 MB  [upper bound; conditional terms reduce it]
 ```
+
+Larger N reduces τ (fewer rounds) → smaller proof, at the cost of more parties per circuit evaluation and a larger M (more preprocessing instances). The offline section grows by only tens of KB.
 
 ## References
 
-- [ZKBoo: Faster Zero-Knowledge for Boolean Circuits — ePrint 2016/163](https://eprint.iacr.org/2016/163)
-- [Post-Quantum Zero-Knowledge and Signatures from Symmetric-Key Primitives — ePrint 2017/279](https://eprint.iacr.org/2017/279.pdf)
-- [Original ZKBoo implementation (Aarhus University)](https://github.com/Sobuno/ZKBoo)
+- [KKW: On the Size of Pairing-Based Non-interactive Arguments — Katz, Kolesnikov, Wang, CCS 2018](https://eprint.iacr.org/2018/470)
+- [Picnic: Post-Quantum Signatures from Zero-Knowledge Proofs — ePrint 2017/279](https://eprint.iacr.org/2017/279.pdf)
 - [XMSS — RFC 8391](https://datatracker.ietf.org/doc/html/rfc8391)

@@ -10,4 +10,5 @@ SIGNER_MSS_sign
 CLIENT_blind_sign
 VERIFIER_verify
 bench_bin
-*test*
+src/test_*
+src/tests/test_*

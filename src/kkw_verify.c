@@ -14,13 +14,36 @@ int kkw_verify(FILE *proof,
                const unsigned char pk_seed[XMSS_PK_SEED_BYTES],
                const uint32_t pubout[8])
 {
+    /* ── Check proof header ─────────────────────────────────────────────── */
+    {
+        unsigned char magic[4];
+        uint32_t hdr[4];
+        if (fread(magic, 4, 1, proof) != 1 || fread(hdr, sizeof(hdr), 1, proof) != 1) {
+            fprintf(stderr, "kkw_verify: read error (header)\n"); return -1;
+        }
+        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='1') {
+            fprintf(stderr, "kkw_verify: bad magic\n"); return -1;
+        }
+        if (hdr[0]!=(uint32_t)N_PARTIES || hdr[1]!=(uint32_t)M_KKW ||
+            hdr[2]!=(uint32_t)NUM_ROUNDS || hdr[3]!=(uint32_t)ySize) {
+            fprintf(stderr, "kkw_verify: parameter mismatch (proof compiled for N=%u M=%u tau=%u ySize=%u)\n",
+                    hdr[0], hdr[1], hdr[2], hdr[3]);
+            return -1;
+        }
+    }
+
+    unsigned char nonce[32];
+    if (fread(nonce, 32, 1, proof) != 1) {
+        fprintf(stderr, "kkw_verify: read error (nonce)\n"); return -1;
+    }
+
     unsigned char h_star[32];
     if (fread(h_star, 32, 1, proof) != 1) {
         fprintf(stderr, "kkw_verify: read error (h_star)\n"); return -1;
     }
 
     int C_out[NUM_ROUNDS], p_out[NUM_ROUNDS];
-    kkw_fiat_shamir(m_hat, pubout, h_star, C_out, p_out);
+    kkw_fiat_shamir(m_hat, pubout, pk_seed, nonce, h_star, C_out, p_out);
 
     bool in_C[M_KKW];
     memset(in_C, 0, sizeof(in_C));
@@ -103,8 +126,7 @@ int kkw_verify(FILE *proof,
             if (fread(zs[k]->x_offset, (size_t)INPUT_LEN, 1, proof) != 1)
                 { read_error = true; break; }
         }
-        if (fread(zs[k]->yp_e, sizeof(uint32_t), 8, proof) != 8)
-            { read_error = true; break; }
+        /* yp_e not in proof — use as[k]->yp[e] directly */
         if (p_out[k] != 0) {
             if (fread(zs[k]->aux, sizeof(uint32_t), (size_t)ySize, proof) != (size_t)ySize)
                 { read_error = true; break; }
@@ -168,23 +190,16 @@ int kkw_verify(FILE *proof,
      * its commitment; it does NOT tie the circuit output to the public key.
      * Without this loop the proof says "I ran *some* valid circuit", not "…that
      * outputs (root | target-sum)", and any honest proof for a different key
-     * verifies (universal forgery). For each online round reconstruct the output
-     * from the N-1 committed shares plus the hidden party's yp_e and require it
-     * equals pubout; also require yp_e matches the committed share a.yp[e]. */
+     * verifies (universal forgery). For each online round: XOR all N shares
+     * (N-1 from struct a plus a[e] for the hidden party) and check == pubout. */
     for (int k = 0; k < NUM_ROUNDS; k++) {
-        int e = p_out[k];
         for (int w = 0; w < 8; w++) {
-            uint32_t xorv = zs[k]->yp_e[w];
-            for (int p = 0; p < N_PARTIES; p++)
-                if (p != e) xorv ^= as[k]->yp[p][w];
+            uint32_t xorv = 0;
+            for (int p = 0; p < N_PARTIES; p++) xorv ^= as[k]->yp[p][w];
             if (xorv != pubout[w]) {
                 fprintf(stderr, "kkw_verify: circuit output != public key (round %d word %d)\n", k, w);
                 goto free_and_fail;
             }
-        }
-        if (memcmp(zs[k]->yp_e, as[k]->yp[e], 8 * sizeof(uint32_t)) != 0) {
-            fprintf(stderr, "kkw_verify: yp_e inconsistent with committed share (round %d)\n", k);
-            goto free_and_fail;
         }
     }
 
