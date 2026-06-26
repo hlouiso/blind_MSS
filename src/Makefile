@@ -48,6 +48,7 @@ ifeq ($(strip $(OPENSSL_LIBS)),)
 endif
 
 OPT ?= -O2
+BENCH_ITERS ?= 100
 CFLAGS = $(OPT) $(WARNINGS) $(OMP_CFLAGS) $(OPENSSL_CFLAGS) $(EXTRA_CFLAGS)
 ifdef N
 CFLAGS += -DN_PARTIES=$(N)
@@ -55,23 +56,27 @@ endif
 LDFLAGS = $(OMP_LDFLAGS)
 LDLIBS = $(OMP_LIBS) $(OPENSSL_LIBS) -lm
 
-# Rebuild all objects if N changes (N-stamp encodes the active party count).
-N_ACTUAL := $(if $(N),$(N),default)
-N_STAMP  := .n_stamp_$(N_ACTUAL)
-$(N_STAMP):
-	@rm -f .n_stamp_* && touch $@
-$(LIBOBJS): $(N_STAMP)
-
 PROGS = CLIENT_blinding_message SIGNER_XMSS_keygen SIGNER_XMSS_sign CLIENT_blind_sign VERIFIER_verify
 
 # Non-main library objects shared by the binaries and the tests.
+# LIBOBJS must be defined before the N-stamp rules so $(LIBOBJS) expands
+# correctly in both the rule target and the recipe.
 LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o gf128.o commitment.o kkw_prove.o kkw_verify.o
+
+# Rebuild all objects (and bench_bin) if N changes.
+# The stamp file is named .n_stamp_<N>; switching N deletes the old stamp,
+# all .o files, and bench_bin so they are rebuilt fresh for the new N.
+N_ACTUAL := $(if $(N),$(N),default)
+N_STAMP  := .n_stamp_$(N_ACTUAL)
+$(N_STAMP):
+	@rm -f .n_stamp_* $(LIBOBJS) bench_bin && touch $@
+$(LIBOBJS): $(N_STAMP)
 # Regression tests in tests/ (built and run by `make test`).
 TESTS = test_xmss test_circuit test_roundtrip
 
 BENCH_NS := 4 8 16 32 64
 
-.PHONY: all clean test bench bench_bin
+.PHONY: all clean test bench
 
 all: $(PROGS)
 
@@ -101,8 +106,8 @@ test: $(LIBOBJS)
 		./tests/$$t; \
 	done
 
-bench_bin: $(LIBOBJS)
-	$(CC) $(CFLAGS) bench.c $(LIBOBJS) $(LDFLAGS) $(LDLIBS) -o bench_bin
+bench_bin: $(LIBOBJS) bench.c
+	$(CC) $(CFLAGS) -DBENCH_ITERS=$(BENCH_ITERS) bench.c $(LIBOBJS) $(LDFLAGS) $(LDLIBS) -o bench_bin
 
 # Run the full benchmark for all N values in sequence.
 # Output: one header line then one result row per N (stdout).
