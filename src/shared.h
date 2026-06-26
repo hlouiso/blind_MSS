@@ -14,9 +14,15 @@
  * M_KKW    : total instances the prover evaluates (preprocessing + online).
  * NUM_ROUNDS: τ — online instances included in the proof.
  *
- * Soundness: ε = C(M,τ)·(N-1)^τ / N^M ≤ 2^{-128}.
- * M is the strict minimum satisfying this bound for each (N,τ) pair.
- * τ = ⌈128/log₂N⌉+1.
+ * Soundness formula (KKW cut-and-choose, see Katz-Kolesnikov-Wang 2018):
+ *   ε = max_{0≤s≤τ} [C(M-s, τ-s) / C(M, τ)] · N^{-(τ-s)} ≤ 2^{-128}
+ * Adversary strategy: corrupt s preprocessing instances (forces output=pubout
+ * for any hidden party e), and predict party e for the τ-s honest online
+ * instances (probability 1/N each). The s corrupted instances must all land
+ * in the online set (probability C(M-s,τ-s)/C(M,τ)); the offline check
+ * catches any corrupted instance in the opened set via aux recomputation.
+ * Parameters computed by src/params.py (exact minimum M for each (N,τ)).
+ * τ = ⌈128/log₂N⌉+1.  M_KKW only affects pass-1 and proof offline section.
  *
  * Trou 1 (preprocessing cut-and-choose): IMPLEMENTED.
  * Trou 2 (h'_j commitment): IMPLEMENTED.
@@ -27,25 +33,25 @@
 #endif
 
 #if   N_PARTIES == 4
-#  define M_KKW      207   /* soundness 2^{-129}, τ=65  */
+#  define M_KKW      218   /* soundness 2^{-128.00}, τ=65  */
 #  define NUM_ROUNDS  65
 #elif N_PARTIES == 8
-#  define M_KKW      121   /* soundness 2^{-129}, τ=44  */
+#  define M_KKW      252   /* soundness 2^{-128.05}, τ=44  */
 #  define NUM_ROUNDS  44
 #elif N_PARTIES == 16
-#  define M_KKW       84   /* soundness 2^{-129}, τ=33  */
+#  define M_KKW      352   /* soundness 2^{-128.00}, τ=33  */
 #  define NUM_ROUNDS  33
 #elif N_PARTIES == 32
-#  define M_KKW       65   /* soundness 2^{-131}, τ=27  */
+#  define M_KKW      462   /* soundness 2^{-128.03}, τ=27  */
 #  define NUM_ROUNDS  27
 #elif N_PARTIES == 64
-#  define M_KKW       53   /* soundness 2^{-131}, τ=23  */
+#  define M_KKW      631   /* soundness 2^{-128.03}, τ=23  */
 #  define NUM_ROUNDS  23
 #elif N_PARTIES == 128
-#  define M_KKW       45   /* soundness 2^{-134}, τ=20  */
+#  define M_KKW      916   /* soundness 2^{-128.01}, τ=20  */
 #  define NUM_ROUNDS  20
 #elif N_PARTIES == 256
-#  define M_KKW       38   /* soundness 2^{-133}, τ=17  */
+#  define M_KKW     1794   /* soundness 2^{-128.01}, τ=17  */
 #  define NUM_ROUNDS  17
 #else
 #  error "Unsupported N_PARTIES: no KKW (M,τ) parameters in table"
