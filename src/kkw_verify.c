@@ -30,26 +30,45 @@ int kkw_verify(FILE *proof,
     unsigned char h_prime_all[M_KKW][32];
 
     /* ── Preprocessing check ─────────────────────────────────────────────── */
-    uint32_t *aux_pp = malloc((size_t)ySize * sizeof(uint32_t));
-    if (!aux_pp) { fprintf(stderr, "kkw_verify: OOM\n"); return -1; }
-
+    /* Pass 1: read offline data sequentially (fread is not thread-safe). */
+    unsigned char seed_star_buf[M_KKW][SEED_SIZE];
     bool preproc_error = false;
     for (int j = 0; j < M_KKW; j++) {
         if (in_C[j]) continue;
-        unsigned char seed_star_j[SEED_SIZE], h_prime_j[32];
-        if (fread(seed_star_j, SEED_SIZE, 1, proof) != 1 ||
-            fread(h_prime_j,   32,        1, proof) != 1) {
+        unsigned char h_prime_j[32];
+        if (fread(seed_star_buf[j], SEED_SIZE, 1, proof) != 1 ||
+            fread(h_prime_j,        32,         1, proof) != 1) {
             fprintf(stderr, "kkw_verify: read error (preprocessing j=%d)\n", j);
             preproc_error = true; break;
         }
-        unsigned char seeds_j[N_PARTIES][SEED_SIZE];
-        expand_seed_star(seed_star_j, seeds_j);
-        compute_aux_from_seeds(seeds_j, aux_pp);
-        preproc_commit_instance(seeds_j, aux_pp, h_j_all[j]);
         memcpy(h_prime_all[j], h_prime_j, 32);
     }
-    free(aux_pp);
     if (preproc_error) return -1;
+
+    /* Pass 2: parallelise expand+aux+commit across offline instances. */
+    int nthreads = omp_get_max_threads();
+    uint32_t **aux_arr = calloc((size_t)nthreads, sizeof(uint32_t *));
+    if (!aux_arr) { fprintf(stderr, "kkw_verify: OOM\n"); return -1; }
+    for (int t = 0; t < nthreads; t++) {
+        aux_arr[t] = malloc((size_t)ySize * sizeof(uint32_t));
+        if (!aux_arr[t]) {
+            for (int u = 0; u < t; u++) free(aux_arr[u]);
+            free(aux_arr);
+            fprintf(stderr, "kkw_verify: OOM\n"); return -1;
+        }
+    }
+
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int j = 0; j < M_KKW; j++) {
+        if (in_C[j]) continue;
+        unsigned char seeds_j[N_PARTIES][SEED_SIZE];
+        expand_seed_star(seed_star_buf[j], seeds_j);
+        compute_aux_from_seeds(seeds_j, aux_arr[omp_get_thread_num()]);
+        preproc_commit_instance(seeds_j, aux_arr[omp_get_thread_num()], h_j_all[j]);
+    }
+
+    for (int t = 0; t < nthreads; t++) free(aux_arr[t]);
+    free(aux_arr);
 
     /* ── Online verification ─────────────────────────────────────────────── */
     a *as[NUM_ROUNDS];
