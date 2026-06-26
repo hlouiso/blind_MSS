@@ -69,7 +69,9 @@ LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.
 # Regression tests in tests/ (built and run by `make test`).
 TESTS = test_xmss test_circuit test_roundtrip
 
-.PHONY: all clean test
+BENCH_NS := 4 8 16 32 64
+
+.PHONY: all clean test bench bench_bin
 
 all: $(PROGS)
 
@@ -99,12 +101,20 @@ test: $(LIBOBJS)
 		./tests/$$t; \
 	done
 
-test_bench: $(LIBOBJS)
-	$(CC) $(CFLAGS) -I. tests/test_bench.c $(LIBOBJS) $(LDFLAGS) $(LDLIBS) -o tests/test_bench
+bench_bin: $(LIBOBJS)
+	$(CC) $(CFLAGS) bench.c $(LIBOBJS) $(LDFLAGS) $(LDLIBS) -o bench_bin
 
-test_kkw_full: $(LIBOBJS)
-	$(CC) $(CFLAGS) -I. tests/test_kkw_full.c $(LIBOBJS) $(LDFLAGS) $(LDLIBS) -o tests/test_kkw_full
+# Run the full benchmark for all N values in sequence.
+# Output: one header line then one result row per N (stdout).
+# Progress per iteration printed to stderr.
+bench:
+	@$(MAKE) --no-print-directory N=4 bench_bin
+	@./bench_bin --header
+	@for n in $(BENCH_NS); do \
+		$(MAKE) --no-print-directory N=$$n bench_bin; \
+		./bench_bin; \
+	done
 
 clean:
-	rm -f $(PROGS) *.o .n_stamp_* *.txt *.bin $(addprefix tests/,$(TESTS)) tests/test_bench tests/test_kkw_full
+	rm -f $(PROGS) bench_bin *.o .n_stamp_* *.txt *.bin $(addprefix tests/,$(TESTS))
 

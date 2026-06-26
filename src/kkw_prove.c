@@ -23,14 +23,17 @@ static void derive_xshares(unsigned char seeds[N_PARTIES][SEED_SIZE],
             x_shares[N_PARTIES - 1][b] ^= x_shares[p][b];
 }
 
+int kkw_verbose = 1;
+
 int kkw_prove(const unsigned char *input,
               const unsigned char m_hat[32],
               const unsigned char pk_seed[XMSS_PK_SEED_BYTES],
               const uint32_t pubout[8],
               FILE *out)
 {
-    printf("KKW N=%d  M=%d  τ=%d  soundness 2^{-128}  threads=%d\n\n",
-           N_PARTIES, M_KKW, NUM_ROUNDS, omp_get_max_threads());
+    if (kkw_verbose)
+        printf("KKW N=%d  M=%d  τ=%d  soundness 2^{-128}  threads=%d\n\n",
+               N_PARTIES, M_KKW, NUM_ROUNDS, omp_get_max_threads());
 
     unsigned char (*seed_stars)[SEED_SIZE] = malloc((size_t)M_KKW * SEED_SIZE);
     unsigned char (*h_j_all)[32]           = malloc((size_t)M_KKW * 32);
@@ -121,9 +124,10 @@ int kkw_prove(const unsigned char *input,
         int ctr;
 #pragma omp atomic capture
         ctr = ++pass1_ctr;
-        if (ctr % 10 == 0 || ctr == M_KKW) printf("Pass 1: %d/%d\r", ctr, M_KKW);
+        if (kkw_verbose && (ctr % 10 == 0 || ctr == M_KKW))
+            printf("Pass 1: %d/%d\r", ctr, M_KKW);
     }
-    printf("Pass 1: %d/%d\n\n", M_KKW, M_KKW);
+    if (kkw_verbose) printf("Pass 1: %d/%d\n\n", M_KKW, M_KKW);
 
     if (pass1_error) {
         fprintf(stderr, "kkw_prove: pass 1 error\n");
@@ -261,9 +265,9 @@ int kkw_prove(const unsigned char *input,
 #pragma omp atomic capture
             ctr = ++pass2_ctr;
             if (ctr % 10 == 0 || ctr == NUM_ROUNDS)
-                printf("Pass 2: %d/%d\r", ctr, NUM_ROUNDS);
+                if (kkw_verbose) printf("Pass 2: %d/%d\r", ctr, NUM_ROUNDS);
         }
-        printf("Pass 2: %d/%d\n\n", NUM_ROUNDS, NUM_ROUNDS);
+        if (kkw_verbose) printf("Pass 2: %d/%d\n\n", NUM_ROUNDS, NUM_ROUNDS);
 
         if (pass2_error) {
             fprintf(stderr, "kkw_prove: OOM in pass 2\n");

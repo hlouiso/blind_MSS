@@ -6,6 +6,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
+/* Set to 0 to suppress pass-1/pass-2 progress output (default: 1). */
+extern int kkw_verbose;
+
 /* Run the full KKW prover and write the binary proof to `out`.
  * Returns 0 on success, -1 on error. */
 int kkw_prove(const unsigned char *input /* W_END bytes */,

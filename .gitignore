@@ -9,4 +9,5 @@ SIGNER_MSS_keygen
 SIGNER_MSS_sign
 CLIENT_blind_sign
 VERIFIER_verify
+bench_bin
 *test*
