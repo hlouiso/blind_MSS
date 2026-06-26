@@ -51,6 +51,7 @@ int kkw_verify(FILE *proof,
 
     unsigned char h_j_all[M_KKW][32];
     unsigned char h_prime_all[M_KKW][32];
+    unsigned char h_out_all[M_KKW][32];
 
     /* ── Preprocessing check ─────────────────────────────────────────────── */
     /* Pass 1: read offline data sequentially (fread is not thread-safe). */
@@ -60,7 +61,8 @@ int kkw_verify(FILE *proof,
         if (in_C[j]) continue;
         unsigned char h_prime_j[32];
         if (fread(seed_star_buf[j], SEED_SIZE, 1, proof) != 1 ||
-            fread(h_prime_j,        32,         1, proof) != 1) {
+            fread(h_prime_j,        32,         1, proof) != 1 ||
+            fread(h_out_all[j],     32,         1, proof) != 1) {
             fprintf(stderr, "kkw_verify: read error (preprocessing j=%d)\n", j);
             preproc_error = true; break;
         }
@@ -178,6 +180,8 @@ int kkw_verify(FILE *proof,
             online_error = true;
         }
         memcpy(h_prime_all[C_out[k]], as[k]->h_prime, 32);
+        sha256_once((const unsigned char *)as[k]->yp,
+                    N_PARTIES * 8 * sizeof(uint32_t), h_out_all[C_out[k]]);
 
 #pragma omp atomic
         round_ctr++;
@@ -205,7 +209,7 @@ int kkw_verify(FILE *proof,
 
     /* ── Final h* check ─────────────────────────────────────────────────── */
     {
-        unsigned char h_check[32], h_prime_check[32], h_star_check[32];
+        unsigned char h_check[32], h_prime_check[32], h_out_check[32], h_star_check[32];
         EVP_MD_CTX *ctx = EVP_MD_CTX_new();
         if (!ctx) { fprintf(stderr, "kkw_verify: OOM\n"); goto free_and_fail; }
         unsigned int outl = 0;
@@ -215,10 +219,15 @@ int kkw_verify(FILE *proof,
         EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
         for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_prime_all[j], 32);
         EVP_DigestFinal_ex(ctx, h_prime_check, &outl);
+        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+        for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_out_all[j], 32);
+        EVP_DigestFinal_ex(ctx, h_out_check, &outl);
         EVP_MD_CTX_free(ctx);
-        unsigned char in64[64];
-        memcpy(in64, h_check, 32); memcpy(in64 + 32, h_prime_check, 32);
-        sha256_once(in64, 64, h_star_check);
+        unsigned char in96[96];
+        memcpy(in96,      h_check,       32);
+        memcpy(in96 + 32, h_prime_check, 32);
+        memcpy(in96 + 64, h_out_check,   32);
+        sha256_once(in96, 96, h_star_check);
         if (memcmp(h_star_check, h_star, 32) != 0) {
             fprintf(stderr, "kkw_verify: h* mismatch\n"); goto free_and_fail;
         }

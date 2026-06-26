@@ -38,9 +38,10 @@ int kkw_prove(const unsigned char *input,
     unsigned char (*seed_stars)[SEED_SIZE] = malloc((size_t)M_KKW * SEED_SIZE);
     unsigned char (*h_j_all)[32]           = malloc((size_t)M_KKW * 32);
     unsigned char (*h_prime_all)[32]       = malloc((size_t)M_KKW * 32);
-    if (!seed_stars || !h_j_all || !h_prime_all) {
+    unsigned char (*h_out_all)[32]         = malloc((size_t)M_KKW * 32);
+    if (!seed_stars || !h_j_all || !h_prime_all || !h_out_all) {
         fprintf(stderr, "kkw_prove: OOM\n");
-        free(seed_stars); free(h_j_all); free(h_prime_all);
+        free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
         return -1;
     }
 
@@ -115,6 +116,8 @@ int kkw_prove(const unsigned char *input,
             }
             preproc_commit_instance(seeds_j, aux_j, h_j_all[j]);
             memcpy(h_prime_all[j], a_j.h_prime, 32);
+            sha256_once((const unsigned char *)a_j.yp,
+                        N_PARTIES * 8 * sizeof(uint32_t), h_out_all[j]);
         }
 
         free(aux_j);
@@ -136,7 +139,10 @@ int kkw_prove(const unsigned char *input,
     }
 
     /* ── Global commitment h* ─────────────────────────────────────────────── */
-    unsigned char h_val[32], h_prime_val[32], h_star[32];
+    /* h* = SHA256( H(h_j…) ‖ H(h'_j…) ‖ H(h_out_j…) )
+     * h_out_j = SHA256(yp[0..N-1]) for instance j binds all output shares,
+     * including the hidden party's yp[e], preventing adaptive forgery. */
+    unsigned char h_val[32], h_prime_val[32], h_out_val[32], h_star[32];
     {
         EVP_MD_CTX *ctx = EVP_MD_CTX_new();
         unsigned int outl = 0;
@@ -146,10 +152,15 @@ int kkw_prove(const unsigned char *input,
         EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
         for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_prime_all[j], 32);
         EVP_DigestFinal_ex(ctx, h_prime_val, &outl);
+        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+        for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_out_all[j], 32);
+        EVP_DigestFinal_ex(ctx, h_out_val, &outl);
         EVP_MD_CTX_free(ctx);
-        unsigned char in64[64];
-        memcpy(in64, h_val, 32); memcpy(in64 + 32, h_prime_val, 32);
-        sha256_once(in64, 64, h_star);
+        unsigned char in96[96];
+        memcpy(in96,      h_val,       32);
+        memcpy(in96 + 32, h_prime_val, 32);
+        memcpy(in96 + 64, h_out_val,   32);
+        sha256_once(in96, 96, h_star);
     }
 
     /* ── Nonce (per-proof random salt) ──────────────────────────────────── */
@@ -300,8 +311,9 @@ int kkw_prove(const unsigned char *input,
 
         for (int j = 0; j < M_KKW && write_ok; j++) {
             if (in_C[j]) continue;
-            if (fwrite(seed_stars[j], SEED_SIZE, 1, out) != 1) write_ok = false;
-            if (fwrite(h_prime_all[j], 32, 1, out) != 1)       write_ok = false;
+            if (fwrite(seed_stars[j],  SEED_SIZE, 1, out) != 1) write_ok = false;
+            if (fwrite(h_prime_all[j], 32,        1, out) != 1) write_ok = false;
+            if (fwrite(h_out_all[j],   32,        1, out) != 1) write_ok = false;
         }
 
         for (int k = 0; k < NUM_ROUNDS && write_ok; k++) {
@@ -333,7 +345,7 @@ int kkw_prove(const unsigned char *input,
         free(as[k]);
         if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
-    free(seed_stars); free(h_j_all); free(h_prime_all);
+    free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
     return 0;
 
 cleanup_fail:
@@ -341,6 +353,6 @@ cleanup_fail:
         free(as[k]);
         if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
-    free(seed_stars); free(h_j_all); free(h_prime_all);
+    free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
     return -1;
 }
