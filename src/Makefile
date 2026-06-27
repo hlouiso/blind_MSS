@@ -58,6 +58,11 @@ LDLIBS = $(OMP_LIBS) $(OPENSSL_LIBS) -lm
 
 PROGS = CLIENT_blinding_message SIGNER_XMSS_keygen SIGNER_XMSS_sign CLIENT_blind_sign VERIFIER_verify
 
+# The N-stamp rules below come first textually, so set the default goal
+# explicitly: otherwise `make` (no target) would pick the first normal target
+# it finds (xmss.o) instead of building all the programs.
+.DEFAULT_GOAL := all
+
 # Non-main library objects shared by the binaries and the tests.
 # LIBOBJS must be defined before the N-stamp rules so $(LIBOBJS) expands
 # correctly in both the rule target and the recipe.
