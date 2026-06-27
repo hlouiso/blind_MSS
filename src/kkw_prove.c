@@ -23,6 +23,36 @@ static void derive_xshares(unsigned char seeds[N_PARTIES][SEED_SIZE],
             x_shares[N_PARTIES - 1][b] ^= x_shares[p][b];
 }
 
+/* Expand one KKW instance from its seed_star: derive the N party seeds, then
+ * allocate and fill each party's x-share (INPUT_LEN) and Beaver tape (TAPE_SIZE).
+ * On success returns 0 and the caller owns both arrays (free with free_instance).
+ * On allocation failure frees everything and returns -1. */
+static int expand_instance(const unsigned char seed_star[SEED_SIZE],
+                           const unsigned char *input,
+                           unsigned char seeds_out[N_PARTIES][SEED_SIZE],
+                           unsigned char *x_shares[N_PARTIES],
+                           unsigned char *tapes[N_PARTIES])
+{
+    expand_seed_star(seed_star, seeds_out);
+    for (int p = 0; p < N_PARTIES; p++) { x_shares[p] = NULL; tapes[p] = NULL; }
+    for (int p = 0; p < N_PARTIES; p++) {
+        x_shares[p] = malloc((size_t)INPUT_LEN);
+        tapes[p]    = malloc((size_t)TAPE_SIZE);
+        if (!x_shares[p] || !tapes[p]) {
+            for (int q = 0; q <= p; q++) { free(x_shares[q]); free(tapes[q]); }
+            return -1;
+        }
+        expand_tape(seeds_out[p], tapes[p]);
+    }
+    derive_xshares(seeds_out, input, x_shares);
+    return 0;
+}
+
+static void free_instance(unsigned char *x_shares[N_PARTIES], unsigned char *tapes[N_PARTIES])
+{
+    for (int p = 0; p < N_PARTIES; p++) { free(tapes[p]); free(x_shares[p]); }
+}
+
 int kkw_verbose = 1;
 
 int kkw_prove(const unsigned char *input,
@@ -61,31 +91,8 @@ int kkw_prove(const unsigned char *input,
 #pragma omp parallel for schedule(dynamic, 1)
     for (int j = 0; j < M_KKW; j++) {
         unsigned char seeds_j[N_PARTIES][SEED_SIZE];
-        expand_seed_star(seed_stars[j], seeds_j);
-
-        unsigned char *x_shares_j[N_PARTIES];
-        bool xok = true;
-        for (int p = 0; p < N_PARTIES; p++) {
-            x_shares_j[p] = malloc((size_t)INPUT_LEN);
-            if (!x_shares_j[p]) { xok = false; break; }
-        }
-        if (!xok) {
-            for (int p = 0; p < N_PARTIES; p++) free(x_shares_j[p]);
-#pragma omp atomic write
-            pass1_error = true;
-            goto p1_done;
-        }
-        derive_xshares(seeds_j, input, x_shares_j);
-
-        unsigned char *tapes_j[N_PARTIES];
-        bool tok = true;
-        for (int p = 0; p < N_PARTIES; p++) {
-            tapes_j[p] = malloc((size_t)TAPE_SIZE);
-            if (!tapes_j[p]) { tok = false; break; }
-            expand_tape(seeds_j[p], tapes_j[p]);
-        }
-        if (!tok) {
-            for (int p = 0; p < N_PARTIES; p++) { free(tapes_j[p]); free(x_shares_j[p]); }
+        unsigned char *x_shares_j[N_PARTIES], *tapes_j[N_PARTIES];
+        if (expand_instance(seed_stars[j], input, seeds_j, x_shares_j, tapes_j) != 0) {
 #pragma omp atomic write
             pass1_error = true;
             goto p1_done;
@@ -93,7 +100,7 @@ int kkw_prove(const unsigned char *input,
 
         uint32_t *aux_j = malloc((size_t)ySize * sizeof(uint32_t));
         if (!aux_j) {
-            for (int p = 0; p < N_PARTIES; p++) { free(tapes_j[p]); free(x_shares_j[p]); }
+            free_instance(x_shares_j, tapes_j);
 #pragma omp atomic write
             pass1_error = true;
             goto p1_done;
@@ -121,7 +128,7 @@ int kkw_prove(const unsigned char *input,
         }
 
         free(aux_j);
-        for (int p = 0; p < N_PARTIES; p++) { free(tapes_j[p]); free(x_shares_j[p]); }
+        free_instance(x_shares_j, tapes_j);
 
     p1_done:;
         int ctr;
@@ -211,31 +218,8 @@ int kkw_prove(const unsigned char *input,
             int e = p_out[k];
 
             unsigned char seeds_j[N_PARTIES][SEED_SIZE];
-            expand_seed_star(seed_stars[j], seeds_j);
-
-            unsigned char *x_shares_j[N_PARTIES];
-            bool xok = true;
-            for (int p = 0; p < N_PARTIES; p++) {
-                x_shares_j[p] = malloc((size_t)INPUT_LEN);
-                if (!x_shares_j[p]) { xok = false; break; }
-            }
-            if (!xok) {
-                for (int p = 0; p < N_PARTIES; p++) free(x_shares_j[p]);
-#pragma omp atomic write
-                pass2_error = true;
-                goto p2_done;
-            }
-            derive_xshares(seeds_j, input, x_shares_j);
-
-            unsigned char *tapes_j[N_PARTIES];
-            bool tok = true;
-            for (int p = 0; p < N_PARTIES; p++) {
-                tapes_j[p] = malloc((size_t)TAPE_SIZE);
-                if (!tapes_j[p]) { tok = false; break; }
-                expand_tape(seeds_j[p], tapes_j[p]);
-            }
-            if (!tok) {
-                for (int p = 0; p < N_PARTIES; p++) { free(tapes_j[p]); free(x_shares_j[p]); }
+            unsigned char *x_shares_j[N_PARTIES], *tapes_j[N_PARTIES];
+            if (expand_instance(seed_stars[j], input, seeds_j, x_shares_j, tapes_j) != 0) {
 #pragma omp atomic write
                 pass2_error = true;
                 goto p2_done;
@@ -243,7 +227,7 @@ int kkw_prove(const unsigned char *input,
 
             uint32_t *da_db_all_k = malloc((size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t));
             if (!da_db_all_k) {
-                for (int p = 0; p < N_PARTIES; p++) { free(tapes_j[p]); free(x_shares_j[p]); }
+                free_instance(x_shares_j, tapes_j);
 #pragma omp atomic write
                 pass2_error = true;
                 goto p2_done;
@@ -279,7 +263,7 @@ int kkw_prove(const unsigned char *input,
                 memcpy(zs[k]->x_offset, x_shares_j[N_PARTIES - 1], INPUT_LEN);
             /* yp_e removed from proof — as[k]->yp[e] is already in struct a */
 
-            for (int p = 0; p < N_PARTIES; p++) { free(tapes_j[p]); free(x_shares_j[p]); }
+            free_instance(x_shares_j, tapes_j);
 
         p2_done:;
             int ctr;
