@@ -145,6 +145,6 @@ Larger N reduces τ (fewer rounds) → smaller proof, at the cost of more partie
 
 ## References
 
-- [KKW: On the Size of Pairing-Based Non-interactive Arguments — Katz, Kolesnikov, Wang, CCS 2018](https://eprint.iacr.org/2018/470)
+- [KKW: Improved Non-Interactive Zero Knowledge with Applications to Post-Quantum Signatures — Katz, Kolesnikov, Wang, CCS 2018](https://eprint.iacr.org/2018/475)
 - [Picnic: Post-Quantum Signatures from Zero-Knowledge Proofs — ePrint 2017/279](https://eprint.iacr.org/2017/279.pdf)
 - [XMSS — RFC 8391](https://datatracker.ietf.org/doc/html/rfc8391)
