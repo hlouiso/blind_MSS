@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Gate-type recorder (see shared.h). NULL except during one-time table build. */
+uint8_t *g_gate_type_rec = NULL;
+
 /* ── Linear gates (free, no Beaver cost) ───────────────────────────────── */
 
 void mpc_XOR(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES])
@@ -34,6 +37,7 @@ void mpc_AND(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
              uint32_t *da_db_all, int *gateCount)
 {
     int g = *gateCount;
+    if (g_gate_type_rec) g_gate_type_rec[g] = 0; /* AND gate */
 
     uint32_t u_xor = 0, v_xor = 0, w_xor = 0;
     uint32_t u[N_PARTIES], v[N_PARTIES], w[N_PARTIES];
@@ -79,6 +83,7 @@ void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
              uint32_t *da_db_all, int *gateCount)
 {
     int g = *gateCount;
+    if (g_gate_type_rec) g_gate_type_rec[g] = 1; /* ADD gate */
 
     uint32_t u[N_PARTIES], v[N_PARTIES], w[N_PARTIES];
     for (int i = 0; i < N_PARTIES; i++) {

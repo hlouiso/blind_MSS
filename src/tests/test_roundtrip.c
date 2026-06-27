@@ -192,13 +192,33 @@ static void test_preproc_smoke(void)
     expand_xshare(seeds[0], xs2);
     CHECK(memcmp(xs1, xs2, INPUT_LEN) == 0, "expand_xshare: deterministic");
 
-    /* compute_aux_from_seeds: deterministic (calls building_views internally) */
+    /* compute_aux_from_seeds: deterministic (fast tape-only path) */
     uint32_t *aux1 = malloc(ySize * sizeof(uint32_t));
     uint32_t *aux2 = malloc(ySize * sizeof(uint32_t));
     compute_aux_from_seeds(seeds, aux1);
     compute_aux_from_seeds(seeds, aux2);
     CHECK(memcmp(aux1, aux2, ySize * sizeof(uint32_t)) == 0,
           "compute_aux_from_seeds: deterministic");
+
+    /* compute_aux_from_seeds (fast path) must equal the reference aux that the
+     * full circuit run produces — they feed the same preprocessing commitment,
+     * so any divergence would break offline verification. */
+    {
+        unsigned char *xd[N_PARTIES], *tp[N_PARTIES];
+        for (int p = 0; p < N_PARTIES; p++) {
+            xd[p] = calloc(INPUT_LEN, 1);
+            tp[p] = malloc(TAPE_SIZE);
+            expand_tape(seeds[p], tp[p]);
+        }
+        uint32_t *aux_ref = malloc(ySize * sizeof(uint32_t));
+        unsigned char zm[32] = {0}, zpk[XMSS_PK_SEED_BYTES] = {0};
+        a ref_a;
+        building_views(&ref_a, zm, zpk, xd, tp, aux_ref, NULL);
+        CHECK(memcmp(aux1, aux_ref, ySize * sizeof(uint32_t)) == 0,
+              "compute_aux_from_seeds: fast path == full-circuit reference");
+        for (int p = 0; p < N_PARTIES; p++) { free(xd[p]); free(tp[p]); }
+        free(aux_ref);
+    }
 
     /* preproc_commit_instance: deterministic */
     unsigned char h1[32], h2[32];

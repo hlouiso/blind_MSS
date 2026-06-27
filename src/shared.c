@@ -112,35 +112,85 @@ void preproc_commit_instance(unsigned char seeds[N_PARTIES][SEED_SIZE],
     if (!ok) memset(h_j_out, 0, 32);
 }
 
+/* Gate-type table: gate_is_add[g] == 1 iff gate g is an ADD, else 0.
+ * Built once (lazily) by recording one full building_views run; the circuit is
+ * fixed, so the sequence is identical for every instance and every N. */
+static uint8_t *gate_is_add = NULL;
+
+/* Build gate_is_add once. Thread-safe: the critical section serialises the
+ * first caller while the parallel offline loop's other threads wait, then see
+ * the published table. Subsequent calls are a cheap non-NULL check. */
+static void ensure_gate_table(void)
+{
+    if (gate_is_add) return;
+#pragma omp critical (aux_gate_table)
+    {
+        if (!gate_is_add) {
+            uint8_t *tbl = calloc((size_t)ySize, 1);
+            unsigned char *x_dummy[N_PARTIES], *tapes[N_PARTIES];
+            for (int p = 0; p < N_PARTIES; p++) { x_dummy[p] = NULL; tapes[p] = NULL; }
+            bool ok = (tbl != NULL);
+            for (int p = 0; p < N_PARTIES && ok; p++) {
+                x_dummy[p] = calloc((size_t)INPUT_LEN, 1);
+                tapes[p]   = malloc((size_t)TAPE_SIZE);
+                if (!x_dummy[p] || !tapes[p]) { ok = false; break; }
+                unsigned char s[SEED_SIZE];
+                memset(s, p + 1, SEED_SIZE);   /* arbitrary: only gate types matter */
+                expand_tape(s, tapes[p]);
+            }
+            uint32_t *aux_tmp = ok ? malloc((size_t)ySize * sizeof(uint32_t)) : NULL;
+            if (ok && aux_tmp) {
+                unsigned char zero_m[32] = {0}, zero_pk[XMSS_PK_SEED_BYTES] = {0};
+                a dummy_a;
+                g_gate_type_rec = tbl;
+                building_views(&dummy_a, zero_m, zero_pk, x_dummy, tapes, aux_tmp, NULL);
+                g_gate_type_rec = NULL;
+                gate_is_add = tbl;             /* publish only on full success */
+            } else {
+                free(tbl);
+            }
+            free(aux_tmp);
+            for (int p = 0; p < N_PARTIES; p++) { free(x_dummy[p]); free(tapes[p]); }
+        }
+    }
+}
+
 void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE], uint32_t *aux_out)
 {
-    /* Run building_views with dummy inputs to extract aux from the party seeds.
-     * aux[g] is set by mpc_AND and mpc_ADD using only the Beaver triple tapes
-     * (u_i, v_i, w_i) — it does NOT depend on x_shares, m_hat, or pk_seed.
-     *
-     * Using the simple formula (XOR u_i) AND (XOR v_i) XOR (XOR w_i) would be
-     * wrong for mpc_ADD gates: that function only writes bits 0..30 to aux[g]
-     * (bit 31 stays 0), but the word-level formula computes bit 31 from tape data. */
-    unsigned char *x_dummy[N_PARTIES];
+    /* aux[g] depends ONLY on the Beaver triple tapes (u_i, v_i, w_i), not on
+     * x_shares, m_hat, or pk_seed.  For every gate:
+     *     full = (XOR_i u_i[g]) AND (XOR_i v_i[g]) XOR (XOR_i w_i[g])
+     * AND gates store full; ADD gates store full with bit 31 cleared (mpc_ADD
+     * only writes bits 0..30).  This tape-only pass replaces re-running the full
+     * XMSS circuit per opened instance — the dominant cost of offline verify. */
+    ensure_gate_table();
+
     unsigned char *tapes[N_PARTIES];
+    for (int p = 0; p < N_PARTIES; p++) tapes[p] = NULL;
     bool alloc_ok = true;
     for (int p = 0; p < N_PARTIES; p++) {
-        x_dummy[p] = calloc((size_t)INPUT_LEN, 1);
-        tapes[p]   = malloc((size_t)TAPE_SIZE);
-        if (!x_dummy[p] || !tapes[p]) { alloc_ok = false; break; }
+        tapes[p] = malloc((size_t)TAPE_SIZE);
+        if (!tapes[p]) { alloc_ok = false; break; }
         expand_tape(seeds[p], tapes[p]);
     }
-    if (!alloc_ok) {
-        for (int p = 0; p < N_PARTIES; p++) { free(x_dummy[p]); free(tapes[p]); }
+    if (!alloc_ok || !gate_is_add) {
+        for (int p = 0; p < N_PARTIES; p++) free(tapes[p]);
         memset(aux_out, 0, (size_t)ySize * sizeof(uint32_t));
         return;
     }
-    unsigned char zero_m[32] = {0};
-    unsigned char zero_pk[16] = {0};
-    a dummy_a;
-    /* Pass NULL for da_db_all_out; building_views allocates internally. */
-    building_views(&dummy_a, zero_m, zero_pk, x_dummy, tapes, aux_out, NULL);
-    for (int p = 0; p < N_PARTIES; p++) { free(x_dummy[p]); free(tapes[p]); }
+
+    for (int g = 0; g < ySize; g++) {
+        uint32_t u_xor = 0, v_xor = 0, w_xor = 0;
+        for (int i = 0; i < N_PARTIES; i++) {
+            u_xor ^= tape_u(tapes[i], g);
+            v_xor ^= tape_v(tapes[i], g);
+            w_xor ^= tape_w(tapes[i], g);
+        }
+        uint32_t full = (u_xor & v_xor) ^ w_xor;
+        aux_out[g] = gate_is_add[g] ? (full & 0x7FFFFFFFu) : full;
+    }
+
+    for (int p = 0; p < N_PARTIES; p++) free(tapes[p]);
 }
 
 /* ── Fiat–Shamir challenge (full KKW protocol) ───────────────────────────── */

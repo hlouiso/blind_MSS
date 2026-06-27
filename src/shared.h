@@ -134,10 +134,17 @@ void preproc_commit_instance(unsigned char seeds[N_PARTIES][SEED_SIZE],
 
 /**
  * Compute aux from N_PARTIES seeds (for preprocessing verification).
- * aux[g] = (XOR_i u_i[g]) AND (XOR_i v_i[g]) XOR (XOR_i w_i[g]).
+ * aux[g] = (XOR_i u_i[g]) AND (XOR_i v_i[g]) XOR (XOR_i w_i[g]), with bit 31
+ * forced to 0 on ADD gates (see compute_aux_from_seeds in shared.c).
+ * Uses the fast tape-only path; does NOT re-run the full circuit.
  */
 void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE],
                              uint32_t *aux_out);
+
+/* Gate-type recorder: when non-NULL, mpc_AND/mpc_ADD write the type of each
+ * Beaver gate (0 = AND, 1 = ADD) at index g into this array. Used once to build
+ * the gate-type table that drives the fast aux path. NULL in normal operation. */
+extern uint8_t *g_gate_type_rec;
 
 /* ── Fiat–Shamir challenge (full KKW protocol) ──────────────────────────── */
 
