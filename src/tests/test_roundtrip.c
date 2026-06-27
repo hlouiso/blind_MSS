@@ -6,7 +6,8 @@
  *   3. Tamper check.
  *   4. H3 range check (legacy Fiat–Shamir).
  *
- * For the full M_KKW=218 protocol test: tests/test_kkw_full.c (not in default TESTS).
+ * The full M_KKW-instance protocol is exercised end-to-end by the production
+ * binaries (CLIENT_blind_sign → VERIFIER_verify) and by `make bench`.
  */
 #include "../circuits.h"
 #include "../shared.h"
