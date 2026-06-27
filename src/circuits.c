@@ -6,6 +6,7 @@
 #include "shared.h"
 #include "xmss.h"
 
+#include <omp.h>
 #include <openssl/sha.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -346,7 +347,10 @@ void building_views(
         for (int w = YP_SUM_WORD + 1; w < 8; w++) a->yp[i][w] = 0;
     }
 
-    g_circuit_gates = *gc;
+    /* Record the gate count only when called standalone (test_circuit).
+     * The parallel prove/verify passes all run the same fixed circuit, so
+     * skipping the write there avoids a benign-but-real data race on this global. */
+    if (!omp_in_parallel()) g_circuit_gates = *gc;
     free(gc);
 
     /* KKW Trou 2: h'_j = H(da_db_all) — symmetric across all parties.

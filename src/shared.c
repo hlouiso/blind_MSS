@@ -182,6 +182,16 @@ static uint32_t prg_u32(prg_ctx *p)
     return v;
 }
 
+/* Uniform integer in [0, bound) via rejection sampling (bound > 0).
+ * Rejects the short final interval so there is no modulo bias. */
+static uint32_t prg_below(prg_ctx *p, uint32_t bound)
+{
+    uint64_t limit = ((uint64_t)1 << 32) - (((uint64_t)1 << 32) % bound);
+    uint32_t r;
+    do { r = prg_u32(p); } while ((uint64_t)r >= limit);
+    return r % bound;
+}
+
 static int cmp_int(const void *a, const void *b)
 {
     return *(const int *)a - *(const int *)b;
@@ -218,12 +228,12 @@ void kkw_fiat_shamir(const unsigned char msg[32], const uint32_t pubout[8],
     prg_ctx prg;
     prg_init(&prg, seed_FS);
 
-    /* Fisher-Yates: pick NUM_ROUNDS distinct indices from [0..M_KKW-1]. */
+    /* Fisher-Yates: pick NUM_ROUNDS distinct indices from [0..M_KKW-1].
+     * prg_below is unbiased (rejection sampling), matching the party draw below. */
     int arr[M_KKW];
     for (int i = 0; i < M_KKW; i++) arr[i] = i;
     for (int i = 0; i < NUM_ROUNDS; i++) {
-        uint32_t r = prg_u32(&prg);
-        int j = i + (int)(r % (uint32_t)(M_KKW - i));
+        int j = i + (int)prg_below(&prg, (uint32_t)(M_KKW - i));
         int tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
     }
     memcpy(C_out, arr, NUM_ROUNDS * sizeof(int));
