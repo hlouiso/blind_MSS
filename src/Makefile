@@ -56,63 +56,55 @@ endif
 LDFLAGS = $(OMP_LDFLAGS)
 LDLIBS = $(OMP_LIBS) $(OPENSSL_LIBS) -lm
 
-PROGS = CLIENT_blinding_message SIGNER_XMSS_keygen SIGNER_XMSS_sign CLIENT_blind_sign VERIFIER_verify
-
-# The N-stamp rules below come first textually, so set the default goal
-# explicitly: otherwise `make` (no target) would pick the first normal target
-# it finds (xmss.o) instead of building all the programs.
-.DEFAULT_GOAL := all
-
-# Non-main library objects shared by the binaries and the tests.
-# LIBOBJS must be defined before the N-stamp rules so $(LIBOBJS) expands
-# correctly in both the rule target and the recipe.
+# ---------------------------------------------------------------------------
+# Library + tests.  This project is a library (libblindmss.a) exercised by the
+# programs in tests/; there are no standalone CLI binaries.  `make` builds the
+# library, `make test` builds and runs the test suite, `make bench` benchmarks.
+# ---------------------------------------------------------------------------
+LIB     = libblindmss.a
 LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o gf128.o commitment.o kkw_prove.o kkw_verify.o
 
-# Rebuild all objects (and bench_bin) if N changes.
-# The stamp file is named .n_stamp_<N>; switching N deletes the old stamp,
-# all .o files, and bench_bin so they are rebuilt fresh for the new N.
+# `make` with no target builds the library (rule order below would otherwise
+# make the first object file the default goal).
+.DEFAULT_GOAL := lib
+
+# Rebuild all objects (and the library/bench) when N changes.  The stamp file is
+# named .n_stamp_<N>; switching N deletes the old stamp and every build product
+# so they are recompiled for the new N.  LIBOBJS is defined above so $(LIBOBJS)
+# expands correctly in both the rule target and the recipe.
 N_ACTUAL := $(if $(N),$(N),default)
 N_STAMP  := .n_stamp_$(N_ACTUAL)
 $(N_STAMP):
-	@rm -f .n_stamp_* $(LIBOBJS) bench_bin && touch $@
+	@rm -f .n_stamp_* $(LIBOBJS) $(LIB) bench_bin && touch $@
 $(LIBOBJS): $(N_STAMP)
-# Regression tests in tests/ (built and run by `make test`).
-TESTS = test_xmss test_circuit test_roundtrip
+
+# Tests in tests/ (built and run by `make test`).  test_e2e exercises the full
+# keygen→blind→sign→prove→verify protocol in memory.
+TESTS = test_xmss test_circuit test_roundtrip test_e2e
 
 BENCH_NS := 4 8 16 32 64
 
-.PHONY: all clean test bench
+.PHONY: lib all clean test bench
 
-all: $(PROGS)
+lib: $(LIB)
+all: lib
 
-CLIENT_blinding_message: CLIENT_blinding_message.o commitment.o gf128.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
-
-SIGNER_XMSS_keygen: SIGNER_XMSS_keygen.o xmss.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
-
-SIGNER_XMSS_sign: SIGNER_XMSS_sign.o xmss.o commitment.o gf128.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
-
-CLIENT_blind_sign: CLIENT_blind_sign.o kkw_prove.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o xmss.o commitment.o gf128.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
-
-VERIFIER_verify: VERIFIER_verify.o kkw_verify.o shared.o circuits.o MPC_verify_functions.o MPC_prove_functions.o commitment.o gf128.o xmss.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+$(LIB): $(LIBOBJS)
+	$(AR) rcs $@ $(LIBOBJS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $<
 
-# Build each test against the library objects (-I. so tests/ finds the headers) and run it.
-test: $(LIBOBJS)
+# Build each test against the library (-I. so tests/ finds the headers) and run it.
+test: $(LIB)
 	@set -e; for t in $(TESTS); do \
 		echo "=== $$t ==="; \
-		$(CC) $(CFLAGS) -I. tests/$$t.c $(LIBOBJS) $(LDFLAGS) $(LDLIBS) -o tests/$$t; \
+		$(CC) $(CFLAGS) -I. tests/$$t.c $(LIB) $(LDFLAGS) $(LDLIBS) -o tests/$$t; \
 		./tests/$$t; \
 	done
 
-bench_bin: $(LIBOBJS) bench.c
-	$(CC) $(CFLAGS) -DBENCH_ITERS=$(BENCH_ITERS) bench.c $(LIBOBJS) $(LDFLAGS) $(LDLIBS) -o bench_bin
+bench_bin: $(LIB) bench.c
+	$(CC) $(CFLAGS) -DBENCH_ITERS=$(BENCH_ITERS) bench.c $(LIB) $(LDFLAGS) $(LDLIBS) -o bench_bin
 
 # Run the full benchmark for all N values in sequence.
 # Output: one header line then one result row per N (stdout).
@@ -126,5 +118,4 @@ bench:
 	done
 
 clean:
-	rm -f $(PROGS) bench_bin *.o .n_stamp_* *.txt *.bin $(addprefix tests/,$(TESTS))
-
+	rm -f $(LIB) bench_bin *.o .n_stamp_* *.txt *.bin $(addprefix tests/,$(TESTS))

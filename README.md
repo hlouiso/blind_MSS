@@ -10,7 +10,7 @@ The commitment scheme is **Halevi–Micali over GF(2¹²⁸)**, the signature is
 
 This work was carried out during my final internship for the Master's degree in **Cryptology and Computer Security** at the [University of Bordeaux](https://mastercsi.labri.fr/). The internship took place in the first half of 2025 at [UPC (Barcelona)](https://www.upc.edu/ca), supervised by [Javier Herranz Sotoca](https://web.mat.upc.edu/javier.herranz/).
 
-## Build
+## Build & test
 
 Requirements:
 - A C compiler (GCC/Clang) with OpenMP support
@@ -18,13 +18,16 @@ Requirements:
 - `make`
 
 ```bash
-make          # build everything (default N=4)
+make          # build the static library libblindmss.a (default N=4)
 make N=<N>    # build with N ∈ {4, 8, 16, 32, 64, 128, 256}
-make clean    # remove binaries and intermediates
+make test     # build and run the test suite
 make bench    # benchmark all N values
+make clean    # remove build products
 ```
 
-Binaries produced: `CLIENT_blinding_message`, `SIGNER_XMSS_keygen`, `SIGNER_XMSS_sign`, `CLIENT_blind_sign`, `VERIFIER_verify`.
+The project builds a single static library, `libblindmss.a`. The programs in
+`src/tests/` link against it; [`test_e2e`](src/tests/test_e2e.c) runs the whole
+keygen → blind → sign → prove → verify protocol in memory.
 
 ## Parameters
 
@@ -70,43 +73,43 @@ Minimum M for each N (computed by `src/params.py`; τ = ⌈128/log₂N⌉ + 1):
 
 τ controls prove/verify time; M only affects pass-1 (preprocessing) and the tiny offline proof section.
 
-## Files & Formats
+## Library API
 
-All hex is **UPPERCASE** without spaces.
+Everything is exposed as a C library (`libblindmss.a`); the headers in `src/`
+are the API. The full flow is shown in [`src/tests/test_e2e.c`](src/tests/test_e2e.c):
 
-- **`XMSS_secret_key.txt`** (`SIGNER_XMSS_keygen`)
-  - Line 1: `sk_seed` — 32 bytes (64 hex)
-  - Line 2: `pk_seed` — 16 bytes (32 hex)
-  - Line 3: `leaf_index` — decimal (initially `0`)
+- **Key generation** — `xmss_compute_root(sk_seed, pk_seed, root)` builds the
+  Merkle tree and returns the public root (`xmss.h`).
+- **Blinding** — `hm_commit(m_hat, r, a, com, d)` produces the Halevi–Micali
+  commitment `com = a‖b‖y` and the certified digest `d = SHA256(com)`
+  (`commitment.h`). The opening `(r, a)` is the client's secret.
+- **Signing** — `xmss_sign(sk_seed, pk_seed, leaf, d, 32, &sig)` target-sum
+  WOTS+/XMSS-signs the digest; `xmss_verify(...)` checks it (`xmss.h`).
+- **Proving** — `kkw_prove(input, m_hat, pk_seed, pubout, out)` writes the KKW
+  proof, where `input` is the witness (opening + leaf index + signature, laid
+  out per `circuits.h`) and `pubout = root ‖ target_sum` (`kkw_prove.h`).
+- **Verifying** — `kkw_verify(proof, m_hat, pk_seed, pubout)` returns 0 iff the
+  proof is valid (`kkw_verify.h`).
 
-- **`XMSS_public_key.txt`** (`SIGNER_XMSS_keygen`)
-  - Line 1: `pk_seed` — 16 bytes (32 hex)
-  - Line 2: XMSS root — 16 bytes (32 hex)
+The proof is a byte stream (a `FILE *`, e.g. an on-disk file or `tmpfile()`), so
+it can be stored or sent over a wire between the client and the verifier. Its
+format is `"KKW1"` magic (4 B) + header (N, M, τ, ySize as uint32_t LE, 16 B) +
+nonce (32 B) + h\* (32 B) + offline section ((M−τ) × 64 B) + online section
+(τ rounds). A verifier built for a different N rejects it on the header check.
 
-- **`blinding_key.txt`** (`CLIENT_blinding_message`) — the secret opening `(r, a)`
-  - Line 1: nonces `r₁‖…‖r₆` — 96 bytes (192 hex)
-  - Line 2: line matrix `a` (row-major `a_{0,0..5} ‖ a_{1,0..5}`) — 192 bytes (384 hex)
+## Protocol
 
-- **`blinded_message.txt`** (`CLIENT_blinding_message`)
-  - Commitment `com = a ‖ b ‖ y` — 256 bytes (512 hex). The signer derives `d = SHA256(com)`.
+The three parties never share secrets:
 
-- **`XMSS_signature.txt`** (`SIGNER_XMSS_sign`)
-  - Line 1: `leaf_index` — decimal
-  - Line 2: `nonce` — 6 bytes (12 hex)
-  - Next `144` lines: WOTS+ chain values — 16 bytes (32 hex) each
-  - Next `10` lines: XMSS authentication path — 16 bytes (32 hex) each
-
-- **`signature_proof.bin`** (`CLIENT_blind_sign`)
-  - Binary KKW proof. Format: `"KKW1"` magic (4 B) + header (N, M, τ, ySize as uint32_t LE, 16 B) + nonce (32 B) + h\* (32 B) + offline section ((M−τ) × 64 B) + online section (τ rounds).
-  - A verifier compiled for a different N rejects the proof immediately (parameter mismatch).
-
-## Typical Workflow
-
-1. **Signer** generates keys: `./SIGNER_XMSS_keygen` → `XMSS_secret_key.txt`, `XMSS_public_key.txt`.
-2. **Client** blinds a message: `./CLIENT_blinding_message` (prompts for `m`) → `blinding_key.txt` (the secret opening `(r, a)`), `blinded_message.txt` (the commitment `com = a‖b‖y`). The client keeps `(r, a)` secret and sends `com` to the signer.
-3. **Signer** signs the commitment: `./SIGNER_XMSS_sign` (reads `XMSS_secret_key.txt`, `blinded_message.txt`; derives `d = SHA256(com)`, signs `d`, self-checks against the public key) → `XMSS_signature.txt`, and advances the leaf index.
-4. **Client** proves: `./CLIENT_blind_sign` (prompts for `m`; reads `blinding_key.txt`, `XMSS_signature.txt`, `XMSS_public_key.txt`). It first re-checks that the XMSS signature is valid for `d = SHA256(a‖b‖y)`, then writes the ZK proof to `signature_proof.bin`.
-5. **Verifier** checks: `./VERIFIER_verify` (prompts for `m`; reads `XMSS_public_key.txt`, `signature_proof.bin`).
+1. **Signer** generates `(sk_seed, pk_seed)` and publishes `pk_seed ‖ root`.
+2. **Client** blinds its message `m` into `com` and keeps the opening `(r, a)`
+   secret; it sends only `com` to the signer.
+3. **Signer** signs `d = SHA256(com)` with the next XMSS leaf and returns the
+   raw signature — it never learns `m` or the opening.
+4. **Client** builds a KKW zero-knowledge proof that it holds a valid XMSS
+   signature on a commitment to `m`, **without** revealing the opening, the
+   leaf index, or the signature.
+5. **Verifier** checks the proof against `pk_seed ‖ root` and `m`.
 
 ## Performance
 
