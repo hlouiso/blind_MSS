@@ -63,5 +63,5 @@ for N in [4, 8, 16, 32, 64, 128, 256]:
     tau = math.ceil(128.0 / math.log2(N)) + 1
     M = min_M(N, tau)
     bits = soundness_bits(M, tau, N)
-    offline_kb = (M - tau) * 64 / 1024
+    offline_kb = (M - tau) * 96 / 1024  # seed* (32) + h'_j (32) + h_out (32)
     print(f"{N:>4} {tau:>4} {M:>5}  2^{{-{bits:.2f}}}  {offline_kb:8.1f} KB")

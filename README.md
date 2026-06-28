@@ -59,19 +59,21 @@ The KKW cut-and-choose soundness formula is:
 ε = max_{0 ≤ s ≤ τ} C(M-s, τ-s) / C(M, τ) · N^{-(τ-s)}  ≤  2^{-128}
 ```
 
-Minimum M for each N (computed by `src/params.py`; τ = ⌈128/log₂N⌉ + 1):
+Minimum M for each N (computed by `src/params.py`; τ = ⌈128/log₂N⌉ + 1). For
+N ≤ 128 these reproduce Table 1 (ρ = 128) of the KKW paper exactly:
 
 | N | τ | M | Soundness | Offline section |
 |--:|--:|--:|:---------:|----------------:|
-| 4 | 65 | 218 | 2^{-128.00} | 9.6 KB |
-| 8 | 44 | 252 | 2^{-128.05} | 13.0 KB |
-| 16 | 33 | 352 | 2^{-128.00} | 19.9 KB |
-| 32 | 27 | 462 | 2^{-128.03} | 27.2 KB |
-| 64 | 23 | 631 | 2^{-128.03} | 38.0 KB |
-| 128 | 20 | 916 | 2^{-128.01} | 56.0 KB |
-| 256 | 17 | 1794 | 2^{-128.01} | 111.1 KB |
+| 4 | 65 | 218 | 2^{-128.00} | 14.3 KB |
+| 8 | 44 | 252 | 2^{-128.05} | 19.5 KB |
+| 16 | 33 | 352 | 2^{-128.00} | 29.9 KB |
+| 32 | 27 | 462 | 2^{-128.03} | 40.8 KB |
+| 64 | 23 | 631 | 2^{-128.03} | 57.0 KB |
+| 128 | 20 | 916 | 2^{-128.01} | 84.0 KB |
+| 256 | 17 | 1794 | 2^{-128.01} | 166.6 KB |
 
-τ controls prove/verify time; M only affects pass-1 (preprocessing) and the tiny offline proof section.
+τ controls prove/verify time; M only affects pass-1 (preprocessing) and the tiny
+offline proof section (96 bytes per checked instance: seed\* + h'_j + h_out).
 
 ## Library API
 
@@ -94,7 +96,7 @@ are the API. The full flow is shown in [`src/tests/test_e2e.c`](src/tests/test_e
 The proof is a byte stream (a `FILE *`, e.g. an on-disk file or `tmpfile()`), so
 it can be stored or sent over a wire between the client and the verifier. Its
 format is `"KKW1"` magic (4 B) + header (N, M, τ, ySize as uint32_t LE, 16 B) +
-nonce (32 B) + h\* (32 B) + offline section ((M−τ) × 64 B) + online section
+nonce (32 B) + h\* (32 B) + offline section ((M−τ) × 96 B) + online section
 (τ rounds). A verifier built for a different N rejects it on the header check.
 
 ## Protocol
@@ -122,8 +124,8 @@ Measured on Intel i5-9300H @ 2.40 GHz, 8 threads, 1 iteration (N=4 default):
 | Public key (`pk_seed ‖ root`) | 32 B |
 | Secret key (`sk_seed ‖ pk_seed ‖ leaf_index`) | 52 B |
 | Commitment `com = a ‖ b ‖ y` | 256 B |
-| Raw XMSS signature (`leaf ‖ nonce ‖ 144 chains ‖ 10 path`) | 2.31 KB |
-| **Blind signature (KKW proof, N=4)** | ≈ 106 MB |
+| Raw XMSS signature (`leaf ‖ nonce ‖ 144 chains ‖ 10 path`) | 2.42 KB |
+| **Blind signature (KKW proof, N=4)** | ≈ 108 MB |
 
 ### Timing (N=4, τ=65, M=218)
 
@@ -132,13 +134,13 @@ Measured on Intel i5-9300H @ 2.40 GHz, 8 threads, 1 iteration (N=4 default):
 | Commitment computation | < 1 ms |
 | Key generation | ≈ 130 ms |
 | Signing | ≈ 130 ms |
-| Proof generation | ≈ 4 s |
-| Proof verification | ≈ 4 s |
+| Proof generation | ≈ 3.5 s |
+| Proof verification | ≈ 2 s |
 
 The proof is large because the online section dominates: each of the τ rounds serialises `aux` (ySize words) and `msgs_e` (2·ySize words) for the hidden party, plus the committed output shares for all N parties:
 
 ```
-proof ≈ header(20) + nonce(32) + h*(32) + (M−τ)·64          [offline, tiny]
+proof ≈ header(20) + nonce(32) + h*(32) + (M−τ)·96          [offline, tiny]
        + τ · (sizeof(a) + (N−1)·SEED_SIZE + INPUT_LEN + aux + 2·aux)
        ≈ τ · 3·ySize·4  [dominant term]
        = 65 · 3 · 151776 · 4  ≈  119 MB  [upper bound; conditional terms reduce it]
