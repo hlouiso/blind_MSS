@@ -75,7 +75,7 @@ LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.
 N_ACTUAL := $(if $(N),$(N),default)
 N_STAMP  := .n_stamp_$(N_ACTUAL)
 $(N_STAMP):
-	@rm -f .n_stamp_* $(LIBOBJS) $(LIB) bench_bin && touch $@
+	@rm -f .n_stamp_* $(LIBOBJS) $(LIB) bench_bin bench_pipeline_bin && touch $@
 $(LIBOBJS): $(N_STAMP)
 
 # Tests in tests/ (built and run by `make test`).  test_e2e exercises the full
@@ -83,8 +83,9 @@ $(LIBOBJS): $(N_STAMP)
 TESTS = test_xmss test_circuit test_roundtrip test_e2e
 
 BENCH_NS := 4 8 16 32 64
+PIPELINE_ITERS ?= 100
 
-.PHONY: lib all clean test bench
+.PHONY: lib all clean test bench bench-pipeline
 
 lib: $(LIB)
 all: lib
@@ -117,5 +118,13 @@ bench:
 		./bench_bin; \
 	done
 
+# Full-pipeline benchmark (commitment / sign / prove / verify) for one N.
+# Override iteration count: make N=<N> PIPELINE_ITERS=<k> bench-pipeline
+bench_pipeline_bin: $(LIB) bench_pipeline.c
+	$(CC) $(CFLAGS) -DPIPELINE_ITERS=$(PIPELINE_ITERS) bench_pipeline.c $(LIB) $(LDFLAGS) $(LDLIBS) -o bench_pipeline_bin
+
+bench-pipeline: bench_pipeline_bin
+	@./bench_pipeline_bin
+
 clean:
-	rm -f $(LIB) bench_bin *.o .n_stamp_* *.txt *.bin $(addprefix tests/,$(TESTS))
+	rm -f $(LIB) bench_bin bench_pipeline_bin *.o .n_stamp_* *.txt *.bin $(addprefix tests/,$(TESTS))

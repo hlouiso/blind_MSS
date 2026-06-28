@@ -9,6 +9,7 @@ src/*.su
 .n_stamp_*
 src/.n_stamp_*
 bench_bin
+bench_pipeline_bin
 src/test_*
 src/tests/test_*
 !src/tests/test_*.c
