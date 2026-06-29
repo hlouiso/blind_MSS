@@ -49,7 +49,7 @@ KKW proof (`shared.h`, selectable at build time with `N=<N>`):
 - `NUM_ROUNDS` (`τ`) — online rounds included in the proof; drives prove/verify cost
 - `M_KKW` (`M`) — total preprocessing instances; drives pass-1 cost (offline section ≈ negligible)
 - `INPUT_LEN = 2762` — witness byte length
-- `ySize = 151776` — nonlinear-gate count in the SHA-256/WOTS/XMSS circuit
+- `ySize = 152504` — nonlinear-gate count in the SHA-256/WOTS/XMSS circuit
 
 ### Soundness parameters (128-bit security, ROM)
 
@@ -143,7 +143,7 @@ The proof is large because the online section dominates: each of the τ rounds s
 proof ≈ header(20) + nonce(32) + h*(32) + (M−τ)·96          [offline, tiny]
        + τ · (sizeof(a) + (N−1)·SEED_SIZE + INPUT_LEN + aux + 2·aux)
        ≈ τ · 3·ySize·4  [dominant term]
-       = 65 · 3 · 151776 · 4  ≈  119 MB  [upper bound; conditional terms reduce it]
+       = 65 · 3 · 152504 · 4  ≈  119 MB  [upper bound; conditional terms reduce it]
 ```
 
 Larger N reduces τ (fewer rounds) → smaller proof, at the cost of more parties per circuit evaluation and a larger M (more preprocessing instances). The offline section grows by only tens of KB.

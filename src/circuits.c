@@ -187,30 +187,35 @@ void building_views(
         mpc_thash(tapes, aux, da_db_all, gc, NULL, 0, sec, HM_COM_BYTES, NULL, 0, out, 32);
     }
 
-    /* ── (2) mh = SHA256(pk_seed ‖ 0x02 ‖ nonce ‖ d) ── */
+    /* ── (2) mh = SHA256(pk_seed ‖ 0x02 ‖ epoch ‖ nonce ‖ d) ── */
     unsigned char mh[N_PARTIES][32];
     {
         unsigned char prefix[XMSS_PK_SEED_BYTES + 1];
         memcpy(prefix, pk_seed, XMSS_PK_SEED_BYTES);
         prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_MESSAGE;
-        unsigned char secbuf[N_PARTIES][XMSS_NONCE_LEN + 32];
+        unsigned char secbuf[N_PARTIES][XMSS_EPOCH_BYTES + XMSS_NONCE_LEN + 32];
         unsigned char *sec[N_PARTIES], *out[N_PARTIES];
         for (int i = 0; i < N_PARTIES; i++) {
-            memcpy(secbuf[i], x_shares[i] + W_NONCE_OFF, XMSS_NONCE_LEN);
-            memcpy(secbuf[i] + XMSS_NONCE_LEN, dsh[i], 32);
+            memcpy(secbuf[i], x_shares[i] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+            memcpy(secbuf[i] + XMSS_EPOCH_BYTES, x_shares[i] + W_NONCE_OFF, XMSS_NONCE_LEN);
+            memcpy(secbuf[i] + XMSS_EPOCH_BYTES + XMSS_NONCE_LEN, dsh[i], 32);
             sec[i] = secbuf[i]; out[i] = mh[i];
         }
         mpc_thash(tapes, aux, da_db_all, gc, prefix, XMSS_PK_SEED_BYTES + 1,
-                  sec, XMSS_NONCE_LEN + 32, NULL, 0, out, 32);
+                  sec, XMSS_EPOCH_BYTES + XMSS_NONCE_LEN + 32, NULL, 0, out, 32);
     }
 
     /* ── (3) WOTS+ chains → pk_hashes ── */
-    unsigned char pkh[N_PARTIES][XMSS_WOTS_LEN * XMSS_NODE_BYTES];
+    unsigned char pkh[N_PARTIES][XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES];
     {
         unsigned char chain_prefix[XMSS_PK_SEED_BYTES + 1];
         memcpy(chain_prefix, pk_seed, XMSS_PK_SEED_BYTES);
         chain_prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_CHAIN;
         const int cpb = 8 / XMSS_COORD_RES_BITS;
+        /* The L-tree leaf hashes pk_seed‖0x01‖epoch‖pk_hashes; reserve the epoch
+         * prefix at the front of pkh so the leaf hash reads it in place. */
+        for (int i = 0; i < N_PARTIES; i++)
+            memcpy(pkh[i], x_shares[i] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
 
         for (int ci = 0; ci < XMSS_WOTS_LEN; ci++) {
             unsigned char x[N_PARTIES][16];
@@ -243,20 +248,26 @@ void building_views(
             for (int stage = 0; stage < XMSS_WOTS_MAX_STEPS; stage++) {
                 unsigned char h[N_PARTIES][16];
                 unsigned char suffix[2] = {(unsigned char)ci, (unsigned char)(stage + 1)};
+                unsigned char xe[N_PARTIES][XMSS_EPOCH_BYTES + XMSS_NODE_BYTES];
                 unsigned char *secp[N_PARTIES], *outp[N_PARTIES];
-                for (int i = 0; i < N_PARTIES; i++) { secp[i] = x[i]; outp[i] = h[i]; }
+                for (int i = 0; i < N_PARTIES; i++) {
+                    memcpy(xe[i], x_shares[i] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+                    memcpy(xe[i] + XMSS_EPOCH_BYTES, x[i], XMSS_NODE_BYTES);
+                    secp[i] = xe[i]; outp[i] = h[i];
+                }
                 mpc_thash(tapes, aux, da_db_all, gc, chain_prefix, XMSS_PK_SEED_BYTES + 1,
-                          secp, XMSS_NODE_BYTES, suffix, 2, outp, 16);
+                          secp, XMSS_EPOCH_BYTES + XMSS_NODE_BYTES, suffix, 2, outp, 16);
                 uint32_t mask[N_PARTIES];
                 mask_from_neg_bit(sels[stage], mask);
                 mpc_mux16(x, h, mask, tapes, aux, da_db_all, gc);
             }
             for (int i = 0; i < N_PARTIES; i++)
-                memcpy(pkh[i] + ci * XMSS_NODE_BYTES, x[i], XMSS_NODE_BYTES);
+                memcpy(pkh[i] + XMSS_EPOCH_BYTES + ci * XMSS_NODE_BYTES, x[i], XMSS_NODE_BYTES);
         }
     }
 
-    /* ── (4) leaf = SHA256(pk_seed ‖ 0x01 ‖ pk_hashes) ── */
+    /* ── (4) leaf = SHA256(pk_seed ‖ 0x01 ‖ epoch ‖ pk_hashes) ──
+     * pkh already carries the epoch prefix (set in (3)). */
     unsigned char node[N_PARTIES][16];
     {
         unsigned char prefix[XMSS_PK_SEED_BYTES + 1];
@@ -265,7 +276,7 @@ void building_views(
         unsigned char *sec[N_PARTIES], *out[N_PARTIES];
         for (int i = 0; i < N_PARTIES; i++) { sec[i] = pkh[i]; out[i] = node[i]; }
         mpc_thash(tapes, aux, da_db_all, gc, prefix, XMSS_PK_SEED_BYTES + 1,
-                  sec, XMSS_WOTS_LEN * XMSS_NODE_BYTES, NULL, 0, out, 16);
+                  sec, XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES, NULL, 0, out, 16);
     }
 
     /* ── (5) XMSS auth-path walk → root ── */
@@ -543,24 +554,29 @@ void verify(
         unsigned char prefix[XMSS_PK_SEED_BYTES + 1];
         memcpy(prefix, pk_seed, XMSS_PK_SEED_BYTES);
         prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_MESSAGE;
-        unsigned char secbuf[N_PARTIES-1][XMSS_NONCE_LEN + 32];
+        unsigned char secbuf[N_PARTIES-1][XMSS_EPOCH_BYTES + XMSS_NONCE_LEN + 32];
         unsigned char *sec[N_PARTIES-1], *out[N_PARTIES-1];
         for (int j = 0; j < N_PARTIES-1; j++) {
-            memcpy(secbuf[j], vx[j] + W_NONCE_OFF, XMSS_NONCE_LEN);
-            memcpy(secbuf[j] + XMSS_NONCE_LEN, dsh[j], 32);
+            memcpy(secbuf[j], vx[j] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+            memcpy(secbuf[j] + XMSS_EPOCH_BYTES, vx[j] + W_NONCE_OFF, XMSS_NONCE_LEN);
+            memcpy(secbuf[j] + XMSS_EPOCH_BYTES + XMSS_NONCE_LEN, dsh[j], 32);
             sec[j] = secbuf[j]; out[j] = mh[j];
         }
         mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc,
-                         prefix, XMSS_PK_SEED_BYTES + 1, sec, XMSS_NONCE_LEN + 32, NULL, 0, out, 32);
+                         prefix, XMSS_PK_SEED_BYTES + 1, sec,
+                         XMSS_EPOCH_BYTES + XMSS_NONCE_LEN + 32, NULL, 0, out, 32);
     }
 
     /* ── (3) WOTS+ chains ── */
-    unsigned char pkh[N_PARTIES-1][XMSS_WOTS_LEN * XMSS_NODE_BYTES];
+    unsigned char pkh[N_PARTIES-1][XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES];
     {
         unsigned char chain_prefix[XMSS_PK_SEED_BYTES + 1];
         memcpy(chain_prefix, pk_seed, XMSS_PK_SEED_BYTES);
         chain_prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_CHAIN;
         const int cpb = 8 / XMSS_COORD_RES_BITS;
+        /* epoch prefix at the front of pkh for the L-tree leaf hash. */
+        for (int j = 0; j < N_PARTIES-1; j++)
+            memcpy(pkh[j], vx[j] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
 
         for (int ci = 0; ci < XMSS_WOTS_LEN; ci++) {
             unsigned char x[N_PARTIES-1][16];
@@ -594,11 +610,16 @@ void verify(
             for (int stage = 0; stage < XMSS_WOTS_MAX_STEPS; stage++) {
                 unsigned char h[N_PARTIES-1][16];
                 unsigned char suffix[2] = {(unsigned char)ci, (unsigned char)(stage + 1)};
+                unsigned char xe[N_PARTIES-1][XMSS_EPOCH_BYTES + XMSS_NODE_BYTES];
                 unsigned char *secp[N_PARTIES-1], *outp[N_PARTIES-1];
-                for (int j = 0; j < N_PARTIES-1; j++) { secp[j] = x[j]; outp[j] = h[j]; }
+                for (int j = 0; j < N_PARTIES-1; j++) {
+                    memcpy(xe[j], vx[j] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+                    memcpy(xe[j] + XMSS_EPOCH_BYTES, x[j], XMSS_NODE_BYTES);
+                    secp[j] = xe[j]; outp[j] = h[j];
+                }
                 mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc,
                                  chain_prefix, XMSS_PK_SEED_BYTES + 1,
-                                 secp, XMSS_NODE_BYTES, suffix, 2, outp, 16);
+                                 secp, XMSS_EPOCH_BYTES + XMSS_NODE_BYTES, suffix, 2, outp, 16);
                 uint32_t mask[N_PARTIES-1];
                 for (int j = 0; j < N_PARTIES-1; j++)
                     mask[j] = 0u - (sels[stage][j] & 1u);
@@ -611,11 +632,11 @@ void verify(
                 mpc_mux16_verify(x, h, mask, tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc);
             }
             for (int j = 0; j < N_PARTIES-1; j++)
-                memcpy(pkh[j] + ci * XMSS_NODE_BYTES, x[j], XMSS_NODE_BYTES);
+                memcpy(pkh[j] + XMSS_EPOCH_BYTES + ci * XMSS_NODE_BYTES, x[j], XMSS_NODE_BYTES);
         }
     }
 
-    /* ── (4) leaf ── */
+    /* ── (4) leaf = SHA256(pk_seed ‖ 0x01 ‖ epoch ‖ pk_hashes) ── */
     unsigned char node[N_PARTIES-1][16];
     {
         unsigned char prefix[XMSS_PK_SEED_BYTES + 1];
@@ -625,7 +646,7 @@ void verify(
         for (int j = 0; j < N_PARTIES-1; j++) { sec[j] = pkh[j]; out[j] = node[j]; }
         mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, per_party_da_db, &gc,
                          prefix, XMSS_PK_SEED_BYTES + 1,
-                         sec, XMSS_WOTS_LEN * XMSS_NODE_BYTES, NULL, 0, out, 16);
+                         sec, XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES, NULL, 0, out, 16);
     }
 
     /* ── (5) auth-path walk ── */
