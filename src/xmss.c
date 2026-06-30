@@ -49,10 +49,19 @@ static void prf_sk(const uint8_t sk_seed[32], uint32_t leaf, uint32_t j, uint8_t
 
 /* ── Tweaked hashes ───────────────────────────────────────────────────────── */
 
-void xmss_hash_message(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const uint8_t *nonce, size_t nonce_len,
-                       const uint8_t *message, size_t message_len, uint8_t out32[32])
+/* Append the epoch (leaf index) as XMSS_EPOCH_BYTES big-endian bytes.  Big-endian
+ * matches the secret leaf_index witness layout (circuits.h, W_LEAFIDX), so the
+ * in-circuit hashes splice the witness bytes directly. */
+static void put_epoch_be(uint8_t *buf, size_t *o, uint32_t epoch)
 {
-    size_t n = XMSS_PK_SEED_BYTES + 1 + nonce_len + message_len;
+    for (size_t k = 0; k < XMSS_EPOCH_BYTES; k++)
+        buf[(*o)++] = (uint8_t)((epoch >> (8 * (XMSS_EPOCH_BYTES - 1 - k))) & 0xff);
+}
+
+void xmss_hash_message(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch, const uint8_t *nonce,
+                       size_t nonce_len, const uint8_t *message, size_t message_len, uint8_t out32[32])
+{
+    size_t n = XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + nonce_len + message_len;
     uint8_t *buf = malloc(n);
     if (!buf)
     {
@@ -63,6 +72,7 @@ void xmss_hash_message(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const uint8_t 
     memcpy(buf + o, pk_seed, XMSS_PK_SEED_BYTES);
     o += XMSS_PK_SEED_BYTES;
     buf[o++] = XMSS_TWEAK_MESSAGE;
+    put_epoch_be(buf, &o, epoch);
     memcpy(buf + o, nonce, nonce_len);
     o += nonce_len;
     memcpy(buf + o, message, message_len);
@@ -71,14 +81,15 @@ void xmss_hash_message(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const uint8_t 
     free(buf);
 }
 
-void xmss_hash_chain_step(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_node in, uint8_t chain_idx,
-                          uint8_t pos, xmss_node out)
+void xmss_hash_chain_step(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch, const xmss_node in,
+                          uint8_t chain_idx, uint8_t pos, xmss_node out)
 {
-    uint8_t buf[XMSS_PK_SEED_BYTES + 1 + XMSS_NODE_BYTES + 1 + 1];
+    uint8_t buf[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + XMSS_NODE_BYTES + 1 + 1];
     size_t o = 0;
     memcpy(buf + o, pk_seed, XMSS_PK_SEED_BYTES);
     o += XMSS_PK_SEED_BYTES;
     buf[o++] = XMSS_TWEAK_CHAIN;
+    put_epoch_be(buf, &o, epoch);
     memcpy(buf + o, in, XMSS_NODE_BYTES);
     o += XMSS_NODE_BYTES;
     buf[o++] = chain_idx;
@@ -88,8 +99,8 @@ void xmss_hash_chain_step(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_
     memcpy(out, full, XMSS_NODE_BYTES);
 }
 
-void xmss_hash_chain_multi(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_node start, uint8_t chain_idx,
-                           uint8_t start_pos, uint8_t steps, xmss_node out)
+void xmss_hash_chain_multi(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch, const xmss_node start,
+                           uint8_t chain_idx, uint8_t start_pos, uint8_t steps, xmss_node out)
 {
     xmss_node cur;
     memcpy(cur, start, XMSS_NODE_BYTES);
@@ -97,7 +108,7 @@ void xmss_hash_chain_multi(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss
     {
         uint8_t pos = (uint8_t)(start_pos + i + 1);
         xmss_node next;
-        xmss_hash_chain_step(pk_seed, cur, chain_idx, pos, next);
+        xmss_hash_chain_step(pk_seed, epoch, cur, chain_idx, pos, next);
         memcpy(cur, next, XMSS_NODE_BYTES);
     }
     memcpy(out, cur, XMSS_NODE_BYTES);
@@ -123,14 +134,15 @@ void xmss_hash_tree_node(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_n
     memcpy(out, full, XMSS_NODE_BYTES);
 }
 
-void xmss_hash_public_key(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_node pk_hashes[XMSS_WOTS_LEN],
-                          xmss_node out)
+void xmss_hash_public_key(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch,
+                          const xmss_node pk_hashes[XMSS_WOTS_LEN], xmss_node out)
 {
-    uint8_t buf[XMSS_PK_SEED_BYTES + 1 + XMSS_WOTS_LEN * XMSS_NODE_BYTES];
+    uint8_t buf[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES];
     size_t o = 0;
     memcpy(buf + o, pk_seed, XMSS_PK_SEED_BYTES);
     o += XMSS_PK_SEED_BYTES;
     buf[o++] = XMSS_TWEAK_TREE;
+    put_epoch_be(buf, &o, epoch);
     for (int i = 0; i < XMSS_WOTS_LEN; i++)
     {
         memcpy(buf + o, pk_hashes[i], XMSS_NODE_BYTES);
@@ -162,14 +174,14 @@ void xmss_wots_gen_sk(const uint8_t sk_seed[32], uint32_t leaf_index, xmss_node 
         prf_sk(sk_seed, leaf_index, (uint32_t)i, sk_out[i]);
 }
 
-void xmss_wots_pk_from_sk(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_node sk[XMSS_WOTS_LEN],
-                          xmss_node pk_out[XMSS_WOTS_LEN])
+void xmss_wots_pk_from_sk(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch,
+                          const xmss_node sk[XMSS_WOTS_LEN], xmss_node pk_out[XMSS_WOTS_LEN])
 {
     for (int i = 0; i < XMSS_WOTS_LEN; i++)
-        xmss_hash_chain_multi(pk_seed, sk[i], (uint8_t)i, 0, XMSS_WOTS_MAX_STEPS, pk_out[i]);
+        xmss_hash_chain_multi(pk_seed, epoch, sk[i], (uint8_t)i, 0, XMSS_WOTS_MAX_STEPS, pk_out[i]);
 }
 
-void xmss_wots_sign(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_node sk[XMSS_WOTS_LEN],
+void xmss_wots_sign(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch, const xmss_node sk[XMSS_WOTS_LEN],
                     const uint8_t coords[XMSS_WOTS_LEN], xmss_node sig_out[XMSS_WOTS_LEN])
 {
     for (int i = 0; i < XMSS_WOTS_LEN; i++)
@@ -177,12 +189,13 @@ void xmss_wots_sign(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_node s
         if (coords[i] == 0)
             memcpy(sig_out[i], sk[i], XMSS_NODE_BYTES);
         else
-            xmss_hash_chain_multi(pk_seed, sk[i], (uint8_t)i, 0, coords[i], sig_out[i]);
+            xmss_hash_chain_multi(pk_seed, epoch, sk[i], (uint8_t)i, 0, coords[i], sig_out[i]);
     }
 }
 
-void xmss_wots_pk_from_sig(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_node sig[XMSS_WOTS_LEN],
-                           const uint8_t coords[XMSS_WOTS_LEN], xmss_node pk_out[XMSS_WOTS_LEN])
+void xmss_wots_pk_from_sig(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch,
+                           const xmss_node sig[XMSS_WOTS_LEN], const uint8_t coords[XMSS_WOTS_LEN],
+                           xmss_node pk_out[XMSS_WOTS_LEN])
 {
     for (int i = 0; i < XMSS_WOTS_LEN; i++)
     {
@@ -190,7 +203,7 @@ void xmss_wots_pk_from_sig(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss
         if (remaining == 0)
             memcpy(pk_out[i], sig[i], XMSS_NODE_BYTES);
         else
-            xmss_hash_chain_multi(pk_seed, sig[i], (uint8_t)i, coords[i], remaining, pk_out[i]);
+            xmss_hash_chain_multi(pk_seed, epoch, sig[i], (uint8_t)i, coords[i], remaining, pk_out[i]);
     }
 }
 
@@ -223,8 +236,8 @@ static int xmss_build_tree(const uint8_t sk_seed[32], const uint8_t pk_seed[XMSS
         xmss_node sk[XMSS_WOTS_LEN];
         xmss_node pk[XMSS_WOTS_LEN];
         xmss_wots_gen_sk(sk_seed, (uint32_t)l, sk);
-        xmss_wots_pk_from_sk(pk_seed, sk, pk);
-        xmss_hash_public_key(pk_seed, pk, tree[0][l]);
+        xmss_wots_pk_from_sk(pk_seed, (uint32_t)l, sk, pk);
+        xmss_hash_public_key(pk_seed, (uint32_t)l, pk, tree[0][l]);
     }
 
     for (int h = 1; h <= XMSS_H; h++)
@@ -275,9 +288,10 @@ static void xmss_walk_auth_path(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const
     memcpy(root_out, node, XMSS_NODE_BYTES);
 }
 
-/* Grind a random nonce until the codeword coordinates sum to the target. */
-static int grind_nonce(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const uint8_t *message, size_t message_len,
-                       uint8_t nonce_out[XMSS_NONCE_LEN], uint8_t coords_out[XMSS_WOTS_LEN])
+/* Grind a random nonce until the codeword coordinates sum to the target.  The
+ * codeword is epoch-dependent, so the leaf index is bound into the message hash. */
+static int grind_nonce(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch, const uint8_t *message,
+                       size_t message_len, uint8_t nonce_out[XMSS_NONCE_LEN], uint8_t coords_out[XMSS_WOTS_LEN])
 {
     for (uint32_t attempt = 0; attempt < (1u << 20); attempt++)
     {
@@ -285,7 +299,7 @@ static int grind_nonce(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const uint8_t 
         if (RAND_bytes(nonce, XMSS_NONCE_LEN) != 1)
             return 0;
         uint8_t mh[32];
-        xmss_hash_message(pk_seed, nonce, XMSS_NONCE_LEN, message, message_len, mh);
+        xmss_hash_message(pk_seed, epoch, nonce, XMSS_NONCE_LEN, message, message_len, mh);
         uint8_t coords[XMSS_WOTS_LEN];
         xmss_extract_coords(mh, XMSS_WOTS_LEN, XMSS_COORD_RES_BITS, coords);
         int sum = 0;
@@ -305,12 +319,12 @@ int xmss_sign(const uint8_t sk_seed[32], const uint8_t pk_seed[XMSS_PK_SEED_BYTE
               const uint8_t *message, size_t message_len, xmss_sig *out)
 {
     uint8_t coords[XMSS_WOTS_LEN];
-    if (!grind_nonce(pk_seed, message, message_len, out->nonce, coords))
+    if (!grind_nonce(pk_seed, leaf_index, message, message_len, out->nonce, coords))
         return 0;
 
     xmss_node sk[XMSS_WOTS_LEN];
     xmss_wots_gen_sk(sk_seed, leaf_index, sk);
-    xmss_wots_sign(pk_seed, sk, coords, out->sig_hashes);
+    xmss_wots_sign(pk_seed, leaf_index, sk, coords, out->sig_hashes);
 
     xmss_node *tree[XMSS_H + 1];
     if (xmss_build_tree(sk_seed, pk_seed, tree) != 0)
@@ -333,7 +347,7 @@ int xmss_verify(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_node root,
                 size_t message_len, const xmss_sig *sig)
 {
     uint8_t mh[32];
-    xmss_hash_message(pk_seed, sig->nonce, XMSS_NONCE_LEN, message, message_len, mh);
+    xmss_hash_message(pk_seed, sig->leaf_index, sig->nonce, XMSS_NONCE_LEN, message, message_len, mh);
     uint8_t coords[XMSS_WOTS_LEN];
     xmss_extract_coords(mh, XMSS_WOTS_LEN, XMSS_COORD_RES_BITS, coords);
 
@@ -344,10 +358,10 @@ int xmss_verify(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_node root,
         return 0;
 
     xmss_node pk_hashes[XMSS_WOTS_LEN];
-    xmss_wots_pk_from_sig(pk_seed, sig->sig_hashes, coords, pk_hashes);
+    xmss_wots_pk_from_sig(pk_seed, sig->leaf_index, sig->sig_hashes, coords, pk_hashes);
 
     xmss_node leaf;
-    xmss_hash_public_key(pk_seed, pk_hashes, leaf);
+    xmss_hash_public_key(pk_seed, sig->leaf_index, pk_hashes, leaf);
 
     xmss_node computed_root;
     xmss_walk_auth_path(pk_seed, leaf, sig->leaf_index, sig->auth_path, computed_root);

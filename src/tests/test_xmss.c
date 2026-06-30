@@ -43,16 +43,17 @@ int main(void)
     {
         xmss_node sk[XMSS_WOTS_LEN], sig[XMSS_WOTS_LEN], pk_a[XMSS_WOTS_LEN], pk_b[XMSS_WOTS_LEN];
         uint8_t coords[XMSS_WOTS_LEN];
-        xmss_wots_gen_sk(sk_seed, 7, sk);
+        const uint32_t epoch = 7;  /* same leaf for sk-gen and the chain hashing */
+        xmss_wots_gen_sk(sk_seed, epoch, sk);
         for (int i = 0; i < XMSS_WOTS_LEN; i++)
         {
             uint8_t r;
             RAND_bytes(&r, 1);
             coords[i] = r & (uint8_t)(XMSS_WOTS_W - 1);
         }
-        xmss_wots_sign(pk_seed, sk, coords, sig);
-        xmss_wots_pk_from_sig(pk_seed, sig, coords, pk_a);
-        xmss_wots_pk_from_sk(pk_seed, sk, pk_b);
+        xmss_wots_sign(pk_seed, epoch, sk, coords, sig);
+        xmss_wots_pk_from_sig(pk_seed, epoch, sig, coords, pk_a);
+        xmss_wots_pk_from_sk(pk_seed, epoch, sk, pk_b);
         CHECK(memcmp(pk_a, pk_b, sizeof pk_a) == 0, "WOTS+ chain endpoints agree for random coords");
     }
 
@@ -72,7 +73,7 @@ int main(void)
         }
         /* confirm the grind really hit the target sum */
         uint8_t mh[32], coords[XMSS_WOTS_LEN];
-        xmss_hash_message(pk_seed, sig.nonce, XMSS_NONCE_LEN, msg, sizeof msg, mh);
+        xmss_hash_message(pk_seed, sig.leaf_index, sig.nonce, XMSS_NONCE_LEN, msg, sizeof msg, mh);
         xmss_extract_coords(mh, XMSS_WOTS_LEN, XMSS_COORD_RES_BITS, coords);
         int sum = 0;
         for (int i = 0; i < XMSS_WOTS_LEN; i++)

@@ -10,11 +10,11 @@
 #include <string.h>
 /* ySize: number of nonlinear gates (word-level) in one circuit execution.
  * Measured by test_circuit after any parameter change. */
-const int ySize = 151776;
+const int ySize = 152504;
 const int INPUT_LEN = 2762; /* W_END — see circuits.h */
 
 /* TAPE_SIZE = 3 * ySize * 4 (u[], v[], w_raw[] blocks, each ySize uint32_t). */
-const int TAPE_SIZE = 3 * 151776 * 4; /* = 1 821 312 bytes */
+const int TAPE_SIZE = 3 * 152504 * 4; /* = 1 830 048 bytes */
 
 const uint32_t hA[8] = {
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
