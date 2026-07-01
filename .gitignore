@@ -13,3 +13,4 @@ bench_pipeline_bin
 src/test_*
 src/tests/test_*
 !src/tests/test_*.c
+output/*

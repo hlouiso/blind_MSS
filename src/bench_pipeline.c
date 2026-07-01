@@ -101,6 +101,7 @@ int main(void)
     /* Per-phase samples: wall time (ms) and reference cycles (Mcyc). */
     double commit_ms[iters], sign_ms[iters], prove_ms[iters], verify_ms[iters];
     double commit_mc[iters], sign_mc[iters], prove_mc[iters], verify_mc[iters];
+    double proof_mb[iters];
 
     /* One key pair for the whole run (key generation is setup, not measured). */
     unsigned char sk_seed[32], pk_seed[XMSS_PK_SEED_BYTES];
@@ -114,8 +115,7 @@ int main(void)
     pubout[YP_SUM_WORD] = XMSS_TARGET_SUM;
 
     char cpu[128]; cpu_model(cpu, sizeof cpu);
-    fprintf(stderr, "Pipeline benchmark  ·  %s  ·  %d threads  ·  N=%d  ·  %d iterations  ·  msg=%d B\n",
-            cpu, omp_get_max_threads(), N_PARTIES, iters, PIPELINE_MSG_LEN);
+    fprintf(stderr, "N=%d: %d iterations", N_PARTIES, iters);
 
     for (int i = 0; i < iters; i++) {
         struct timespec t0, t1;
@@ -170,6 +170,7 @@ int main(void)
         prove_mc[i] = (double)(c1 - c0) / 1e6;
         if (pok != 0) { fprintf(stderr, "\nkkw_prove failed at iter %d\n", i); fclose(proof); return 1; }
 
+        proof_mb[i] = (double)ftell(proof) / 1e6;   /* size varies with the drawn parties */
         rewind(proof);
 
         /* ── Phase 4: verification ── */
@@ -186,6 +187,8 @@ int main(void)
     }
     fprintf(stderr, "\n\n");
 
+    printf("Pipeline benchmark  ·  %s  ·  %d threads  ·  N=%d  ·  %d iterations  ·  msg=%d B\n\n",
+           cpu, omp_get_max_threads(), N_PARTIES, iters, PIPELINE_MSG_LEN);
     printf("Phase                    | median ms |    avg ms | median Mcyc |   avg Mcyc\n");
     printf("-------------------------+-----------+-----------+-------------+-----------\n");
     struct { const char *name; double *ms, *mc; } rows[] = {
@@ -202,5 +205,8 @@ int main(void)
         printf("%-24s | %9.4f | %9.4f | %11.3f | %9.3f\n",
                rows[k].name, med_ms, avg_ms, med_mc, avg_mc);
     }
+
+    printf("\nProof size: median %.2f MB, average %.2f MB\n",
+           median(proof_mb, iters), average(proof_mb, iters));
     return 0;
 }
