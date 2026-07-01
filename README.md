@@ -19,7 +19,7 @@ Requirements:
 
 ```bash
 make          # build the static library libblindmss.a (default N=4)
-make N=<N>    # build with N ∈ {4, 8, 16, 32, 64, 128, 256}
+make N=<N>    # build with N a multiple of 4 ∈ {4, 8, …, 32} ∪ {64, 128, 256}
 make test     # build and run the test suite
 make bench    # benchmark all N values
 make clean    # remove build products

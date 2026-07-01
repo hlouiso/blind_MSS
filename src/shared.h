@@ -10,7 +10,7 @@
 
 /* ── KKW parameters (ρ=128) ──────────────────────────────────────────────────
  * Override N_PARTIES at build time: make N=4  (or -DN_PARTIES=4).
- * Supported: N ∈ {4, 8, 16, 32, 64, 128, 256}.
+ * Supported: N a multiple of 4 ∈ {4, 8, 12, …, 32} ∪ {64, 128, 256}.
  *
  * M_KKW    : total instances the prover evaluates (preprocessing + online).
  * NUM_ROUNDS: τ — online instances included in the proof.
@@ -39,9 +39,21 @@
 #elif N_PARTIES == 8
 #  define M_KKW      252   /* soundness 2^{-128.05}, τ=44  */
 #  define NUM_ROUNDS  44
+#elif N_PARTIES == 12
+#  define M_KKW      295   /* soundness 2^{-128.02}, τ=37  */
+#  define NUM_ROUNDS  37
 #elif N_PARTIES == 16
 #  define M_KKW      352   /* soundness 2^{-128.00}, τ=33  */
 #  define NUM_ROUNDS  33
+#elif N_PARTIES == 20
+#  define M_KKW      366   /* soundness 2^{-128.00}, τ=31  */
+#  define NUM_ROUNDS  31
+#elif N_PARTIES == 24
+#  define M_KKW      425   /* soundness 2^{-128.03}, τ=29  */
+#  define NUM_ROUNDS  29
+#elif N_PARTIES == 28
+#  define M_KKW      433   /* soundness 2^{-128.01}, τ=28  */
+#  define NUM_ROUNDS  28
 #elif N_PARTIES == 32
 #  define M_KKW      462   /* soundness 2^{-128.03}, τ=27  */
 #  define NUM_ROUNDS  27

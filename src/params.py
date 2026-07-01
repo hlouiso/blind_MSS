@@ -59,7 +59,7 @@ if len(sys.argv) == 4:
     sys.exit(0)
 
 print(f"{'N':>4} {'tau':>4} {'M':>5}  soundness       offline_KB")
-for N in [4, 8, 16, 32, 64, 128, 256]:
+for N in list(range(4, 33, 4)) + [64, 128, 256]:
     tau = math.ceil(128.0 / math.log2(N)) + 1
     M = min_M(N, tau)
     bits = soundness_bits(M, tau, N)
