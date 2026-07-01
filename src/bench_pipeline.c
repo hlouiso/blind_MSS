@@ -39,7 +39,7 @@
 #define PIPELINE_ITERS 100
 #endif
 #ifndef PIPELINE_MSG_LEN
-#define PIPELINE_MSG_LEN 1000
+#define PIPELINE_MSG_LEN 10000   /* 10 kB; size is immaterial to the measured phases */
 #endif
 
 /* ── timing helpers ─────────────────────────────────────────────────────── */
