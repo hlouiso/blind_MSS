@@ -34,6 +34,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 
 #ifndef PIPELINE_ITERS
 #define PIPELINE_ITERS 100
@@ -44,11 +47,26 @@
 
 /* ── timing helpers ─────────────────────────────────────────────────────── */
 
+/* Free-running hardware counter. On x86 this is the TSC (CPU cycles); on
+ * AArch64 (e.g. Apple Silicon) it is the fixed-frequency virtual counter
+ * cntvct_el0 — NOT the CPU clock, so the "cycle" numbers there are counter
+ * ticks, not cycles. The wall-time (ms) columns are the portable, meaningful
+ * metric on every platform. */
 static uint64_t rdtsc(void)
 {
+#if defined(__x86_64__) || defined(__i386__)
     uint32_t lo, hi;
     __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
     return ((uint64_t)hi << 32) | lo;
+#elif defined(__aarch64__)
+    uint64_t v;
+    __asm__ __volatile__ ("mrs %0, cntvct_el0" : "=r"(v));
+    return v;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+#endif
 }
 
 static double elapsed_ms(struct timespec a, struct timespec b)
@@ -78,6 +96,12 @@ static double average(const double *v, int n)
 
 static void cpu_model(char *buf, size_t n)
 {
+#if defined(__APPLE__)
+    /* macOS has no /proc; query the machdep CPU brand string via sysctl. */
+    if (sysctlbyname("machdep.cpu.brand_string", buf, &n, NULL, 0) == 0) return;
+    snprintf(buf, n, "unknown");
+    return;
+#else
     FILE *f = fopen("/proc/cpuinfo", "r");
     if (!f) { snprintf(buf, n, "unknown"); return; }
     char line[256];
@@ -89,6 +113,7 @@ static void cpu_model(char *buf, size_t n)
     }
     fclose(f);
     snprintf(buf, n, "unknown");
+#endif
 }
 
 /* ── main ───────────────────────────────────────────────────────────────── */
