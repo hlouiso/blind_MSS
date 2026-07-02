@@ -47,9 +47,15 @@ ifeq ($(strip $(OPENSSL_LIBS)),)
   endif
 endif
 
-OPT ?= -O2
+OPT ?= -O3
+# Tune for the build machine on Linux/x86 (enables AVX2 etc. for the
+# auto-vectorised gate loops).  Apple clang on arm64 rejects -march=native and
+# already targets NEON+crypto by default, so leave NATIVE empty on Darwin.
+ifeq ($(UNAME_S),Linux)
+  NATIVE ?= -march=native
+endif
 BENCH_ITERS ?= 100
-CFLAGS = $(OPT) $(WARNINGS) $(OMP_CFLAGS) $(OPENSSL_CFLAGS) $(EXTRA_CFLAGS)
+CFLAGS = $(OPT) $(NATIVE) $(WARNINGS) $(OMP_CFLAGS) $(OPENSSL_CFLAGS) $(EXTRA_CFLAGS)
 ifdef N
 CFLAGS += -DN_PARTIES=$(N)
 endif

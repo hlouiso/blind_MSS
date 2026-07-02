@@ -8,6 +8,11 @@
 /* Map slot index j and hidden party e to original party index. */
 static inline int orig(int j, int e) { return (j < e) ? j : j + 1; }
 
+/* SIMD lanes over slots: 4 × uint32 = 128 bits (SSE on x86, NEON on arm64).
+ * NVCHUNK = ceil((N-1)/4); the last chunk is padded with inert zero lanes. */
+typedef uint32_t v4u __attribute__((vector_size(16)));
+#define NVCHUNK ((N_PARTIES - 1 + 3) / 4)
+
 /* ── Linear gates ───────────────────────────────────────────────────────── */
 
 void mpc_XOR_v(uint32_t x[N_PARTIES-1], uint32_t y[N_PARTIES-1],
@@ -79,58 +84,73 @@ void mpc_ADD_verify(uint32_t x[N_PARTIES-1], uint32_t y[N_PARTIES-1],
 {
     int g = *gateCount;
 
-    uint32_t u[N_PARTIES-1], v[N_PARTIES-1], w_tape[N_PARTIES-1];
+    /* Vectorised mirror of mpc_ADD (see MPC_prove_functions.c): the global
+     * broadcast bits da_b/db_b combine the hidden party's msgs_e with the
+     * revealed parties' parity words, and the revealed-parity carry follows
+     * a public recurrence, so the slot dimension is pure SIMD work.  The
+     * N-1 slots are padded to a multiple of 4 with all-zero lanes, which are
+     * inert (zero tape and inputs keep their carry and da/db at zero). */
+    v4u u[NVCHUNK], v[NVCHUNK], w_tape[NVCHUNK], xu[NVCHUNK], yv[NVCHUNK];
+    memset(u, 0, sizeof(u)); memset(v, 0, sizeof(v)); memset(w_tape, 0, sizeof(w_tape));
+    memset(xu, 0, sizeof(xu)); memset(yv, 0, sizeof(yv));
+    uint32_t pu = 0, pv = 0, pw = 0, pxu = 0, pyv = 0;
     for (int j = 0; j < N_PARTIES-1; j++) {
-        u[j]      = tape_u(tapes[j], g);
-        v[j]      = tape_v(tapes[j], g);
-        w_tape[j] = tape_w(tapes[j], g);
+        uint32_t uj = tape_u(tapes[j], g);
+        uint32_t vj = tape_v(tapes[j], g);
+        uint32_t wj = tape_w(tapes[j], g);
+        uint32_t xuj = x[j] ^ uj, yvj = y[j] ^ vj;
+        u[j/4][j%4] = uj; v[j/4][j%4] = vj; w_tape[j/4][j%4] = wj;
+        xu[j/4][j%4] = xuj; yv[j/4][j%4] = yvj;
+        pu ^= uj; pv ^= vj; pw ^= wj;
+        pxu ^= xuj; pyv ^= yvj;
     }
+    const uint32_t corr = aux[g];
+    const uint32_t me_da = msgs_e[2*g], me_db = msgs_e[2*g+1];
+    /* Party 0's correction terms apply to slot 0 iff party 0 is revealed. */
+    const uint32_t has0 = (uint32_t)(e != 0);
+    const v4u lane_s0 = {1u, 0, 0, 0}; /* slot 0 lives in lane 0 of chunk 0 */
 
-    uint32_t c[N_PARTIES-1];
-    for (int j = 0; j < N_PARTIES-1; j++) c[j] = 0;
+    v4u cb[NVCHUNK];  /* carry-bit share at the current position */
+    v4u cw[NVCHUNK];  /* accumulated carry word (bits 1..31) */
+    v4u pda[NVCHUNK], pdb[NVCHUNK];
+    memset(cb, 0, sizeof(cb));
+    memset(cw, 0, sizeof(cw));
+    memset(pda, 0, sizeof(pda));
+    memset(pdb, 0, sizeof(pdb));
 
-    /* Accumulate per-party (da_j, db_j) contributions bit by bit. */
-    uint32_t pda[N_PARTIES-1], pdb[N_PARTIES-1];
-    for (int j = 0; j < N_PARTIES-1; j++) { pda[j] = 0; pdb[j] = 0; }
-
+    uint32_t cgb = 0; /* XOR of the revealed parties' carry-bit shares */
     for (int b = 0; b < 31; b++) {
-        /* Reconstruct bit b of da/db from revealed parties + hidden party's msgs_e. */
-        uint32_t da_b = (msgs_e[2*g] >> b) & 1;
-        uint32_t db_b = (msgs_e[2*g+1] >> b) & 1;
-        for (int j = 0; j < N_PARTIES-1; j++) {
-            /* carry c[j] at bit b is already known from previous iterations. */
-            uint32_t da_j_b = (((x[j] ^ c[j]) >> b) ^ (u[j] >> b)) & 1;
-            uint32_t db_j_b = (((y[j] ^ c[j]) >> b) ^ (v[j] >> b)) & 1;
-            da_b ^= da_j_b;
-            db_b ^= db_j_b;
-            pda[j] |= (da_j_b & 1u) << b;
-            pdb[j] |= (db_j_b & 1u) << b;
+        const uint32_t da_b = ((me_da >> b) & 1) ^ ((pxu >> b) & 1) ^ cgb;
+        const uint32_t db_b = ((me_db >> b) & 1) ^ ((pyv >> b) & 1) ^ cgb;
+        const uint32_t corr_b = (corr >> b) & 1;
+        const uint32_t p0 = (corr_b ^ (da_b & db_b)) & has0;
+
+        for (int c = 0; c < NVCHUNK; c++) {
+            v4u da_j_b = ((xu[c] >> b) & 1) ^ cb[c];
+            v4u db_j_b = ((yv[c] >> b) & 1) ^ cb[c];
+            pda[c] |= da_j_b << b;
+            pdb[c] |= db_j_b << b;
+            v4u and_out = ((w_tape[c] >> b) & 1)
+                        ^ (da_b & ((v[c] >> b) & 1))
+                        ^ (db_b & ((u[c] >> b) & 1));
+            if (c == 0) and_out ^= p0 & lane_s0;
+            cb[c] ^= and_out;
+            cw[c] |= cb[c] << (b + 1);
         }
 
-        for (int j = 0; j < N_PARTIES-1; j++) {
-            int o = orig(j, e);
-            uint32_t u_b = (u[j] >> b) & 1;
-            uint32_t v_b = (v[j] >> b) & 1;
-            uint32_t corr_b = (aux[g] >> b) & 1;
-            uint32_t w_b = (w_tape[j] >> b) & 1;
-            if (o == 0) w_b ^= corr_b;
-
-            uint32_t and_out = w_b ^ (da_b & v_b) ^ (db_b & u_b);
-            if (o == 0) and_out ^= da_b & db_b;
-
-            uint32_t old_c = (c[j] >> b) & 1;
-            uint32_t new_c = and_out ^ old_c;
-            if (b + 1 < 32)
-                c[j] = (c[j] & ~(1u << (b+1))) | (new_c << (b+1));
-        }
+        /* Public recurrence on the revealed parties' parity words. */
+        cgb ^= ((pw >> b) & 1)
+             ^ (da_b & ((pv >> b) & 1))
+             ^ (db_b & ((pu >> b) & 1))
+             ^ (has0 & (corr_b ^ (da_b & db_b)));
     }
 
-    for (int j = 0; j < N_PARTIES-1; j++) z[j] = x[j] ^ y[j] ^ c[j];
+    for (int j = 0; j < N_PARTIES-1; j++) z[j] = x[j] ^ y[j] ^ cw[j/4][j%4];
 
     if (per_party_da_db) {
         for (int j = 0; j < N_PARTIES-1; j++) {
-            per_party_da_db[(size_t)j * 2 * ySize + (size_t)(2*g)  ] = pda[j];
-            per_party_da_db[(size_t)j * 2 * ySize + (size_t)(2*g+1)] = pdb[j];
+            per_party_da_db[(size_t)j * 2 * ySize + (size_t)(2*g)  ] = pda[j/4][j%4];
+            per_party_da_db[(size_t)j * 2 * ySize + (size_t)(2*g+1)] = pdb[j/4][j%4];
         }
     }
     (*gateCount)++;

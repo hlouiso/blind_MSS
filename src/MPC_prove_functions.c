@@ -78,6 +78,12 @@ void mpc_AND(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
 /* Each ADD uses ONE gate slot (one u/v/w triple per party, 32 bits wide).
  * Carry propagation uses bit b of the word-triple for carry bit b. */
 
+/* SIMD lanes over parties: 4 × uint32 = 128 bits (SSE on x86, NEON on arm64).
+ * GCC/Clang vector extensions — portable, no per-ISA intrinsics. */
+typedef uint32_t v4u __attribute__((vector_size(16)));
+#define NCHUNK (N_PARTIES / 4)
+_Static_assert(N_PARTIES % 4 == 0, "vectorised gates require N_PARTIES % 4 == 0");
+
 void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES],
              unsigned char *tapes[N_PARTIES], uint32_t *aux,
              uint32_t *da_db_all, int *gateCount)
@@ -85,77 +91,75 @@ void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
     int g = *gateCount;
     if (g_gate_type_rec) g_gate_type_rec[g] = 1; /* ADD gate */
 
-    uint32_t u[N_PARTIES], v[N_PARTIES], w[N_PARTIES];
+    /* Vectorised reformulation of the bit-serial Beaver carry.  Produces
+     * bit-identical (aux, da/db, z) to the reference version:
+     *   - all 31 corrections at once: corr = (XOR u AND XOR v) XOR (XOR w);
+     *   - the global broadcast bits da_b/db_b come from the parity words
+     *     pxu = XOR_i (x_i^u_i), pyv = XOR_i (y_i^v_i) and the global carry,
+     *     removing the per-bit reduction over parties;
+     *   - the global carry itself follows the public recurrence on parities,
+     *     so the party dimension is pure data-parallel SIMD work. */
+    v4u u[NCHUNK], v[NCHUNK], w[NCHUNK], xu[NCHUNK], yv[NCHUNK];
+    uint32_t pu = 0, pv = 0, pw = 0, pxu = 0, pyv = 0;
     for (int i = 0; i < N_PARTIES; i++) {
-        u[i] = tape_u(tapes[i], g);
-        v[i] = tape_v(tapes[i], g);
-        w[i] = tape_w(tapes[i], g);
+        uint32_t ui = tape_u(tapes[i], g);
+        uint32_t vi = tape_v(tapes[i], g);
+        uint32_t wi = tape_w(tapes[i], g);
+        uint32_t xui = x[i] ^ ui, yvi = y[i] ^ vi;
+        u[i/4][i%4] = ui; v[i/4][i%4] = vi; w[i/4][i%4] = wi;
+        xu[i/4][i%4] = xui; yv[i/4][i%4] = yvi;
+        pu ^= ui; pv ^= vi; pw ^= wi;
+        pxu ^= xui; pyv ^= yvi;
     }
+    const uint32_t corr = (pu & pv) ^ pw; /* bits 0..30 used */
 
-    /* Carry shares: c[i][bit b] = party i's share of carry into position b+1. */
-    uint32_t c[N_PARTIES];
-    memset(c, 0, sizeof(c));
-
-    /* Per-party accumulated (da_i, db_i) words (one bit per iteration). */
-    uint32_t pda[N_PARTIES], pdb[N_PARTIES];
+    v4u cb[NCHUNK];  /* carry-bit share at the current position */
+    v4u cw[NCHUNK];  /* accumulated carry word (bits 1..31) */
+    v4u pda[NCHUNK], pdb[NCHUNK];
+    memset(cb, 0, sizeof(cb));
+    memset(cw, 0, sizeof(cw));
     memset(pda, 0, sizeof(pda));
     memset(pdb, 0, sizeof(pdb));
+    const v4u lane_p0 = {1u, 0, 0, 0}; /* party 0 lives in lane 0 of chunk 0 */
 
-    uint32_t aux_word = 0;
-
+    uint32_t cgb = 0; /* global carry bit = XOR_i cb[i] */
     for (int b = 0; b < 31; b++) {
-        /* Each party's inputs to carry AND: a_b = (x[i] XOR c[i]) >> b & 1,
-         * similarly b_b.  Triple bits taken from bit b of u[i]/v[i]/w[i]. */
-        uint32_t u_b_xor = 0, v_b_xor = 0, w_b_xor = 0;
-        for (int i = 0; i < N_PARTIES; i++) {
-            u_b_xor ^= (u[i] >> b) & 1;
-            v_b_xor ^= (v[i] >> b) & 1;
-            w_b_xor ^= (w[i] >> b) & 1;
+        const uint32_t da_b = ((pxu >> b) & 1) ^ cgb;
+        const uint32_t db_b = ((pyv >> b) & 1) ^ cgb;
+        const uint32_t corr_b = (corr >> b) & 1;
+        /* Party 0's extra term: correction word plus the public da·db. */
+        const uint32_t p0 = corr_b ^ (da_b & db_b);
+
+        for (int c = 0; c < NCHUNK; c++) {
+            v4u da_i_b = ((xu[c] >> b) & 1) ^ cb[c];
+            v4u db_i_b = ((yv[c] >> b) & 1) ^ cb[c];
+            pda[c] |= da_i_b << b;
+            pdb[c] |= db_i_b << b;
+            v4u and_out = ((w[c] >> b) & 1)
+                        ^ (da_b & ((v[c] >> b) & 1))
+                        ^ (db_b & ((u[c] >> b) & 1));
+            if (c == 0) and_out ^= p0 & lane_p0;
+            cb[c] ^= and_out; /* carry share for bit b+1 */
+            cw[c] |= cb[c] << (b + 1);
         }
-        uint32_t corr_b = (u_b_xor & v_b_xor) ^ w_b_xor;
-        aux_word |= (corr_b & 1u) << b;
 
-        uint32_t da_b = 0, db_b = 0;
-        for (int i = 0; i < N_PARTIES; i++) {
-            uint32_t a_b = ((x[i] ^ c[i]) >> b) & 1;
-            uint32_t b_b = ((y[i] ^ c[i]) >> b) & 1;
-            uint32_t da_i_b = a_b ^ ((u[i] >> b) & 1);
-            uint32_t db_i_b = b_b ^ ((v[i] >> b) & 1);
-            da_b ^= da_i_b;
-            db_b ^= db_i_b;
-            pda[i] |= (da_i_b & 1u) << b;
-            pdb[i] |= (db_i_b & 1u) << b;
-        }
-        da_b &= 1; db_b &= 1;
-
-        /* Compute carry shares for bit b+1. */
-        for (int i = 0; i < N_PARTIES; i++) {
-            uint32_t u_b = (u[i] >> b) & 1;
-            uint32_t v_b = (v[i] >> b) & 1;
-            uint32_t w_b = (w[i] >> b) & 1;
-            if (i == 0) w_b ^= corr_b;
-
-            uint32_t and_out = w_b ^ (da_b & v_b) ^ (db_b & u_b);
-            if (i == 0) and_out ^= da_b & db_b;
-
-            /* carry[b+1]_i = and_out XOR carry[b]_i */
-            uint32_t old_c = (c[i] >> b) & 1;
-            uint32_t new_c = and_out ^ old_c;
-            if (b + 1 < 32)
-                c[i] = (c[i] & ~(1u << (b+1))) | (new_c << (b+1));
-        }
+        /* Public carry recurrence on the parity words. */
+        cgb ^= ((pw >> b) & 1) ^ corr_b
+             ^ (da_b & ((pv >> b) & 1))
+             ^ (db_b & ((pu >> b) & 1))
+             ^ (da_b & db_b);
     }
 
-    for (int i = 0; i < N_PARTIES; i++) z[i] = x[i] ^ y[i] ^ c[i];
+    for (int i = 0; i < N_PARTIES; i++) z[i] = x[i] ^ y[i] ^ cw[i/4][i%4];
 
     if (da_db_all) {
         for (int i = 0; i < N_PARTIES; i++) {
-            da_db_all[(size_t)i * 2 * ySize + (size_t)(2*g)  ] = pda[i];
-            da_db_all[(size_t)i * 2 * ySize + (size_t)(2*g+1)] = pdb[i];
+            da_db_all[(size_t)i * 2 * ySize + (size_t)(2*g)  ] = pda[i/4][i%4];
+            da_db_all[(size_t)i * 2 * ySize + (size_t)(2*g+1)] = pdb[i/4][i%4];
         }
     }
 
-    aux[g] = aux_word;
+    aux[g] = corr & 0x7FFFFFFFu; /* mpc_ADD only uses carry bits 0..30 */
     (*gateCount)++;
 }
 
