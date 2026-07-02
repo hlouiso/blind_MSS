@@ -45,14 +45,12 @@ static void aes_ctr_expand(const unsigned char seed[SEED_SIZE],
     if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, seed, iv) != 1) {
         EVP_CIPHER_CTX_free(ctx); memset(out, 0, outlen); return;
     }
-    unsigned char zeros[64] = {0};
-    size_t offset = 0;
+    /* CTR keystream = encryption of zeros; one in-place update over the whole
+     * buffer keeps OpenSSL on its fast path (the previous 64-byte loop paid
+     * per-call overhead ~28k times per tape). */
+    memset(out, 0, outlen);
     int outl = 0;
-    while (offset < outlen) {
-        size_t chunk = (outlen - offset < 64) ? (outlen - offset) : 64;
-        EVP_EncryptUpdate(ctx, out + offset, &outl, zeros, (int)chunk);
-        offset += chunk;
-    }
+    EVP_EncryptUpdate(ctx, out, &outl, out, (int)outlen);
     EVP_CIPHER_CTX_free(ctx);
 }
 
