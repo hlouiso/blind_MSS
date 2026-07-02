@@ -108,41 +108,36 @@ void mpc_ADD_verify(uint32_t x[N_PARTIES-1], uint32_t y[N_PARTIES-1],
     const uint32_t me_da = msgs_e[2*g], me_db = msgs_e[2*g+1];
     /* Party 0's correction terms apply to slot 0 iff party 0 is revealed. */
     const uint32_t has0 = (uint32_t)(e != 0);
-    const v4u lane_s0 = {1u, 0, 0, 0}; /* slot 0 lives in lane 0 of chunk 0 */
 
-    v4u cb[NVCHUNK];  /* carry-bit share at the current position */
-    v4u cw[NVCHUNK];  /* accumulated carry word (bits 1..31) */
-    v4u pda[NVCHUNK], pdb[NVCHUNK];
-    memset(cb, 0, sizeof(cb));
-    memset(cw, 0, sizeof(cw));
-    memset(pda, 0, sizeof(pda));
-    memset(pdb, 0, sizeof(pdb));
-
-    uint32_t cgb = 0; /* XOR of the revealed parties' carry-bit shares */
+    /* Reconstruct the broadcast words DA/DB with a scalar bit recurrence
+     * (the verifier lacks the hidden party, so the prover's real-addition
+     * shortcut does not apply): DA_b combines msgs_e with the revealed
+     * parties' parity words and their carry parity, which itself follows
+     * the public prefix recurrence crw_{b+1} = crw_b ^ gao_b. */
+    uint32_t DA = 0, DB = 0, crw_b = 0;
     for (int b = 0; b < 31; b++) {
-        const uint32_t da_b = ((me_da >> b) & 1) ^ ((pxu >> b) & 1) ^ cgb;
-        const uint32_t db_b = ((me_db >> b) & 1) ^ ((pyv >> b) & 1) ^ cgb;
-        const uint32_t corr_b = (corr >> b) & 1;
-        const uint32_t p0 = (corr_b ^ (da_b & db_b)) & has0;
+        uint32_t da_b = ((me_da >> b) ^ (pxu >> b) ^ crw_b) & 1;
+        uint32_t db_b = ((me_db >> b) ^ (pyv >> b) ^ crw_b) & 1;
+        DA |= da_b << b;
+        DB |= db_b << b;
+        uint32_t gao = ((pw >> b) & 1)
+                     ^ (da_b & ((pv >> b) & 1))
+                     ^ (db_b & ((pu >> b) & 1))
+                     ^ (has0 & (((corr >> b) & 1) ^ (da_b & db_b)));
+        crw_b ^= gao;
+    }
+    const uint32_t p0w = (corr ^ (DA & DB)) & (0u - has0);
 
-        for (int c = 0; c < NVCHUNK; c++) {
-            v4u da_j_b = ((xu[c] >> b) & 1) ^ cb[c];
-            v4u db_j_b = ((yv[c] >> b) & 1) ^ cb[c];
-            pda[c] |= da_j_b << b;
-            pdb[c] |= db_j_b << b;
-            v4u and_out = ((w_tape[c] >> b) & 1)
-                        ^ (da_b & ((v[c] >> b) & 1))
-                        ^ (db_b & ((u[c] >> b) & 1));
-            if (c == 0) and_out ^= p0 & lane_s0;
-            cb[c] ^= and_out;
-            cw[c] |= cb[c] << (b + 1);
-        }
-
-        /* Public recurrence on the revealed parties' parity words. */
-        cgb ^= ((pw >> b) & 1)
-             ^ (da_b & ((pv >> b) & 1))
-             ^ (db_b & ((pu >> b) & 1))
-             ^ (has0 & (corr_b ^ (da_b & db_b)));
+    /* Word-parallel per-slot part (see mpc_ADD): each slot's carry word is
+     * the shifted prefix-XOR of its whole-word AND outputs. */
+    v4u cw[NVCHUNK], pda[NVCHUNK], pdb[NVCHUNK];
+    for (int c = 0; c < NVCHUNK; c++) {
+        v4u ao = w_tape[c] ^ (DA & v[c]) ^ (DB & u[c]);
+        if (c == 0) ao[0] ^= p0w;
+        ao ^= ao << 1; ao ^= ao << 2; ao ^= ao << 4; ao ^= ao << 8; ao ^= ao << 16;
+        cw[c] = ao << 1;
+        pda[c] = (xu[c] ^ cw[c]) & 0x7FFFFFFFu;
+        pdb[c] = (yv[c] ^ cw[c]) & 0x7FFFFFFFu;
     }
 
     for (int j = 0; j < N_PARTIES-1; j++) z[j] = x[j] ^ y[j] ^ cw[j/4][j%4];

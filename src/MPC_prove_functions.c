@@ -113,41 +113,30 @@ void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]
     }
     const uint32_t corr = (pu & pv) ^ pw; /* bits 0..30 used */
 
-    v4u cb[NCHUNK];  /* carry-bit share at the current position */
-    v4u cw[NCHUNK];  /* accumulated carry word (bits 1..31) */
-    v4u pda[NCHUNK], pdb[NCHUNK];
-    memset(cb, 0, sizeof(cb));
-    memset(cw, 0, sizeof(cw));
-    memset(pda, 0, sizeof(pda));
-    memset(pdb, 0, sizeof(pdb));
-    const v4u lane_p0 = {1u, 0, 0, 0}; /* party 0 lives in lane 0 of chunk 0 */
+    /* Word-parallel carry computation — no per-bit loop:
+     *   - The global carry word is that of the REAL addition of the
+     *     reconstructed operands xg = XOR_i x_i, yg = XOR_i y_i (the MPC
+     *     recurrence c_{b+1} = ((xg^c)(yg^c))_b ^ c_b is the textbook carry
+     *     recurrence), so cg = (xg+yg) ^ xg ^ yg in one machine add.
+     *   - Given the broadcast words DA = pxu^cg, DB = pyv^cg, each party's
+     *     AND outputs are whole-word expressions, and its carry word is the
+     *     prefix-XOR of them (c_{b+1} = XOR_{k<=b} ao_k), computed with the
+     *     log2 shift trick — 5 shift/XOR pairs per lane. */
+    const uint32_t xg = pxu ^ pu, yg = pyv ^ pv;
+    const uint32_t cg = (xg + yg) ^ xg ^ yg;      /* global carry word */
+    const uint32_t DA = pxu ^ cg, DB = pyv ^ cg;  /* broadcast words */
+    const uint32_t p0w = corr ^ (DA & DB);        /* party 0's extra term */
 
-    uint32_t cgb = 0; /* global carry bit = XOR_i cb[i] */
-    for (int b = 0; b < 31; b++) {
-        const uint32_t da_b = ((pxu >> b) & 1) ^ cgb;
-        const uint32_t db_b = ((pyv >> b) & 1) ^ cgb;
-        const uint32_t corr_b = (corr >> b) & 1;
-        /* Party 0's extra term: correction word plus the public da·db. */
-        const uint32_t p0 = corr_b ^ (da_b & db_b);
-
-        for (int c = 0; c < NCHUNK; c++) {
-            v4u da_i_b = ((xu[c] >> b) & 1) ^ cb[c];
-            v4u db_i_b = ((yv[c] >> b) & 1) ^ cb[c];
-            pda[c] |= da_i_b << b;
-            pdb[c] |= db_i_b << b;
-            v4u and_out = ((w[c] >> b) & 1)
-                        ^ (da_b & ((v[c] >> b) & 1))
-                        ^ (db_b & ((u[c] >> b) & 1));
-            if (c == 0) and_out ^= p0 & lane_p0;
-            cb[c] ^= and_out; /* carry share for bit b+1 */
-            cw[c] |= cb[c] << (b + 1);
-        }
-
-        /* Public carry recurrence on the parity words. */
-        cgb ^= ((pw >> b) & 1) ^ corr_b
-             ^ (da_b & ((pv >> b) & 1))
-             ^ (db_b & ((pu >> b) & 1))
-             ^ (da_b & db_b);
+    v4u cw[NCHUNK], pda[NCHUNK], pdb[NCHUNK];
+    for (int c = 0; c < NCHUNK; c++) {
+        v4u ao = w[c] ^ (DA & v[c]) ^ (DB & u[c]);
+        if (c == 0) ao[0] ^= p0w;
+        /* prefix-XOR from the LSB, then shift: bit b+1 = XOR of ao[0..b]. */
+        ao ^= ao << 1; ao ^= ao << 2; ao ^= ao << 4; ao ^= ao << 8; ao ^= ao << 16;
+        cw[c] = ao << 1;
+        /* da_i/db_i only carry bits 0..30 (bit 31 has no carry gate). */
+        pda[c] = (xu[c] ^ cw[c]) & 0x7FFFFFFFu;
+        pdb[c] = (yv[c] ^ cw[c]) & 0x7FFFFFFFu;
     }
 
     for (int i = 0; i < N_PARTIES; i++) z[i] = x[i] ^ y[i] ^ cw[i/4][i%4];
