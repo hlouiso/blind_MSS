@@ -733,14 +733,6 @@ void verify(
         if (sum[j] != a_struct->yp[o][YP_SUM_WORD]) { *error = true; }
     }
 
-    /* ── Check commitments for each revealed party ── */
-    for (int j = 0; j < N_PARTIES-1; j++) {
-        int o = (j < e) ? j : j + 1;
-        unsigned char hash[32];
-        H_com(z_proof->ke[j], vx[j], a_struct->yp[o], hash);
-        if (memcmp(a_struct->h[o], hash, 32) != 0) { *error = true; }
-    }
-
     /* ── KKW Trou 2: verify h'_j = H(da_db_all) ── */
     {
         unsigned char h_prime_check[32];

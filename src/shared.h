@@ -89,10 +89,14 @@ extern const uint32_t hA[8];
 extern const uint32_t k[64];
 
 /* ── Per-round commitment data ─────────────────────────────────────────── */
+/* Everything the verifier needs is bound in h* before the challenge:
+ *   seeds+aux via h_j, broadcasts (hence x-shares) via h'_j, yp via h_out_j.
+ * A per-party online commitment H(seed||x||yp) would be redundant: the
+ * verifier recomputes every input to it from proof data, so a prover can
+ * always satisfy it and it adds no binding beyond h_j/h'/h_out. */
 typedef struct
 {
     uint32_t yp[N_PARTIES][8];      /* circuit output shares */
-    unsigned char h[N_PARTIES][32]; /* com_i = H_com(seed_i || x_i || yp_i); h[e] not in proof */
     /* h'_j = H2(broadcast || msgs_0 || … || msgs_{N-1}).
      * Committed in h* = H(H(h_j), H(h'_j)) before challenge derivation. */
     unsigned char h_prime[32];
@@ -177,10 +181,6 @@ void kkw_fiat_shamir(const unsigned char msg[32], const uint32_t pubout[8],
 
 /** Single-shot SHA-256. Returns 1 on success. */
 int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32]);
-
-/** Commit: H(seed || x[INPUT_LEN] || yp[8] as 32 BE bytes). */
-void H_com(const unsigned char seed[SEED_SIZE], const unsigned char *x,
-           const uint32_t yp[8], unsigned char hash[32]);
 
 /**
  * Legacy Fiat–Shamir (single-level, used by test_roundtrip H3 range check).

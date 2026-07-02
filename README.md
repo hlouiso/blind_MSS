@@ -95,7 +95,7 @@ are the API. The full flow is shown in [`src/tests/test_e2e.c`](src/tests/test_e
 
 The proof is a byte stream (a `FILE *`, e.g. an on-disk file or `tmpfile()`), so
 it can be stored or sent over a wire between the client and the verifier. Its
-format is `"KKW1"` magic (4 B) + header (N, M, τ, ySize as uint32_t LE, 16 B) +
+format is `"KKW2"` magic (4 B) + header (N, M, τ, ySize as uint32_t LE, 16 B) +
 nonce (32 B) + h\* (32 B) + offline section ((M−τ) × 96 B) + online section
 (τ rounds). A verifier built for a different N rejects it on the header check.
 

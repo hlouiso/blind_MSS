@@ -129,9 +129,6 @@ static void test_single_round(void)
     }
     CHECK(out_ok, "prover output XOR == pubout");
 
-    for (int p = 0; p < N_PARTIES; p++)
-        H_com(seeds[p], x_shares[p], A.yp[p], A.h[p]); /* h[e] unused in proof but needed by verify() */
-
     int test_e[] = { 0, N_PARTIES - 1 };
     for (int ti = 0; ti < 2; ti++) {
         int e = test_e[ti];

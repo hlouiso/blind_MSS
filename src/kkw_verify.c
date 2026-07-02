@@ -21,7 +21,7 @@ int kkw_verify(FILE *proof,
         if (fread(magic, 4, 1, proof) != 1 || fread(hdr, sizeof(hdr), 1, proof) != 1) {
             fprintf(stderr, "kkw_verify: read error (header)\n"); return -1;
         }
-        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='1') {
+        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='2') {
             fprintf(stderr, "kkw_verify: bad magic\n"); return -1;
         }
         if (hdr[0]!=(uint32_t)N_PARTIES || hdr[1]!=(uint32_t)M_KKW ||
@@ -49,13 +49,18 @@ int kkw_verify(FILE *proof,
     memset(in_C, 0, sizeof(in_C));
     for (int k = 0; k < NUM_ROUNDS; k++) in_C[C_out[k]] = true;
 
-    unsigned char h_j_all[M_KKW][32];
-    unsigned char h_prime_all[M_KKW][32];
-    unsigned char h_out_all[M_KKW][32];
+    /* Heap block for the four M×32 tables (h_j, h', h_out, seed*): up to
+     * ~230 KB at N=256, too large to keep on the stack. */
+    unsigned char *hbuf = malloc((size_t)4 * M_KKW * 32);
+    if (!hbuf) { fprintf(stderr, "kkw_verify: OOM\n"); return -1; }
+    unsigned char (*h_j_all)[32]     = (unsigned char (*)[32])hbuf;
+    unsigned char (*h_prime_all)[32] = (unsigned char (*)[32])(hbuf + (size_t)M_KKW * 32);
+    unsigned char (*h_out_all)[32]   = (unsigned char (*)[32])(hbuf + (size_t)2 * M_KKW * 32);
+    unsigned char (*seed_star_buf)[SEED_SIZE] =
+        (unsigned char (*)[SEED_SIZE])(hbuf + (size_t)3 * M_KKW * 32);
 
     /* ── Preprocessing check ─────────────────────────────────────────────── */
     /* Pass 1: read offline data sequentially (fread is not thread-safe). */
-    unsigned char seed_star_buf[M_KKW][SEED_SIZE];
     bool preproc_error = false;
     for (int j = 0; j < M_KKW; j++) {
         if (in_C[j]) continue;
@@ -68,18 +73,18 @@ int kkw_verify(FILE *proof,
         }
         memcpy(h_prime_all[j], h_prime_j, 32);
     }
-    if (preproc_error) return -1;
+    if (preproc_error) { free(hbuf); return -1; }
 
     /* Pass 2: parallelise expand+aux+commit across offline instances. */
     int nthreads = omp_get_max_threads();
     uint32_t **aux_arr = calloc((size_t)nthreads, sizeof(uint32_t *));
-    if (!aux_arr) { fprintf(stderr, "kkw_verify: OOM\n"); return -1; }
+    if (!aux_arr) { fprintf(stderr, "kkw_verify: OOM\n"); free(hbuf); return -1; }
     for (int t = 0; t < nthreads; t++) {
         aux_arr[t] = malloc((size_t)ySize * sizeof(uint32_t));
         if (!aux_arr[t]) {
             for (int u = 0; u < t; u++) free(aux_arr[u]);
             free(aux_arr);
-            fprintf(stderr, "kkw_verify: OOM\n"); return -1;
+            fprintf(stderr, "kkw_verify: OOM\n"); free(hbuf); return -1;
         }
     }
 
@@ -237,6 +242,7 @@ int kkw_verify(FILE *proof,
         free(as[k]);
         if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
+    free(hbuf);
     return 0;
 
 free_and_fail:
@@ -244,5 +250,6 @@ free_and_fail:
         free(as[k]);
         if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
+    free(hbuf);
     return -1;
 }

@@ -320,32 +320,6 @@ int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32])
     return ok;
 }
 
-void H_com(const unsigned char seed[SEED_SIZE],
-           const unsigned char *x,
-           const uint32_t yp[8],
-           unsigned char hash[32])
-{
-    /* Encode yp as 32 big-endian bytes. */
-    unsigned char yp_bytes[32];
-    for (int i = 0; i < 8; i++) {
-        yp_bytes[i*4+0] = (unsigned char)(yp[i] >> 24);
-        yp_bytes[i*4+1] = (unsigned char)(yp[i] >> 16);
-        yp_bytes[i*4+2] = (unsigned char)(yp[i] >>  8);
-        yp_bytes[i*4+3] = (unsigned char)(yp[i]);
-    }
-
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) { memset(hash, 0, 32); return; }
-    unsigned int outl = 0;
-    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, seed, SEED_SIZE) == 1 &&
-             EVP_DigestUpdate(ctx, x, (size_t)INPUT_LEN) == 1 &&
-             EVP_DigestUpdate(ctx, yp_bytes, 32) == 1 &&
-             EVP_DigestFinal_ex(ctx, hash, &outl) == 1;
-    EVP_MD_CTX_free(ctx);
-    if (!ok) memset(hash, 0, 32);
-}
-
 /* ── KKW online-transcript helpers ─────────────────────────────────────── */
 
 void compute_h_prime(const uint32_t *da_db_all, unsigned char h_prime[32])

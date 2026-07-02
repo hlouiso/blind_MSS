@@ -79,7 +79,7 @@ int kkw_prove(const unsigned char *input,
     for (int j = 0; j < M_KKW; j++) {
         if (RAND_bytes(seed_stars[j], SEED_SIZE) != 1) {
             fprintf(stderr, "kkw_prove: RAND_bytes failed\n");
-            free(seed_stars); free(h_j_all); free(h_prime_all);
+            free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
             return -1;
         }
     }
@@ -141,7 +141,7 @@ int kkw_prove(const unsigned char *input,
 
     if (pass1_error) {
         fprintf(stderr, "kkw_prove: pass 1 error\n");
-        free(seed_stars); free(h_j_all); free(h_prime_all);
+        free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
         return -1;
     }
 
@@ -174,7 +174,7 @@ int kkw_prove(const unsigned char *input,
     unsigned char nonce[32];
     if (RAND_bytes(nonce, 32) != 1) {
         fprintf(stderr, "kkw_prove: RAND_bytes failed (nonce)\n");
-        free(seed_stars); free(h_j_all); free(h_prime_all);
+        free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
         return -1;
     }
 
@@ -238,11 +238,6 @@ int kkw_prove(const unsigned char *input,
                            (unsigned char **)tapes_j,
                            zs[k]->aux, da_db_all_k);
 
-            unsigned char h_local[N_PARTIES][32];
-            for (int p = 0; p < N_PARTIES; p++)
-                H_com(seeds_j[p], x_shares_j[p], as[k]->yp[p], h_local[p]);
-            memcpy(as[k]->h, h_local, sizeof(h_local));
-
             compute_msgs_e(e, da_db_all_k, zs[k]->msgs_e);
             free(da_db_all_k);
 
@@ -284,8 +279,8 @@ int kkw_prove(const unsigned char *input,
     {
         bool write_ok = true;
 
-        /* Header: magic "KKW1" + N + M + tau + ySize (all uint32_t LE). */
-        const unsigned char magic[4] = {'K','K','W','1'};
+        /* Header: magic "KKW2" + N + M + tau + ySize (all uint32_t LE). */
+        const unsigned char magic[4] = {'K','K','W','2'};
         uint32_t hdr[4] = { (uint32_t)N_PARTIES, (uint32_t)M_KKW,
                              (uint32_t)NUM_ROUNDS, (uint32_t)ySize };
         if (fwrite(magic, 4, 1, out) != 1) write_ok = false;
@@ -293,6 +288,10 @@ int kkw_prove(const unsigned char *input,
         if (fwrite(nonce, 32, 1, out) != 1) write_ok = false;
         if (fwrite(h_star, 32, 1, out) != 1) write_ok = false;
 
+        /* ZK remark: for opened (offline) instances all tapes are derivable
+         * from seed_star, so h'_j and h_out_j are hashes of witness-dependent
+         * data.  Hiding rests on the ROM plus the witness min-entropy (the HM
+         * opening r alone is 96 uniform bytes) — same structure as Picnic2. */
         for (int j = 0; j < M_KKW && write_ok; j++) {
             if (in_C[j]) continue;
             if (fwrite(seed_stars[j],  SEED_SIZE, 1, out) != 1) write_ok = false;
