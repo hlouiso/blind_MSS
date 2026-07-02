@@ -134,8 +134,13 @@ Measured on Intel i5-9300H @ 2.40 GHz, 8 threads, 1 iteration (N=4 default):
 | Commitment computation | < 1 ms |
 | Key generation | ≈ 130 ms |
 | Signing | ≈ 130 ms |
-| Proof generation | ≈ 3.5 s |
-| Proof verification | ≈ 2 s |
+| Proof generation | ≈ 1.8 s |
+| Proof verification | ≈ 0.9 s |
+
+Prove/verify times reflect the word-parallel MPC gates (SIMD over parties via
+portable vector extensions — SSE on x86, NEON on arm64) and single-shot
+AES-CTR tape expansion; the transcript is bit-identical to the reference
+bit-serial implementation.
 
 The proof is large because the online section dominates: each of the τ rounds serialises `aux` (ySize words) and `msgs_e` (2·ySize words) for the hidden party, plus the committed output shares for all N parties:
 
