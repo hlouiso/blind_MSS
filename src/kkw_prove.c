@@ -23,34 +23,37 @@ static void derive_xshares(unsigned char seeds[N_PARTIES][SEED_SIZE],
             x_shares[N_PARTIES - 1][b] ^= x_shares[p][b];
 }
 
-/* Expand one KKW instance from its seed_star: derive the N party seeds, then
- * allocate and fill each party's x-share (INPUT_LEN) and Beaver tape (TAPE_SIZE).
- * On success returns 0 and the caller owns both arrays (free with free_instance).
- * On allocation failure frees everything and returns -1. */
-static int expand_instance(const unsigned char seed_star[SEED_SIZE],
-                           const unsigned char *input,
-                           unsigned char seeds_out[N_PARTIES][SEED_SIZE],
-                           unsigned char *x_shares[N_PARTIES],
-                           unsigned char *tapes[N_PARTIES])
+/* Expand one KKW instance from its seed_star into caller-provided backing
+ * buffers (xbuf: N*INPUT_LEN, tbuf: N*TAPE_SIZE): derive the N party seeds,
+ * then fill each party's x-share and Beaver tape.  The buffers are per-thread
+ * scratch reused across instances, so no allocation happens per instance. */
+static void expand_instance_into(const unsigned char seed_star[SEED_SIZE],
+                                 const unsigned char *input,
+                                 unsigned char seeds_out[N_PARTIES][SEED_SIZE],
+                                 unsigned char *x_shares[N_PARTIES],
+                                 unsigned char *tapes[N_PARTIES],
+                                 unsigned char *xbuf, unsigned char *tbuf)
 {
     expand_seed_star(seed_star, seeds_out);
-    for (int p = 0; p < N_PARTIES; p++) { x_shares[p] = NULL; tapes[p] = NULL; }
     for (int p = 0; p < N_PARTIES; p++) {
-        x_shares[p] = malloc((size_t)INPUT_LEN);
-        tapes[p]    = malloc((size_t)TAPE_SIZE);
-        if (!x_shares[p] || !tapes[p]) {
-            for (int q = 0; q <= p; q++) { free(x_shares[q]); free(tapes[q]); }
-            return -1;
-        }
+        x_shares[p] = xbuf + (size_t)p * INPUT_LEN;
+        tapes[p]    = tbuf + (size_t)p * TAPE_SIZE;
         expand_tape(seeds_out[p], tapes[p]);
     }
     derive_xshares(seeds_out, input, x_shares);
-    return 0;
 }
 
-static void free_instance(unsigned char *x_shares[N_PARTIES], unsigned char *tapes[N_PARTIES])
+/* Per-thread scratch for both passes (NULL-safe, callable twice). */
+static void free_scratch(int nthreads, unsigned char **xbufs, unsigned char **tbufs,
+                         uint32_t **auxbufs, uint32_t **ddbufs)
 {
-    for (int p = 0; p < N_PARTIES; p++) { free(tapes[p]); free(x_shares[p]); }
+    for (int t = 0; t < nthreads; t++) {
+        if (xbufs)   free(xbufs[t]);
+        if (tbufs)   free(tbufs[t]);
+        if (auxbufs) free(auxbufs[t]);
+        if (ddbufs)  free(ddbufs[t]);
+    }
+    free(xbufs); free(tbufs); free(auxbufs); free(ddbufs);
 }
 
 int kkw_verbose = 1;
@@ -84,34 +87,45 @@ int kkw_prove(const unsigned char *input,
         }
     }
 
+    /* ── Per-thread scratch, reused across instances in both passes ──────── */
+    int nthreads = omp_get_max_threads();
+    unsigned char **xbufs   = calloc((size_t)nthreads, sizeof(*xbufs));
+    unsigned char **tbufs   = calloc((size_t)nthreads, sizeof(*tbufs));
+    uint32_t      **auxbufs = calloc((size_t)nthreads, sizeof(*auxbufs));
+    uint32_t      **ddbufs  = calloc((size_t)nthreads, sizeof(*ddbufs));
+    bool scratch_ok = xbufs && tbufs && auxbufs && ddbufs;
+    for (int t = 0; scratch_ok && t < nthreads; t++) {
+        xbufs[t]   = malloc((size_t)N_PARTIES * INPUT_LEN);
+        tbufs[t]   = malloc((size_t)N_PARTIES * TAPE_SIZE);
+        auxbufs[t] = malloc((size_t)ySize * sizeof(uint32_t));
+        ddbufs[t]  = malloc((size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t));
+        if (!xbufs[t] || !tbufs[t] || !auxbufs[t] || !ddbufs[t]) scratch_ok = false;
+    }
+    if (!scratch_ok) {
+        fprintf(stderr, "kkw_prove: OOM (scratch)\n");
+        free_scratch(nthreads, xbufs, tbufs, auxbufs, ddbufs);
+        free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
+        return -1;
+    }
+
     /* ── Pass 1: M_KKW circuit evaluations (parallelised) ────────────────── */
     bool pass1_error = false;
     int  pass1_ctr   = 0;
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (int j = 0; j < M_KKW; j++) {
+        int t = omp_get_thread_num();
         unsigned char seeds_j[N_PARTIES][SEED_SIZE];
         unsigned char *x_shares_j[N_PARTIES], *tapes_j[N_PARTIES];
-        if (expand_instance(seed_stars[j], input, seeds_j, x_shares_j, tapes_j) != 0) {
-#pragma omp atomic write
-            pass1_error = true;
-            goto p1_done;
-        }
-
-        uint32_t *aux_j = malloc((size_t)ySize * sizeof(uint32_t));
-        if (!aux_j) {
-            free_instance(x_shares_j, tapes_j);
-#pragma omp atomic write
-            pass1_error = true;
-            goto p1_done;
-        }
+        expand_instance_into(seed_stars[j], input, seeds_j, x_shares_j, tapes_j,
+                             xbufs[t], tbufs[t]);
 
         {
             a a_j;
             building_views(&a_j, (unsigned char *)m_hat, (unsigned char *)pk_seed,
                            (unsigned char **)x_shares_j,
                            (unsigned char **)tapes_j,
-                           aux_j, NULL);
+                           auxbufs[t], ddbufs[t]);
 
             for (int w = 0; w < 8; w++) {
                 uint32_t xorv = 0;
@@ -121,16 +135,12 @@ int kkw_prove(const unsigned char *input,
                     pass1_error = true;
                 }
             }
-            preproc_commit_instance(seeds_j, aux_j, h_j_all[j]);
+            preproc_commit_instance(seeds_j, auxbufs[t], h_j_all[j]);
             memcpy(h_prime_all[j], a_j.h_prime, 32);
             sha256_once((const unsigned char *)a_j.yp,
                         N_PARTIES * 8 * sizeof(uint32_t), h_out_all[j]);
         }
 
-        free(aux_j);
-        free_instance(x_shares_j, tapes_j);
-
-    p1_done:;
         int ctr;
 #pragma omp atomic capture
         ctr = ++pass1_ctr;
@@ -141,6 +151,7 @@ int kkw_prove(const unsigned char *input,
 
     if (pass1_error) {
         fprintf(stderr, "kkw_prove: pass 1 error\n");
+        free_scratch(nthreads, xbufs, tbufs, auxbufs, ddbufs);
         free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
         return -1;
     }
@@ -174,6 +185,7 @@ int kkw_prove(const unsigned char *input,
     unsigned char nonce[32];
     if (RAND_bytes(nonce, 32) != 1) {
         fprintf(stderr, "kkw_prove: RAND_bytes failed (nonce)\n");
+        free_scratch(nthreads, xbufs, tbufs, auxbufs, ddbufs);
         free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
         return -1;
     }
@@ -209,37 +221,25 @@ int kkw_prove(const unsigned char *input,
     }
 
     {
-        bool pass2_error = false;
-        int  pass2_ctr   = 0;
+        int pass2_ctr = 0;
 
 #pragma omp parallel for schedule(dynamic, 1)
         for (int k = 0; k < NUM_ROUNDS; k++) {
             int j = C_out[k];
             int e = p_out[k];
+            int t = omp_get_thread_num();
 
             unsigned char seeds_j[N_PARTIES][SEED_SIZE];
             unsigned char *x_shares_j[N_PARTIES], *tapes_j[N_PARTIES];
-            if (expand_instance(seed_stars[j], input, seeds_j, x_shares_j, tapes_j) != 0) {
-#pragma omp atomic write
-                pass2_error = true;
-                goto p2_done;
-            }
-
-            uint32_t *da_db_all_k = malloc((size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t));
-            if (!da_db_all_k) {
-                free_instance(x_shares_j, tapes_j);
-#pragma omp atomic write
-                pass2_error = true;
-                goto p2_done;
-            }
+            expand_instance_into(seed_stars[j], input, seeds_j, x_shares_j, tapes_j,
+                                 xbufs[t], tbufs[t]);
 
             building_views(as[k], (unsigned char *)m_hat, (unsigned char *)pk_seed,
                            (unsigned char **)x_shares_j,
                            (unsigned char **)tapes_j,
-                           zs[k]->aux, da_db_all_k);
+                           zs[k]->aux, ddbufs[t]);
 
-            compute_msgs_e(e, da_db_all_k, zs[k]->msgs_e);
-            free(da_db_all_k);
+            compute_msgs_e(e, ddbufs[t], zs[k]->msgs_e);
 
             preproc_com_party(e, seeds_j[e],
                               (e == 0 ? zs[k]->aux : NULL),
@@ -258,9 +258,6 @@ int kkw_prove(const unsigned char *input,
                 memcpy(zs[k]->x_offset, x_shares_j[N_PARTIES - 1], INPUT_LEN);
             /* yp_e removed from proof — as[k]->yp[e] is already in struct a */
 
-            free_instance(x_shares_j, tapes_j);
-
-        p2_done:;
             int ctr;
 #pragma omp atomic capture
             ctr = ++pass2_ctr;
@@ -268,12 +265,11 @@ int kkw_prove(const unsigned char *input,
                 if (kkw_verbose) printf("Pass 2: %d/%d\r", ctr, NUM_ROUNDS);
         }
         if (kkw_verbose) printf("Pass 2: %d/%d\n\n", NUM_ROUNDS, NUM_ROUNDS);
-
-        if (pass2_error) {
-            fprintf(stderr, "kkw_prove: OOM in pass 2\n");
-            goto cleanup_fail;
-        }
     }
+
+    /* Scratch is no longer needed once both passes are done. */
+    free_scratch(nthreads, xbufs, tbufs, auxbufs, ddbufs);
+    xbufs = NULL; tbufs = NULL; auxbufs = NULL; ddbufs = NULL;
 
     /* ── Write proof ─────────────────────────────────────────────────────── */
     {
@@ -332,6 +328,7 @@ int kkw_prove(const unsigned char *input,
     return 0;
 
 cleanup_fail:
+    free_scratch(nthreads, xbufs, tbufs, auxbufs, ddbufs);
     for (int k = 0; k < NUM_ROUNDS; k++) {
         free(as[k]);
         if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
