@@ -43,27 +43,35 @@ _Static_assert(W_END == 2762, "W_END changed — update INPUT_LEN in shared.c");
 extern int g_circuit_gates;
 
 /**
- * Build N-party KKW views for one round of the target-sum WOTS+/XMSS circuit.
- * x_shares[N_PARTIES]:  XOR-secret-shared witness (INPUT_LEN bytes each).
- * tapes[N_PARTIES]:     expanded Beaver triple tapes (TAPE_SIZE bytes each).
- * aux:                  output array (ySize uint32_t) for Beaver corrections.
- * da_db_all_out:        output array (N*2*ySize uint32_t) for per-party (da,db)
- *                       contributions; pass NULL to allocate internally (Pass 1).
- * Writes output shares into a->yp[N_PARTIES][8] and h_prime into a->h_prime.
+ * Run one masked-values KKW instance of the target-sum WOTS+/XMSS circuit.
+ * d_pub:  masked witness d = witness XOR λ_w (INPUT_LEN bytes, public).
+ * lam[N]: per-party witness-mask shares (INPUT_LEN bytes each, seed-derived).
+ * tapes[N]: expanded mask tapes (TAPE_SIZE bytes each).
+ * aux:    output array (ySize uint32_t) for the product corrections.
+ * s_all:  output array (N*ySize uint32_t) for the broadcast streams, or NULL
+ *         (aux-only mode: masks do not depend on d_pub/publics, so this mode
+ *         serves compute_aux_from_seeds; h_prime is then not computed).
+ * zh_out: public masked circuit output (8 words).
+ * Writes the output-wire mask shares into a->yp[N_PARTIES][8] and
+ * h_prime = H(d_pub || s_all) into a->h_prime (when s_all != NULL).
  */
-void building_views(a *a, unsigned char message_digest[32],
-                    unsigned char pk_seed[XMSS_PK_SEED_BYTES],
-                    unsigned char *x_shares[N_PARTIES],
+void building_views(a *a, const unsigned char message_digest[32],
+                    const unsigned char pk_seed[XMSS_PK_SEED_BYTES],
+                    const unsigned char *d_pub,
+                    unsigned char *lam[N_PARTIES],
                     unsigned char *tapes[N_PARTIES],
-                    uint32_t *aux, uint32_t *da_db_all_out);
+                    uint32_t *aux, uint32_t *s_all, uint32_t zh_out[8]);
 
 /**
- * Verify one KKW round.
+ * Verify one KKW round: re-run the online phase with the N-1 revealed
+ * parties, completing broadcasts with z->msgs_e.  Checks the revealed
+ * parties' output-mask shares against a->yp and h_prime; returns the public
+ * masked output in zh_out (the caller checks it against pubout).
  * e: hidden party index ∈ {0..N_PARTIES-1}.
  * Sets *error = true on any inconsistency.
  */
-void verify(unsigned char message_digest[32],
-            unsigned char pk_seed[XMSS_PK_SEED_BYTES],
-            bool *error, a *a, int e, z *z);
+void verify(const unsigned char message_digest[32],
+            const unsigned char pk_seed[XMSS_PK_SEED_BYTES],
+            bool *error, a *a, int e, z *z, uint32_t zh_out[8]);
 
 #endif // BUILDING_H

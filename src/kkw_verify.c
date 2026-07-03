@@ -21,7 +21,7 @@ int kkw_verify(FILE *proof,
         if (fread(magic, 4, 1, proof) != 1 || fread(hdr, sizeof(hdr), 1, proof) != 1) {
             fprintf(stderr, "kkw_verify: read error (header)\n"); return -1;
         }
-        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='3') {
+        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='4') {
             fprintf(stderr, "kkw_verify: bad magic\n"); return -1;
         }
         if (hdr[0]!=(uint32_t)N_PARTIES || hdr[1]!=(uint32_t)M_KKW ||
@@ -118,6 +118,7 @@ int kkw_verify(FILE *proof,
     /* ── Online verification ─────────────────────────────────────────────── */
     a *as[NUM_ROUNDS];
     z *zs[NUM_ROUNDS];
+    uint32_t (*zh_all)[8] = NULL; /* per-round public masked outputs */
     for (int k = 0; k < NUM_ROUNDS; k++) { as[k] = NULL; zs[k] = NULL; }
 
     bool alloc_ok = true;
@@ -127,7 +128,7 @@ int kkw_verify(FILE *proof,
         if (!as[k] || !zs[k]) { alloc_ok = false; break; }
         zs[k]->aux        = malloc((size_t)ySize * sizeof(uint32_t));
         zs[k]->x_offset   = malloc((size_t)INPUT_LEN);
-        zs[k]->msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
+        zs[k]->msgs_e     = malloc((size_t)ySize * sizeof(uint32_t));
         if (!zs[k]->aux || !zs[k]->x_offset || !zs[k]->msgs_e) {
             alloc_ok = false; break;
         }
@@ -143,19 +144,17 @@ int kkw_verify(FILE *proof,
         if (fread(as[k], sizeof(a), 1, proof) != 1)       { read_error = true; break; }
         if (fread(zs[k]->ke, SEED_SIZE, N_PARTIES - 1, proof) != (size_t)(N_PARTIES - 1))
             { read_error = true; break; }
-        /* x_offset (party N-1's share) present only when party N-1 is revealed. */
-        if (p_out[k] != N_PARTIES - 1) {
-            if (fread(zs[k]->x_offset, (size_t)INPUT_LEN, 1, proof) != 1)
-                { read_error = true; break; }
-        }
-        /* yp_e not in proof — use as[k]->yp[e] directly */
+        /* Public masked witness d (always present). */
+        if (fread(zs[k]->x_offset, (size_t)INPUT_LEN, 1, proof) != 1)
+            { read_error = true; break; }
+        /* aux only when party 0 (its holder) is revealed. */
         if (p_out[k] != 0) {
             if (fread(zs[k]->aux, sizeof(uint32_t), (size_t)ySize, proof) != (size_t)ySize)
                 { read_error = true; break; }
         } else {
             memset(zs[k]->aux, 0, (size_t)ySize * sizeof(uint32_t));
         }
-        if (fread(zs[k]->msgs_e, sizeof(uint32_t), (size_t)(2 * ySize), proof) != (size_t)(2 * ySize))
+        if (fread(zs[k]->msgs_e, sizeof(uint32_t), (size_t)ySize, proof) != (size_t)ySize)
             { read_error = true; break; }
     }
     if (read_error) {
@@ -165,13 +164,18 @@ int kkw_verify(FILE *proof,
 
     bool online_error = false;
     int  round_ctr    = 0;
+    zh_all = malloc((size_t)NUM_ROUNDS * 8 * sizeof(uint32_t));
+    if (!zh_all) {
+        fprintf(stderr, "kkw_verify: OOM\n");
+        goto free_and_fail;
+    }
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (int k = 0; k < NUM_ROUNDS; k++) {
         int e = p_out[k];
         bool round_err = false;
 
-        verify((unsigned char *)m_hat, (unsigned char *)pk_seed, &round_err, as[k], e, zs[k]);
+        verify(m_hat, pk_seed, &round_err, as[k], e, zs[k], zh_all[k]);
         if (round_err) {
 #pragma omp atomic write
             online_error = true;
@@ -209,18 +213,18 @@ int kkw_verify(FILE *proof,
 
     if (online_error) { fprintf(stderr, "kkw_verify: circuit check failed\n"); goto free_and_fail; }
 
-    /* ── Output binding: XOR of all N output shares must equal pubout ──────
-     * verify() only checks that each revealed party's recomputed share matches
-     * its commitment; it does NOT tie the circuit output to the public key.
+    /* ── Output binding: unmasked circuit output must equal pubout ─────────
+     * verify() only checks the revealed parties' output-mask shares against
+     * their commitment; it does NOT tie the circuit output to the public key.
      * Without this loop the proof says "I ran *some* valid circuit", not "…that
      * outputs (root | target-sum)", and any honest proof for a different key
-     * verifies (universal forgery). For each online round: XOR all N shares
-     * (N-1 from struct a plus a[e] for the hidden party) and check == pubout. */
+     * verifies (universal forgery). For each online round: real output =
+     * ẑ_out XOR all N mask shares (N-1 recomputed + a->yp[e], bound by h_out). */
     for (int k = 0; k < NUM_ROUNDS; k++) {
         for (int w = 0; w < 8; w++) {
-            uint32_t xorv = 0;
-            for (int p = 0; p < N_PARTIES; p++) xorv ^= as[k]->yp[p][w];
-            if (xorv != pubout[w]) {
+            uint32_t v = zh_all[k][w];
+            for (int p = 0; p < N_PARTIES; p++) v ^= as[k]->yp[p][w];
+            if (v != pubout[w]) {
                 fprintf(stderr, "kkw_verify: circuit output != public key (round %d word %d)\n", k, w);
                 goto free_and_fail;
             }
@@ -257,6 +261,7 @@ int kkw_verify(FILE *proof,
         free(as[k]);
         if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
+    free(zh_all);
     free(hbuf);
     return 0;
 
@@ -265,6 +270,7 @@ free_and_fail:
         free(as[k]);
         if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
+    free(zh_all);
     free(hbuf);
     return -1;
 }

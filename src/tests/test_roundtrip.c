@@ -2,13 +2,10 @@
  *
  * Tests:
  *   1. Single-round: prove+verify for e=0 and e=N_PARTIES-1.
- *   2. Preprocessing smoke: expand/commit/aux determinism + kkw_fiat_shamir range.
+ *   2. Preprocessing smoke: expand/commit/aux determinism + Fiat-Shamir range.
  *   3. Tamper check.
- *   4. H3 range check (legacy Fiat–Shamir).
  *
- * The full M_KKW-instance protocol is exercised end-to-end by the production
- * binaries (CLIENT_blind_sign → VERIFIER_verify) and by `make bench`.
- */
+ * The full M_KKW-instance protocol is exercised end-to-end by test_e2e. */
 #include "../circuits.h"
 #include "../shared.h"
 #include "../xmss.h"
@@ -68,32 +65,32 @@ static void build_witness(unsigned char *input_out, unsigned char *m_hat_out,
     pubout_out[YP_SUM_WORD] = XMSS_TARGET_SUM;
 }
 
-/* ── Run building_views for one instance given seed_star ─────────────────── */
+/* ── Run building_views for one masked-values instance ───────────────────── */
 
 static void run_instance(const unsigned char seed_star[SEED_SIZE],
                           const unsigned char *input,
-                          unsigned char *m_hat,
-                          unsigned char *pk_seed,
+                          const unsigned char *m_hat,
+                          const unsigned char *pk_seed,
                           unsigned char seeds_out[N_PARTIES][SEED_SIZE],
-                          unsigned char *x_shares_out[N_PARTIES],
-                          unsigned char *tapes_out[N_PARTIES],
+                          unsigned char *lam_out[N_PARTIES],   /* INPUT_LEN each */
+                          unsigned char *tapes_out[N_PARTIES], /* TAPE_SIZE each */
+                          unsigned char *d_out,                /* INPUT_LEN */
                           a *a_out,
                           uint32_t *aux_out,
-                          uint32_t *da_db_all_out)  /* N*2*ySize words, or NULL */
+                          uint32_t *s_all_out,                 /* N*ySize words */
+                          uint32_t zh_out[8])
 {
     expand_seed_star(seed_star, seeds_out);
-    for (int p = 0; p < N_PARTIES - 1; p++)
-        expand_xshare(seeds_out[p], x_shares_out[p]);
-    memcpy(x_shares_out[N_PARTIES - 1], input, INPUT_LEN);
-    for (int p = 0; p < N_PARTIES - 1; p++)
-        for (int b = 0; b < INPUT_LEN; b++)
-            x_shares_out[N_PARTIES - 1][b] ^= x_shares_out[p][b];
-    for (int p = 0; p < N_PARTIES; p++)
+    for (int p = 0; p < N_PARTIES; p++) {
+        expand_xshare(seeds_out[p], lam_out[p]);
         expand_tape(seeds_out[p], tapes_out[p]);
-    building_views(a_out, m_hat, pk_seed,
-                   (unsigned char **)x_shares_out,
-                   (unsigned char **)tapes_out,
-                   aux_out, da_db_all_out);
+    }
+    memcpy(d_out, input, INPUT_LEN);
+    for (int p = 0; p < N_PARTIES; p++)
+        for (int b = 0; b < INPUT_LEN; b++)
+            d_out[b] ^= lam_out[p][b];
+    building_views(a_out, m_hat, pk_seed, d_out, lam_out, tapes_out,
+                   aux_out, s_all_out, zh_out);
 }
 
 /* ── Test 1: single-round prove+verify for e=0 and e=N_PARTIES-1 only ── */
@@ -110,24 +107,26 @@ static void test_single_round(void)
     RAND_bytes(seed_star, SEED_SIZE);
 
     unsigned char seeds[N_PARTIES][SEED_SIZE];
-    unsigned char *x_shares[N_PARTIES], *tapes[N_PARTIES];
+    unsigned char *lam[N_PARTIES], *tapes[N_PARTIES];
     for (int p = 0; p < N_PARTIES; p++) {
-        x_shares[p] = malloc(INPUT_LEN);
-        tapes[p]    = malloc(TAPE_SIZE);
+        lam[p]   = malloc(INPUT_LEN);
+        tapes[p] = malloc(TAPE_SIZE);
     }
-    uint32_t *aux         = malloc(ySize * sizeof(uint32_t));
-    uint32_t *da_db_all   = malloc((size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t));
+    unsigned char *d_pub = malloc(INPUT_LEN);
+    uint32_t *aux   = malloc(ySize * sizeof(uint32_t));
+    uint32_t *s_all = malloc((size_t)N_PARTIES * ySize * sizeof(uint32_t));
     a A;
+    uint32_t zh[8];
     run_instance(seed_star, input, m_hat, pk_seed, seeds,
-                 x_shares, tapes, &A, aux, da_db_all);
+                 lam, tapes, d_pub, &A, aux, s_all, zh);
 
     int out_ok = 1;
     for (int j = 0; j < 8; j++) {
-        uint32_t xorv = 0;
-        for (int p = 0; p < N_PARTIES; p++) xorv ^= A.yp[p][j];
-        if (xorv != pubout[j]) out_ok = 0;
+        uint32_t v = zh[j];
+        for (int p = 0; p < N_PARTIES; p++) v ^= A.yp[p][j];
+        if (v != pubout[j]) out_ok = 0;
     }
-    CHECK(out_ok, "prover output XOR == pubout");
+    CHECK(out_ok, "prover unmasked output == pubout");
 
     int test_e[] = { 0, N_PARTIES - 1 };
     for (int ti = 0; ti < 2; ti++) {
@@ -135,27 +134,27 @@ static void test_single_round(void)
         z Z;
         Z.aux        = aux;
         Z.x_offset   = malloc((size_t)INPUT_LEN);
-        Z.msgs_e     = malloc((size_t)2 * ySize * sizeof(uint32_t));
+        Z.msgs_e     = malloc((size_t)ySize * sizeof(uint32_t));
         for (int j = 0; j < N_PARTIES-1; j++) {
             int orig = (j < e) ? j : j+1;
             memcpy(Z.ke[j], seeds[orig], SEED_SIZE);
         }
-        /* Only party N-1's offset share travels in the proof (when revealed);
-         * verify() re-derives the others from their seeds. */
-        if (e != N_PARTIES - 1)
-            memcpy(Z.x_offset, x_shares[N_PARTIES - 1], INPUT_LEN);
-        compute_msgs_e(e, da_db_all, Z.msgs_e);
+        memcpy(Z.x_offset, d_pub, INPUT_LEN);
+        compute_msgs_e(e, s_all, Z.msgs_e);
 
         bool err = false;
-        verify(m_hat, pk_seed, &err, &A, e, &Z);
+        uint32_t zh_check[8];
+        verify(m_hat, pk_seed, &err, &A, e, &Z, zh_check);
         char msg[64];
         snprintf(msg, sizeof msg, "verify accepts honest proof (e=%d)", e);
         CHECK(!err, msg);
+        CHECK(memcmp(zh_check, zh, sizeof zh) == 0,
+              "verify reconstructs the prover's public masked output");
         free(Z.x_offset); free(Z.msgs_e);
     }
 
-    for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
-    free(aux); free(da_db_all);
+    for (int p = 0; p < N_PARTIES; p++) { free(lam[p]); free(tapes[p]); }
+    free(aux); free(s_all); free(d_pub);
 }
 
 /* ── Test 2: preprocessing function smoke test ── */
@@ -189,7 +188,7 @@ static void test_preproc_smoke(void)
     expand_xshare(seeds[0], xs2);
     CHECK(memcmp(xs1, xs2, INPUT_LEN) == 0, "expand_xshare: deterministic");
 
-    /* compute_aux_from_seeds: deterministic (fast tape-only path) */
+    /* compute_aux_from_seeds: deterministic */
     uint32_t *aux1 = malloc(ySize * sizeof(uint32_t));
     uint32_t *aux2 = malloc(ySize * sizeof(uint32_t));
     compute_aux_from_seeds(seeds, aux1);
@@ -197,24 +196,34 @@ static void test_preproc_smoke(void)
     CHECK(memcmp(aux1, aux2, ySize * sizeof(uint32_t)) == 0,
           "compute_aux_from_seeds: deterministic");
 
-    /* compute_aux_from_seeds (fast path) must equal the reference aux that the
-     * full circuit run produces — they feed the same preprocessing commitment,
-     * so any divergence would break offline verification. */
+    /* aux depends only on the masks: a full run with a real witness and real
+     * publics must produce the exact same aux stream (this is what makes the
+     * offline preprocessing check sound). */
     {
-        unsigned char *xd[N_PARTIES], *tp[N_PARTIES];
+        unsigned char input[W_END], m_hat[32], pk_seed[XMSS_PK_SEED_BYTES];
+        uint32_t pubout[8];
+        build_witness(input, m_hat, pk_seed, pubout);
+
+        unsigned char *lam[N_PARTIES], *tp[N_PARTIES];
         for (int p = 0; p < N_PARTIES; p++) {
-            xd[p] = calloc(INPUT_LEN, 1);
-            tp[p] = malloc(TAPE_SIZE);
+            lam[p] = malloc(INPUT_LEN);
+            tp[p]  = malloc(TAPE_SIZE);
+            expand_xshare(seeds[p], lam[p]);
             expand_tape(seeds[p], tp[p]);
         }
+        unsigned char *d_pub = malloc(INPUT_LEN);
+        memcpy(d_pub, input, INPUT_LEN);
+        for (int p = 0; p < N_PARTIES; p++)
+            for (int b = 0; b < INPUT_LEN; b++) d_pub[b] ^= lam[p][b];
+
         uint32_t *aux_ref = malloc(ySize * sizeof(uint32_t));
-        unsigned char zm[32] = {0}, zpk[XMSS_PK_SEED_BYTES] = {0};
         a ref_a;
-        building_views(&ref_a, zm, zpk, xd, tp, aux_ref, NULL);
+        uint32_t zh[8];
+        building_views(&ref_a, m_hat, pk_seed, d_pub, lam, tp, aux_ref, NULL, zh);
         CHECK(memcmp(aux1, aux_ref, ySize * sizeof(uint32_t)) == 0,
-              "compute_aux_from_seeds: fast path == full-circuit reference");
-        for (int p = 0; p < N_PARTIES; p++) { free(xd[p]); free(tp[p]); }
-        free(aux_ref);
+              "compute_aux_from_seeds == aux of a real-witness run");
+        for (int p = 0; p < N_PARTIES; p++) { free(lam[p]); free(tp[p]); }
+        free(aux_ref); free(d_pub);
     }
 
     /* preproc_commit_instance: deterministic */
@@ -234,7 +243,7 @@ static void test_preproc_smoke(void)
     preproc_commit_instance(seeds3, aux3, h3);
     CHECK(memcmp(h1, h3, 32) != 0, "preproc_commit_instance: distinct for different seeds");
 
-    /* kkw_fiat_shamir: C sorted, distinct, in [0,M_KKW); p in [0,N) */
+    /* Fiat-Shamir with grinding: C sorted, distinct, in [0,M_KKW); p in [0,N) */
     unsigned char m_hat[32], h_star[32], pk_seed_fs[XMSS_PK_SEED_BYTES], nonce_fs[32];
     uint32_t pubout[8] = {0};
     RAND_bytes(m_hat, 32);
@@ -267,6 +276,8 @@ static void test_preproc_smoke(void)
           memcmp(p_out, p_out2, NUM_ROUNDS * sizeof(int)) == 0,
           "kkw_fs_expand: deterministic");
 
+    printf("  (N_PARTIES=%d, NUM_ROUNDS=%d, M_KKW=%d, GRIND_W=%d)\n",
+           N_PARTIES, NUM_ROUNDS, M_KKW, GRIND_W);
     free(aux1); free(aux2); free(aux3);
 }
 
@@ -283,64 +294,35 @@ static void test_tamper(void)
     unsigned char seed_star[SEED_SIZE];
     RAND_bytes(seed_star, SEED_SIZE);
 
-    unsigned char *x_shares[N_PARTIES], *tapes[N_PARTIES];
+    unsigned char seeds[N_PARTIES][SEED_SIZE];
+    unsigned char *lam[N_PARTIES], *tapes[N_PARTIES];
     for (int p = 0; p < N_PARTIES; p++) {
-        x_shares[p] = malloc(INPUT_LEN);
-        tapes[p]    = malloc(TAPE_SIZE);
+        lam[p]   = malloc(INPUT_LEN);
+        tapes[p] = malloc(TAPE_SIZE);
     }
+    unsigned char *d_pub = malloc(INPUT_LEN);
     uint32_t *aux = malloc(ySize * sizeof(uint32_t));
-
-    unsigned char seeds_j[N_PARTIES][SEED_SIZE];
-    expand_seed_star(seed_star, seeds_j);
-    for (int p = 0; p < N_PARTIES - 1; p++) expand_xshare(seeds_j[p], x_shares[p]);
-    memcpy(x_shares[N_PARTIES - 1], input, INPUT_LEN);
-    for (int p = 0; p < N_PARTIES - 1; p++)
-        for (int b = 0; b < INPUT_LEN; b++)
-            x_shares[N_PARTIES - 1][b] ^= x_shares[p][b];
-    x_shares[0][W_SIG_OFF] ^= 0x01;
-
-    for (int p = 0; p < N_PARTIES; p++) expand_tape(seeds_j[p], tapes[p]);
     a A;
-    building_views(&A, m_hat, pk_seed, (unsigned char **)x_shares, (unsigned char **)tapes, aux, NULL);
+    uint32_t zh[8];
+    run_instance(seed_star, input, m_hat, pk_seed, seeds,
+                 lam, tapes, d_pub, &A, aux, NULL, zh);
+
+    /* Tamper the masked witness (equivalent to a tampered signature hash). */
+    d_pub[W_SIG_OFF] ^= 0x01;
+    a A2;
+    uint32_t zh2[8];
+    building_views(&A2, m_hat, pk_seed, d_pub, lam, tapes, aux, NULL, zh2);
 
     int still_root = 1;
     for (int w = 0; w < YP_ROOT_WORDS; w++) {
-        uint32_t v = 0;
-        for (int p = 0; p < N_PARTIES; p++) v ^= A.yp[p][w];
+        uint32_t v = zh2[w];
+        for (int p = 0; p < N_PARTIES; p++) v ^= A2.yp[p][w];
         if (v != pubout[w]) { still_root = 0; break; }
     }
     CHECK(!still_root, "tampered witness changes the circuit output");
 
-    for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
-    free(aux);
-}
-
-/* ── Test 4: H3 range check (legacy) ── */
-
-static void test_h3_range(void)
-{
-    printf("--- Test 4: H3 range check ---\n");
-
-    uint32_t *aux_fake   = calloc(ySize, sizeof(uint32_t));
-    uint32_t *msgs_fake  = calloc(2 * ySize, sizeof(uint32_t));
-    a A_fake; memset(&A_fake, 0, sizeof(A_fake));
-    z fake_z; memset(&fake_z, 0, sizeof(fake_z));
-    fake_z.aux       = aux_fake;
-    fake_z.msgs_e    = msgs_fake;
-
-    a *as_arr[NUM_ROUNDS];
-    z *zs_arr[NUM_ROUNDS];
-    for (int r = 0; r < NUM_ROUNDS; r++) { as_arr[r] = &A_fake; zs_arr[r] = &fake_z; }
-    unsigned char fake_digest[32] = {0};
-    uint32_t fake_pubout[8] = {0};
-    int es[NUM_ROUNDS];
-    H3(fake_digest, fake_pubout, as_arr, zs_arr, NUM_ROUNDS, es);
-    int range_ok = 1;
-    for (int r = 0; r < NUM_ROUNDS; r++)
-        if (es[r] < 0 || es[r] >= N_PARTIES) { range_ok = 0; break; }
-    CHECK(range_ok, "H3: all challenges in [0, N_PARTIES)");
-    printf("  (N_PARTIES=%d, NUM_ROUNDS=%d, M_KKW=%d)\n", N_PARTIES, NUM_ROUNDS, M_KKW);
-    free(aux_fake); free(msgs_fake);
+    for (int p = 0; p < N_PARTIES; p++) { free(lam[p]); free(tapes[p]); }
+    free(aux); free(d_pub);
 }
 
 int main(void)
@@ -348,7 +330,6 @@ int main(void)
     test_single_round();
     test_preproc_smoke();
     test_tamper();
-    test_h3_range();
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILURES" : "ALL PASS",
            failures, failures == 1 ? "" : "s");

@@ -4,69 +4,89 @@
 #include "shared.h"
 #include <stdint.h>
 
-/* ── KKW N-party prover gate functions ──────────────────────────────────
+/* ── KKW masked-values online phase (prover side) ────────────────────────
  *
- * All gate functions share the same context parameters:
- *   tapes[N_PARTIES]  — expanded Beaver triple tapes, one per party.
- *   aux               — output array [ySize]: aux[g] = Beaver correction word.
- *   da_db_all         — output array [N*2*ySize]: per-party (da_i, db_i) pairs.
- *                       da_db_all[i*2*ySize + 2*g]   = da_i[g] = x_i[g] XOR u_i[g]
- *                       da_db_all[i*2*ySize + 2*g+1] = db_i[g] = y_i[g] XOR v_i[g]
- *                       Pass NULL if per-party data is not needed.
- *   gateCount         — index of the current gate (incremented on each call).
+ * Every wire carries a PUBLIC masked value h = value XOR mask, plus the N
+ * parties' XOR-shares l[i] of the (secret) mask.  Linear gates act on h and
+ * on the shares independently and are free.  Each nonlinear gate consumes
+ * one tape slot per party (λ_z share + λ_x·λ_y product share, see tape_lam/
+ * tape_prod) and produces ONE broadcast word s_i per party; the XOR of the
+ * broadcasts is the public masked output.  aux[g] corrects party 0's product
+ * share so that XOR_i t_i = λ_x AND λ_y.
  *
- * Beaver triple for gate g, party i: u_i[g]=tape_u, v_i[g]=tape_v, w_i[g]=tape_w.
- * Correction: aux[g] = (XOR_i u_i) AND (XOR_i v_i) XOR (XOR_i w_raw_i); party 0 applies it.
- * Online: da[g]=XOR_i da_i[g], db[g]=XOR_i db_i[g].
- *         z_i = w_i[g] XOR (da AND v_i) XOR (db AND u_i) XOR (i==0 ? da AND db : 0)
- * ADD uses the same framework bit-by-bit for carry propagation.
- */
+ * s_all (when non-NULL) collects every party's broadcast stream:
+ *   s_all[i*ySize + g] = s_i[g]   — hashed into h'_j together with the
+ * masked witness d.  The hidden party's stream is the proof's msgs_e. */
 
-/* Bitwise XOR, free (no gate). */
-void mpc_XOR(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES]);
+/* Masked word. */
+typedef struct { uint32_t h; uint32_t l[N_PARTIES]; } mw;
 
-/* Bitwise NOT, free. */
-void mpc_NEGATE(uint32_t x[N_PARTIES], uint32_t z[N_PARTIES]);
+/* ── Linear gates (free) ─────────────────────────────────────────────────── */
 
-/* Right-rotate, free. */
-void mpc_RIGHTROTATE(uint32_t x[N_PARTIES], int n, uint32_t z[N_PARTIES]);
+static inline void mw_const(uint32_t K, mw *z)
+{
+    z->h = K;
+    for (int i = 0; i < N_PARTIES; i++) z->l[i] = 0;
+}
 
-/* Logical right-shift, free. */
-void mpc_RIGHTSHIFT(uint32_t x[N_PARTIES], int n, uint32_t z[N_PARTIES]);
+static inline void mpc_XOR(const mw *x, const mw *y, mw *z)
+{
+    z->h = x->h ^ y->h;
+    for (int i = 0; i < N_PARTIES; i++) z->l[i] = x->l[i] ^ y->l[i];
+}
 
-/* Word-level Beaver AND (one gate). */
-void mpc_AND(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES],
+static inline void mpc_NEGATE(const mw *x, mw *z)
+{
+    z->h = ~x->h;
+    for (int i = 0; i < N_PARTIES; i++) z->l[i] = x->l[i];
+}
+
+static inline void mpc_RIGHTROTATE(const mw *x, int n, mw *z)
+{
+    z->h = RIGHTROTATE(x->h, n);
+    for (int i = 0; i < N_PARTIES; i++) z->l[i] = RIGHTROTATE(x->l[i], n);
+}
+
+static inline void mpc_RIGHTSHIFT(const mw *x, int n, mw *z)
+{
+    z->h = x->h >> n;
+    for (int i = 0; i < N_PARTIES; i++) z->l[i] = x->l[i] >> n;
+}
+
+/* ── Nonlinear gates (one tape slot + one broadcast word per party) ──────── */
+
+/* z = x AND y. */
+void mpc_AND(const mw *x, const mw *y, mw *z,
              unsigned char *tapes[N_PARTIES], uint32_t *aux,
-             uint32_t *da_db_all, int *gateCount);
+             uint32_t *s_all, int *gateCount);
 
-/* 32-bit modular ADD via bit-serial carry with Beaver (one gate). */
-void mpc_ADD(uint32_t x[N_PARTIES], uint32_t y[N_PARTIES], uint32_t z[N_PARTIES],
+/* z = x + y mod 2^32 (bit-serial carries, packed in one gate slot). */
+void mpc_ADD(const mw *x, const mw *y, mw *z,
              unsigned char *tapes[N_PARTIES], uint32_t *aux,
-             uint32_t *da_db_all, int *gateCount);
+             uint32_t *s_all, int *gateCount);
 
-/* ADD with public constant K (added into party 0's share). */
-void mpc_ADDK(uint32_t x[N_PARTIES], uint32_t K, uint32_t z[N_PARTIES],
+/* z = x + K mod 2^32 for public K. */
+void mpc_ADDK(const mw *x, uint32_t K, mw *z,
               unsigned char *tapes[N_PARTIES], uint32_t *aux,
-              uint32_t *da_db_all, int *gateCount);
+              uint32_t *s_all, int *gateCount);
 
 /* SHA-256 majority gate: z = MAJ(a, b, c). */
-void mpc_MAJ(uint32_t a[N_PARTIES], uint32_t b[N_PARTIES], uint32_t c[N_PARTIES],
-             uint32_t z[N_PARTIES],
+void mpc_MAJ(const mw *a, const mw *b, const mw *c, mw *z,
              unsigned char *tapes[N_PARTIES], uint32_t *aux,
-             uint32_t *da_db_all, int *gateCount);
+             uint32_t *s_all, int *gateCount);
 
 /* SHA-256 choice gate: z = CH(e, f, g) = (e AND (f XOR g)) XOR g. */
-void mpc_CH(uint32_t e[N_PARTIES], uint32_t f[N_PARTIES], uint32_t g[N_PARTIES],
-            uint32_t z[N_PARTIES],
+void mpc_CH(const mw *e, const mw *f, const mw *g, mw *z,
             unsigned char *tapes[N_PARTIES], uint32_t *aux,
-            uint32_t *da_db_all, int *gateCount);
+            uint32_t *s_all, int *gateCount);
 
-/* N-party SHA-256 compression over numBits of input.
- * inputs[i]  — party i's share of the message (srcBytes bytes).
- * results[i] — party i's 32-byte digest share (output). */
-void mpc_sha256(unsigned char *inputs[N_PARTIES], int numBits,
-                unsigned char *results[N_PARTIES],
+/* N-party SHA-256 over numBits of input.
+ * in_pub / in_lam[i]:  masked message bytes and per-party mask-share bytes.
+ * out_pub / out_lam[i]: 32-byte masked digest and mask shares (output). */
+void mpc_sha256(const unsigned char *in_pub, unsigned char *in_lam[N_PARTIES],
+                int numBits,
+                unsigned char *out_pub, unsigned char *out_lam[N_PARTIES],
                 unsigned char *tapes[N_PARTIES],
-                uint32_t *aux, uint32_t *da_db_all, int *gateCount);
+                uint32_t *aux, uint32_t *s_all, int *gateCount);
 
 #endif /* FUNCTIONS_H */

@@ -57,46 +57,42 @@ int main(void)
     for (int h = 0; h < XMSS_H; h++)
         memcpy(input + W_PATH_OFF + h*XMSS_NODE_BYTES, sig.auth_path[h], XMSS_NODE_BYTES);
 
-    /* KKW: N_PARTIES x shares */
-    unsigned char *x_shares[N_PARTIES];
-    for (int p = 0; p < N_PARTIES; p++) {
-        x_shares[p] = malloc(INPUT_LEN);
-        if (!x_shares[p]) { printf("FAIL: OOM\n"); return 1; }
-    }
-    for (int p = 0; p < N_PARTIES - 1; p++) RAND_bytes(x_shares[p], INPUT_LEN);
-    for (int b = 0; b < INPUT_LEN; b++) {
-        unsigned char v = input[b];
-        for (int p = 0; p < N_PARTIES-1; p++) v ^= x_shares[p][b];
-        x_shares[N_PARTIES-1][b] = v;
-    }
-
-    /* Random seeds + expand tapes */
+    /* Masked-values instance: seed-derived mask shares + public masked witness. */
     unsigned char seeds[N_PARTIES][SEED_SIZE];
     RAND_bytes(seeds[0], N_PARTIES * SEED_SIZE);
-    unsigned char *tapes[N_PARTIES];
+    unsigned char *lam[N_PARTIES], *tapes[N_PARTIES];
     for (int p = 0; p < N_PARTIES; p++) {
+        lam[p]   = malloc(INPUT_LEN);
         tapes[p] = malloc((size_t)TAPE_SIZE);
-        if (!tapes[p]) { printf("FAIL: OOM\n"); return 1; }
+        if (!lam[p] || !tapes[p]) { printf("FAIL: OOM\n"); return 1; }
+        expand_xshare(seeds[p], lam[p]);
         expand_tape(seeds[p], tapes[p]);
     }
+    unsigned char *d_pub = malloc(INPUT_LEN);
+    if (!d_pub) { printf("FAIL: OOM\n"); return 1; }
+    memcpy(d_pub, input, INPUT_LEN);
+    for (int p = 0; p < N_PARTIES; p++)
+        for (int b = 0; b < INPUT_LEN; b++) d_pub[b] ^= lam[p][b];
 
-    /* aux[ySize] — use generous initial size; da_db_all allocated internally. */
+    /* aux[ySize] — use generous initial size for gate-count probing. */
     int YBIG = 300000;
     uint32_t *aux = calloc((size_t)YBIG, sizeof(uint32_t));
-    if (!aux) { printf("FAIL: OOM\n"); return 1; }
+    uint32_t *s_all = calloc((size_t)N_PARTIES * YBIG, sizeof(uint32_t));
+    if (!aux || !s_all) { printf("FAIL: OOM\n"); return 1; }
 
     a A;
-    /* Pass NULL for da_db_all_out; building_views allocates internally. */
-    building_views(&A, m_hat, pk_seed, x_shares, tapes, aux, NULL);
+    uint32_t zh[8];
+    building_views(&A, m_hat, pk_seed, d_pub, lam, tapes, aux, s_all, zh);
 
-    /* Reconstruct output and compare */
+    /* Unmask output (ẑ XOR all mask shares) and compare with native values. */
     unsigned char circ_root[16];
-    uint32_t circ_sum = 0;
+    uint32_t circ_sum;
     for (int w = 0; w < YP_ROOT_WORDS; w++) {
-        uint32_t v = 0;
+        uint32_t v = zh[w];
         for (int p = 0; p < N_PARTIES; p++) v ^= A.yp[p][w];
         memcpy(circ_root + w*4, &v, 4);
     }
+    circ_sum = zh[YP_SUM_WORD];
     for (int p = 0; p < N_PARTIES; p++) circ_sum ^= A.yp[p][YP_SUM_WORD];
 
     int ok_root = (memcmp(circ_root, root, 16) == 0);
@@ -106,8 +102,8 @@ int main(void)
     printf("  circuit sum   = %u (target %d) %s\n", circ_sum, XMSS_TARGET_SUM, ok_sum ? "ok" : "MISMATCH");
     printf("  gate count = %d  -> set ySize=%d in shared.c\n", g_circuit_gates, g_circuit_gates);
 
-    for (int p = 0; p < N_PARTIES; p++) { free(x_shares[p]); free(tapes[p]); }
-    free(aux);
+    for (int p = 0; p < N_PARTIES; p++) { free(lam[p]); free(tapes[p]); }
+    free(aux); free(s_all); free(d_pub);
 
     if (ok_root && ok_sum) { printf("\nCIRCUIT OK\n"); return 0; }
     printf("\nCIRCUIT FAILED\n"); return 1;

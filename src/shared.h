@@ -167,7 +167,8 @@ _Static_assert(NUM_ROUNDS < M_KKW, "NUM_ROUNDS must be < M_KKW");
 extern const int ySize;     /* gate count, measured by test_circuit */
 extern const int INPUT_LEN; /* witness byte length = W_END = 2762 */
 
-/* TAPE_SIZE = 3 * ySize * 4 (u[], v[], w_raw[] blocks, each ySize uint32_t). */
+/* TAPE_SIZE = 2 * ySize * 4: per gate, each party's share of the fresh output
+ * mask λ_z (lam block) and of the input-mask product λ_x·λ_y (prod block). */
 extern const int TAPE_SIZE;
 
 #define RIGHTROTATE(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
@@ -180,15 +181,15 @@ extern const uint32_t k[64];
 
 /* ── Per-round commitment data ─────────────────────────────────────────── */
 /* Everything the verifier needs is bound in h* before the challenge:
- *   seeds+aux via h_j, broadcasts (hence x-shares) via h'_j, yp via h_out_j.
- * A per-party online commitment H(seed||x||yp) would be redundant: the
- * verifier recomputes every input to it from proof data, so a prover can
- * always satisfy it and it adds no binding beyond h_j/h'/h_out. */
+ *   seeds+aux via h_j, masked witness + broadcasts via h'_j, output-mask
+ *   shares via h_out_j. */
 typedef struct
 {
-    uint32_t yp[N_PARTIES][8];      /* circuit output shares */
-    /* h'_j = H2(broadcast || msgs_0 || … || msgs_{N-1}).
-     * Committed in h* = H(H(h_j), H(h'_j)) before challenge derivation. */
+    /* Per-party shares of the output-wire masks λ_out (masked-values online
+     * phase): real output = ẑ_out XOR (XOR_i yp[i]). */
+    uint32_t yp[N_PARTIES][8];
+    /* h'_j = H(d || s_0 || … || s_{N-1}) — masked witness and every party's
+     * per-gate broadcast stream.  Committed in h* before the challenge. */
     unsigned char h_prime[32];
 } a;
 
@@ -196,13 +197,11 @@ typedef struct
 typedef struct
 {
     unsigned char ke[N_PARTIES - 1][SEED_SIZE]; /* revealed party seeds */
-    /* Party (N-1)'s witness-offset input share (INPUT_LEN bytes, malloc'd).
-     * Present in the proof only when the hidden party e != N-1; the other
-     * revealed parties' shares are re-derived from their seeds via expand_xshare. */
+    /* Masked witness d = witness XOR λ_w (INPUT_LEN bytes, malloc'd).
+     * Public: always in the proof; λ_w shares are all seed-derived. */
     unsigned char *x_offset;
     uint32_t *aux;                              /* ySize uint32_t, malloc'd */
-    /* Hidden party's per-gate (da_e, db_e) pairs: 2*ySize uint32_t, malloc'd.
-     * msgs_e[2*g] = da_e[g], msgs_e[2*g+1] = db_e[g]. */
+    /* Hidden party's per-gate broadcast words s_e[g]: ySize uint32_t. */
     uint32_t *msgs_e;
     /* Preprocessing commitment to hidden party: com_{j,e}. */
     unsigned char com_hidden[32];
@@ -240,17 +239,13 @@ void preproc_commit_instance(unsigned char seeds[N_PARTIES][SEED_SIZE],
 
 /**
  * Compute aux from N_PARTIES seeds (for preprocessing verification).
- * aux[g] = (XOR_i u_i[g]) AND (XOR_i v_i[g]) XOR (XOR_i w_i[g]), with bit 31
- * forced to 0 on ADD gates (see compute_aux_from_seeds in shared.c).
- * Uses the fast tape-only path; does NOT re-run the full circuit.
+ * aux[g] = (λ_x AND λ_y) XOR (XOR_i t_i) for gate g, where λ_x/λ_y are the
+ * gate's input-wire masks.  Masks flow through the circuit, so this runs the
+ * mask part of the circuit (building_views with zero public inputs; aux does
+ * not depend on the witness or on public values).
  */
 void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE],
                              uint32_t *aux_out);
-
-/* Gate-type recorder: when non-NULL, mpc_AND/mpc_ADD write the type of each
- * Beaver gate (0 = AND, 1 = ADD) at index g into this array. Used once to build
- * the gate-type table that drives the fast aux path. NULL in normal operation. */
-extern uint8_t *g_gate_type_rec;
 
 /* ── Fiat–Shamir challenge with grinding (full KKW protocol) ────────────── */
 
@@ -285,43 +280,23 @@ void kkw_fs_expand(const unsigned char seed_FS[32],
 /** Single-shot SHA-256. Returns 1 on success. */
 int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32]);
 
-/**
- * Legacy Fiat–Shamir (single-level, used by test_roundtrip H3 range check).
- * Produces es[0..s-1] ∈ {0..N_PARTIES-1}.
- */
-void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
-        a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS], int s, int *es);
-
 /* ── KKW online-transcript helpers ─────────────────────────────────────── */
 
-/* Compute h'_j = H(da_db_all) where da_db_all is N×2×ySize uint32_t:
- *   da_db_all[i*2*ySize + 2*g]   = da_i[g] = x_i[g] XOR u_i[g]
- *   da_db_all[i*2*ySize + 2*g+1] = db_i[g] = y_i[g] XOR v_i[g] */
-void compute_h_prime(const uint32_t *da_db_all, unsigned char h_prime[32]);
+/* h'_j = H(d || s_all) where d is the masked witness (INPUT_LEN bytes) and
+ * s_all is N×ySize uint32_t: s_all[i*ySize + g] = party i's broadcast s_i[g]. */
+void compute_h_prime(const unsigned char *d_pub, const uint32_t *s_all,
+                     unsigned char h_prime[32]);
 
-/* Extract party e's (da_e, db_e) pairs from da_db_all into msgs_e_out (2*ySize). */
-void compute_msgs_e(int e, const uint32_t *da_db_all, uint32_t *msgs_e_out);
+/* Extract party e's broadcast stream from s_all into msgs_e_out (ySize). */
+void compute_msgs_e(int e, const uint32_t *s_all, uint32_t *msgs_e_out);
 
 /* Recompute h'_j on the verify side.
- * per_party_da_db: (N-1)×2×ySize array filled during circuit execution.
- * msgs_e:         2*ySize array from proof (hidden party's (da_e, db_e)). */
-void recompute_h_prime_verify(int e,
-                               const uint32_t *per_party_da_db,
+ * s_slots: (N-1)×ySize array filled during circuit re-execution (slot order).
+ * msgs_e:  ySize array from the proof (hidden party's stream). */
+void recompute_h_prime_verify(int e, const unsigned char *d_pub,
+                               const uint32_t *s_slots,
                                const uint32_t *msgs_e,
                                unsigned char h_prime_out[32]);
-
-/* ── Allocation helpers (for online rounds) ─────────────────────────────── */
-
-int alloc_structures_prove(unsigned char seeds[NUM_ROUNDS][N_PARTIES][SEED_SIZE],
-                           unsigned char *x_shares[NUM_ROUNDS][N_PARTIES],
-                           a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
-
-void free_structures_prove(unsigned char *x_shares[NUM_ROUNDS][N_PARTIES],
-                           a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
-
-int alloc_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
-void free_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS]);
-
 
 /* ── Tape accessors ─────────────────────────────────────────────────────── */
 
@@ -332,8 +307,9 @@ static inline uint32_t tape_get32(const unsigned char *tape, int pos)
     return v;
 }
 
-static inline uint32_t tape_u(const unsigned char *tape, int g) { return tape_get32(tape, g * 4); }
-static inline uint32_t tape_v(const unsigned char *tape, int g) { return tape_get32(tape, ySize * 4 + g * 4); }
-static inline uint32_t tape_w(const unsigned char *tape, int g) { return tape_get32(tape, 2 * ySize * 4 + g * 4); }
+/* Party's share of gate g's fresh output mask λ_z (AND) / λ_r (ADD carries). */
+static inline uint32_t tape_lam(const unsigned char *tape, int g) { return tape_get32(tape, g * 4); }
+/* Party's share of the input-mask product λ_x·λ_y (corrected via aux). */
+static inline uint32_t tape_prod(const unsigned char *tape, int g) { return tape_get32(tape, ySize * 4 + g * 4); }
 
 #endif /* SHARED_H */

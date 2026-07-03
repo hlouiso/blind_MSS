@@ -2,68 +2,84 @@
 #define MPC_VERIFY_FUNCTIONS_H
 
 #include "shared.h"
-
 #include <stdint.h>
-#include <string.h>
 
-/* KKW verify-side gate functions.
+/* ── KKW masked-values online phase (verifier side) ──────────────────────
  *
- * All functions operate on (N_PARTIES-1) revealed party shares, indexed by
- * "slot" j = 0..N_PARTIES-2, where slot j corresponds to original party
- *   orig(j, e) = (j < e) ? j : j+1
- * Party 0 gets the Beaver correction (aux[g]) and the da*db bias term.
- *
- * Parameters:
- *   x[], y[]         — revealed input shares  [N_PARTIES-1]
- *   z[]              — revealed output shares [N_PARTIES-1]  (written)
- *   tapes[]          — expanded Beaver tapes for revealed parties [N_PARTIES-1]
- *   e                — hidden party index
- *   msgs_e           — hidden party's (da_e, db_e) pairs: msgs_e[2g]=da_e[g], [2g+1]=db_e[g]
- *   aux              — Beaver correction array: aux[g]
- *   per_party_da_db  — output: (N-1)×2×ySize array for per-slot (da_j, db_j) contributions;
- *                      per_party_da_db[j*2*ySize+2*g]=da_j[g], [j*2*ySize+2*g+1]=db_j[g]
- *                      Pass NULL if not needed.
- *   gateCount        — current gate index (incremented by each call)
- */
+ * The verifier re-runs the online phase with the N-1 revealed parties in
+ * slot order (slot j = original party (j < e) ? j : j+1) and completes each
+ * gate's public masked output with the hidden party's broadcast from the
+ * proof (msgs_e[g]).  Revealed slots' broadcast streams are collected into
+ * s_slots[j*ySize + g] for the h'_j recomputation. */
 
-void mpc_AND_verify(uint32_t x[N_PARTIES-1], uint32_t y[N_PARTIES-1],
-                    uint32_t z[N_PARTIES-1],
-                    unsigned char *tapes[N_PARTIES-1], int e,
+/* Masked word, verifier view: public value + N-1 revealed mask shares. */
+typedef struct { uint32_t h; uint32_t l[N_PARTIES - 1]; } mwv;
+
+/* ── Linear gates (free) ─────────────────────────────────────────────────── */
+
+static inline void mwv_const(uint32_t K, mwv *z)
+{
+    z->h = K;
+    for (int j = 0; j < N_PARTIES - 1; j++) z->l[j] = 0;
+}
+
+static inline void mpc_XOR_v(const mwv *x, const mwv *y, mwv *z)
+{
+    z->h = x->h ^ y->h;
+    for (int j = 0; j < N_PARTIES - 1; j++) z->l[j] = x->l[j] ^ y->l[j];
+}
+
+static inline void mpc_NEGATE_v(const mwv *x, mwv *z)
+{
+    z->h = ~x->h;
+    for (int j = 0; j < N_PARTIES - 1; j++) z->l[j] = x->l[j];
+}
+
+static inline void mpc_RIGHTROTATE_v(const mwv *x, int n, mwv *z)
+{
+    z->h = RIGHTROTATE(x->h, n);
+    for (int j = 0; j < N_PARTIES - 1; j++) z->l[j] = RIGHTROTATE(x->l[j], n);
+}
+
+static inline void mpc_RIGHTSHIFT_v(const mwv *x, int n, mwv *z)
+{
+    z->h = x->h >> n;
+    for (int j = 0; j < N_PARTIES - 1; j++) z->l[j] = x->l[j] >> n;
+}
+
+/* ── Nonlinear gates ────────────────────────────────────────────────────── */
+
+void mpc_AND_verify(const mwv *x, const mwv *y, mwv *z,
+                    unsigned char *tapes[N_PARTIES - 1], int e,
                     const uint32_t *msgs_e, const uint32_t *aux,
-                    uint32_t *per_party_da_db, int *gateCount);
+                    uint32_t *s_slots, int *gateCount);
 
-void mpc_ADD_verify(uint32_t x[N_PARTIES-1], uint32_t y[N_PARTIES-1],
-                    uint32_t z[N_PARTIES-1],
-                    unsigned char *tapes[N_PARTIES-1], int e,
+void mpc_ADD_verify(const mwv *x, const mwv *y, mwv *z,
+                    unsigned char *tapes[N_PARTIES - 1], int e,
                     const uint32_t *msgs_e, const uint32_t *aux,
-                    uint32_t *per_party_da_db, int *gateCount);
+                    uint32_t *s_slots, int *gateCount);
 
-/* Linear gates — same as prove-side but for N-1 parties. */
-void mpc_XOR_v(uint32_t x[N_PARTIES-1], uint32_t y[N_PARTIES-1],
-               uint32_t z[N_PARTIES-1]);
+void mpc_ADDK_verify(const mwv *x, uint32_t K, mwv *z,
+                     unsigned char *tapes[N_PARTIES - 1], int e,
+                     const uint32_t *msgs_e, const uint32_t *aux,
+                     uint32_t *s_slots, int *gateCount);
 
-void mpc_NEGATE_v(uint32_t x[N_PARTIES-1], uint32_t z[N_PARTIES-1]);
-
-void mpc_RIGHTROTATE_v(uint32_t x[N_PARTIES-1], int n, uint32_t z[N_PARTIES-1]);
-
-void mpc_RIGHTSHIFT_v(uint32_t x[N_PARTIES-1], int n, uint32_t z[N_PARTIES-1]);
-
-void mpc_MAJ_verify(uint32_t a[N_PARTIES-1], uint32_t b[N_PARTIES-1],
-                    uint32_t c[N_PARTIES-1], uint32_t z[N_PARTIES-1],
-                    unsigned char *tapes[N_PARTIES-1], int e,
+void mpc_MAJ_verify(const mwv *a, const mwv *b, const mwv *c, mwv *z,
+                    unsigned char *tapes[N_PARTIES - 1], int e,
                     const uint32_t *msgs_e, const uint32_t *aux,
-                    uint32_t *per_party_da_db, int *gateCount);
+                    uint32_t *s_slots, int *gateCount);
 
-void mpc_CH_verify(uint32_t e_sh[N_PARTIES-1], uint32_t f[N_PARTIES-1],
-                   uint32_t g[N_PARTIES-1], uint32_t z[N_PARTIES-1],
-                   unsigned char *tapes[N_PARTIES-1], int e,
+void mpc_CH_verify(const mwv *e_w, const mwv *f, const mwv *g_w, mwv *z,
+                   unsigned char *tapes[N_PARTIES - 1], int e,
                    const uint32_t *msgs_e, const uint32_t *aux,
-                   uint32_t *per_party_da_db, int *gateCount);
+                   uint32_t *s_slots, int *gateCount);
 
-void mpc_sha256_verify(unsigned char *inputs[N_PARTIES-1], int numBits,
-                       unsigned char *results[N_PARTIES-1],
-                       unsigned char *tapes[N_PARTIES-1], int e,
+void mpc_sha256_verify(const unsigned char *in_pub,
+                       unsigned char *in_lam[N_PARTIES - 1], int numBits,
+                       unsigned char *out_pub,
+                       unsigned char *out_lam[N_PARTIES - 1],
+                       unsigned char *tapes[N_PARTIES - 1], int e,
                        const uint32_t *msgs_e, const uint32_t *aux,
-                       uint32_t *per_party_da_db, int *gateCount);
+                       uint32_t *s_slots, int *gateCount);
 
 #endif /* MPC_VERIFY_FUNCTIONS_H */

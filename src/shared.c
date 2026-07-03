@@ -13,8 +13,8 @@
 const int ySize = 152504;
 const int INPUT_LEN = 2762; /* W_END — see circuits.h */
 
-/* TAPE_SIZE = 3 * ySize * 4 (u[], v[], w_raw[] blocks, each ySize uint32_t). */
-const int TAPE_SIZE = 3 * 152504 * 4; /* = 1 830 048 bytes */
+/* TAPE_SIZE = 2 * ySize * 4 (λ_z and λ_x·λ_y product blocks, each ySize u32). */
+const int TAPE_SIZE = 2 * 152504 * 4; /* = 1 220 032 bytes */
 
 const uint32_t hA[8] = {
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -110,85 +110,40 @@ void preproc_commit_instance(unsigned char seeds[N_PARTIES][SEED_SIZE],
     if (!ok) memset(h_j_out, 0, 32);
 }
 
-/* Gate-type table: gate_is_add[g] == 1 iff gate g is an ADD, else 0.
- * Built once (lazily) by recording one full building_views run; the circuit is
- * fixed, so the sequence is identical for every instance and every N. */
-static uint8_t *gate_is_add = NULL;
-
-/* Build gate_is_add once. Thread-safe: the critical section serialises the
- * first caller while the parallel offline loop's other threads wait, then see
- * the published table. Subsequent calls are a cheap non-NULL check. */
-static void ensure_gate_table(void)
-{
-    if (gate_is_add) return;
-#pragma omp critical (aux_gate_table)
-    {
-        if (!gate_is_add) {
-            uint8_t *tbl = calloc((size_t)ySize, 1);
-            unsigned char *x_dummy[N_PARTIES], *tapes[N_PARTIES];
-            for (int p = 0; p < N_PARTIES; p++) { x_dummy[p] = NULL; tapes[p] = NULL; }
-            bool ok = (tbl != NULL);
-            for (int p = 0; p < N_PARTIES && ok; p++) {
-                x_dummy[p] = calloc((size_t)INPUT_LEN, 1);
-                tapes[p]   = malloc((size_t)TAPE_SIZE);
-                if (!x_dummy[p] || !tapes[p]) { ok = false; break; }
-                unsigned char s[SEED_SIZE];
-                memset(s, p + 1, SEED_SIZE);   /* arbitrary: only gate types matter */
-                expand_tape(s, tapes[p]);
-            }
-            uint32_t *aux_tmp = ok ? malloc((size_t)ySize * sizeof(uint32_t)) : NULL;
-            if (ok && aux_tmp) {
-                unsigned char zero_m[32] = {0}, zero_pk[XMSS_PK_SEED_BYTES] = {0};
-                a dummy_a;
-                g_gate_type_rec = tbl;
-                building_views(&dummy_a, zero_m, zero_pk, x_dummy, tapes, aux_tmp, NULL);
-                g_gate_type_rec = NULL;
-                gate_is_add = tbl;             /* publish only on full success */
-            } else {
-                free(tbl);
-            }
-            free(aux_tmp);
-            for (int p = 0; p < N_PARTIES; p++) { free(x_dummy[p]); free(tapes[p]); }
-        }
-    }
-}
-
 void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE], uint32_t *aux_out)
 {
-    /* aux[g] depends ONLY on the Beaver triple tapes (u_i, v_i, w_i), not on
-     * x_shares, m_hat, or pk_seed.  For every gate:
-     *     full = (XOR_i u_i[g]) AND (XOR_i v_i[g]) XOR (XOR_i w_i[g])
-     * AND gates store full; ADD gates store full with bit 31 cleared (mpc_ADD
-     * only writes bits 0..30).  This tape-only pass replaces re-running the full
-     * XMSS circuit per opened instance — the dominant cost of offline verify. */
-    ensure_gate_table();
-
-    unsigned char *tapes[N_PARTIES];
-    for (int p = 0; p < N_PARTIES; p++) tapes[p] = NULL;
+    /* aux[g] = (λ_x AND λ_y) XOR (XOR_i t_i) where λ_x/λ_y are the gate's
+     * input-wire masks.  Masks depend only on the tapes and witness-mask
+     * shares — never on the witness or the public inputs — so running the
+     * circuit with all-zero publics reproduces exactly the aux stream of any
+     * real instance built from the same seeds (s_all = NULL skips the
+     * broadcast collection and h'). */
+    unsigned char *tapes[N_PARTIES], *lam[N_PARTIES];
+    unsigned char *d0 = NULL;
     bool alloc_ok = true;
-    for (int p = 0; p < N_PARTIES; p++) {
+    for (int p = 0; p < N_PARTIES; p++) { tapes[p] = NULL; lam[p] = NULL; }
+    for (int p = 0; p < N_PARTIES && alloc_ok; p++) {
         tapes[p] = malloc((size_t)TAPE_SIZE);
-        if (!tapes[p]) { alloc_ok = false; break; }
+        lam[p]   = malloc((size_t)INPUT_LEN);
+        if (!tapes[p] || !lam[p]) { alloc_ok = false; break; }
         expand_tape(seeds[p], tapes[p]);
+        expand_xshare(seeds[p], lam[p]);
     }
-    if (!alloc_ok || !gate_is_add) {
-        for (int p = 0; p < N_PARTIES; p++) free(tapes[p]);
+    d0 = alloc_ok ? calloc((size_t)INPUT_LEN, 1) : NULL;
+    if (!alloc_ok || !d0) {
+        free(d0);
+        for (int p = 0; p < N_PARTIES; p++) { free(tapes[p]); free(lam[p]); }
         memset(aux_out, 0, (size_t)ySize * sizeof(uint32_t));
         return;
     }
 
-    for (int g = 0; g < ySize; g++) {
-        uint32_t u_xor = 0, v_xor = 0, w_xor = 0;
-        for (int i = 0; i < N_PARTIES; i++) {
-            u_xor ^= tape_u(tapes[i], g);
-            v_xor ^= tape_v(tapes[i], g);
-            w_xor ^= tape_w(tapes[i], g);
-        }
-        uint32_t full = (u_xor & v_xor) ^ w_xor;
-        aux_out[g] = gate_is_add[g] ? (full & 0x7FFFFFFFu) : full;
-    }
+    unsigned char zero_m[32] = {0}, zero_pk[XMSS_PK_SEED_BYTES] = {0};
+    a dummy_a;
+    uint32_t zh_dummy[8];
+    building_views(&dummy_a, zero_m, zero_pk, d0, lam, tapes, aux_out, NULL, zh_dummy);
 
-    for (int p = 0; p < N_PARTIES; p++) free(tapes[p]);
+    free(d0);
+    for (int p = 0; p < N_PARTIES; p++) { free(tapes[p]); free(lam[p]); }
 }
 
 /* ── Fiat–Shamir challenge (full KKW protocol) ───────────────────────────── */
@@ -338,235 +293,51 @@ int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32])
 
 /* ── KKW online-transcript helpers ─────────────────────────────────────── */
 
-void compute_h_prime(const uint32_t *da_db_all, unsigned char h_prime[32])
+void compute_h_prime(const unsigned char *d_pub, const uint32_t *s_all,
+                     unsigned char h_prime[32])
 {
-    /* h'_j = H(da_db_all) where da_db_all is N×2×ySize uint32_t.
-     * da_db_all[i*2*ySize + 2*g]   = da_i[g] = x_i[g] XOR u_i[g]
-     * da_db_all[i*2*ySize + 2*g+1] = db_i[g] = y_i[g] XOR v_i[g] */
+    /* h'_j = H(d || s_0 || … || s_{N-1}): binds the masked witness and every
+     * party's broadcast stream (s_all[i*ySize + g] = s_i[g]). */
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (!ctx) { memset(h_prime, 0, 32); return; }
     unsigned int outl = 0;
     int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, da_db_all,
-                              (size_t)N_PARTIES * 2 * ySize * sizeof(uint32_t)) == 1 &&
+             EVP_DigestUpdate(ctx, d_pub, (size_t)INPUT_LEN) == 1 &&
+             EVP_DigestUpdate(ctx, s_all,
+                              (size_t)N_PARTIES * ySize * sizeof(uint32_t)) == 1 &&
              EVP_DigestFinal_ex(ctx, h_prime, &outl) == 1;
     EVP_MD_CTX_free(ctx);
     if (!ok) memset(h_prime, 0, 32);
 }
 
-void compute_msgs_e(int e, const uint32_t *da_db_all, uint32_t *msgs_e_out)
+void compute_msgs_e(int e, const uint32_t *s_all, uint32_t *msgs_e_out)
 {
-    /* msgs_e = (da_e[0], db_e[0], ..., da_e[ySize-1], db_e[ySize-1]) */
-    memcpy(msgs_e_out, da_db_all + (size_t)e * 2 * ySize,
-           (size_t)2 * ySize * sizeof(uint32_t));
+    memcpy(msgs_e_out, s_all + (size_t)e * ySize,
+           (size_t)ySize * sizeof(uint32_t));
 }
 
-void recompute_h_prime_verify(int e,
-                               const uint32_t *per_party_da_db,
+void recompute_h_prime_verify(int e, const unsigned char *d_pub,
+                               const uint32_t *s_slots,
                                const uint32_t *msgs_e,
                                unsigned char h_prime_out[32])
 {
-    /* Reconstruct the prover's da_db_all in party order 0..N-1, then hash it. */
+    /* Reconstruct the prover's (d || s streams) in party order, then hash. */
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (!ctx) { memset(h_prime_out, 0, 32); return; }
     unsigned int outl = 0;
-    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1;
+    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+             EVP_DigestUpdate(ctx, d_pub, (size_t)INPUT_LEN) == 1;
     for (int p = 0; p < N_PARTIES && ok; p++) {
         if (p == e) {
-            /* Hidden party: use msgs_e from proof (2*ySize words). */
             ok = EVP_DigestUpdate(ctx, msgs_e,
-                                  (size_t)2 * ySize * sizeof(uint32_t)) == 1;
+                                  (size_t)ySize * sizeof(uint32_t)) == 1;
         } else {
             int slot = (p < e) ? p : p - 1;
-            ok = EVP_DigestUpdate(ctx,
-                                  per_party_da_db + (size_t)slot * 2 * ySize,
-                                  (size_t)2 * ySize * sizeof(uint32_t)) == 1;
+            ok = EVP_DigestUpdate(ctx, s_slots + (size_t)slot * ySize,
+                                  (size_t)ySize * sizeof(uint32_t)) == 1;
         }
     }
     ok = ok && EVP_DigestFinal_ex(ctx, h_prime_out, &outl) == 1;
     EVP_MD_CTX_free(ctx);
     if (!ok) memset(h_prime_out, 0, 32);
-}
-
-/* ── Fiat–Shamir challenge ─────────────────────────────────────────────── */
-
-void H3(const unsigned char message_digest[32], const uint32_t pubout[8],
-        a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS], int s, int *es)
-{
-    /* Encode pubout as 32 big-endian bytes. */
-    unsigned char pubout_bytes[32];
-    for (int i = 0; i < 8; i++) {
-        pubout_bytes[i*4+0] = (unsigned char)(pubout[i] >> 24);
-        pubout_bytes[i*4+1] = (unsigned char)(pubout[i] >> 16);
-        pubout_bytes[i*4+2] = (unsigned char)(pubout[i] >>  8);
-        pubout_bytes[i*4+3] = (unsigned char)(pubout[i]);
-    }
-
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) { memset(es, 0, s * sizeof(*es)); return; }
-    unsigned int outl = 0;
-
-    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, message_digest, 32) == 1 &&
-             EVP_DigestUpdate(ctx, pubout_bytes, 32) == 1;
-    for (int i = 0; i < s && ok; i++) {
-        ok = EVP_DigestUpdate(ctx, as[i], sizeof(a)) == 1;
-        /* Trou 3 fix: bind msgs_e (hidden party's da_e/db_e) and aux so the
-         * prover cannot adapt them after committing to the yp/commitment transcript.
-         * msgs_e is 2*ySize words; aux is ySize words. */
-        if (ok)
-            ok = EVP_DigestUpdate(ctx, zs[i]->msgs_e,
-                                  (size_t)(2 * ySize) * sizeof(uint32_t)) == 1;
-        if (ok)
-            ok = EVP_DigestUpdate(ctx, zs[i]->aux,
-                                  (size_t)ySize * sizeof(uint32_t)) == 1;
-    }
-    ok = ok && EVP_DigestFinal_ex(ctx, hash, &outl) == 1;
-    if (!ok) {
-        EVP_MD_CTX_free(ctx);
-        memset(es, 0, s * sizeof(*es));
-        return;
-    }
-
-    /* Extract challenges in {0 .. N_PARTIES-1} using rejection sampling.
-     * threshold = largest multiple of N_PARTIES that fits in a byte (0..255).
-     * For power-of-2 N_PARTIES (≤256), threshold == 256 → no byte is ever
-     * rejected and the distribution is perfectly uniform. */
-    const unsigned int threshold = (unsigned int)N_PARTIES * (256u / (unsigned int)N_PARTIES);
-    int i = 0, byteIdx = 0;
-    while (i < s) {
-        if (byteIdx >= SHA256_DIGEST_LENGTH) {
-            ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-                 EVP_DigestUpdate(ctx, hash, sizeof(hash)) == 1 &&
-                 EVP_DigestFinal_ex(ctx, hash, &outl) == 1;
-            if (!ok) {
-                EVP_MD_CTX_free(ctx);
-                memset(es, 0, s * sizeof(*es));
-                return;
-            }
-            byteIdx = 0;
-        }
-        unsigned int val = (unsigned char)hash[byteIdx++];
-        if (val < threshold)
-            es[i++] = (int)(val % (unsigned int)N_PARTIES);
-    }
-    EVP_MD_CTX_free(ctx);
-}
-
-/* ── Prove allocation ───────────────────────────────────────────────────── */
-
-int alloc_structures_prove(
-    unsigned char  seeds[NUM_ROUNDS][N_PARTIES][SEED_SIZE],
-    unsigned char *x_shares[NUM_ROUNDS][N_PARTIES],
-    a             *as[NUM_ROUNDS],
-    z             *zs[NUM_ROUNDS])
-{
-    for (int i = 0; i < NUM_ROUNDS; i++) {
-        as[i] = NULL; zs[i] = NULL;
-        for (int j = 0; j < N_PARTIES; j++)
-            x_shares[i][j] = NULL;
-    }
-    /* Initialize seeds to zero; caller fills via RAND_bytes. */
-    memset(seeds, 0, (size_t)NUM_ROUNDS * N_PARTIES * SEED_SIZE);
-
-    int round = 0;
-    for (int i = 0; i < NUM_ROUNDS; i++) {
-        round = i;
-        for (int j = 0; j < N_PARTIES; j++) {
-            x_shares[i][j] = malloc((size_t)INPUT_LEN);
-            if (!x_shares[i][j]) goto err;
-        }
-        as[i] = calloc(1, sizeof(a));
-        if (!as[i]) goto err;
-        zs[i] = calloc(1, sizeof(z));
-        if (!zs[i]) goto err;
-
-        /* Allocate z internals (aux, msgs_e=2*ySize; x_offset set later). */
-        zs[i]->aux = malloc((size_t)ySize * sizeof(uint32_t));
-        if (!zs[i]->aux) goto err;
-        zs[i]->x_offset = malloc((size_t)INPUT_LEN);
-        if (!zs[i]->x_offset) goto err;
-        zs[i]->msgs_e = malloc((size_t)2 * ySize * sizeof(uint32_t));
-        if (!zs[i]->msgs_e) goto err;
-    }
-    return 0;
-
-err:
-    for (int i = 0; i <= round; i++) {
-        for (int j = 0; j < N_PARTIES; j++) { free(x_shares[i][j]); x_shares[i][j] = NULL; }
-        free(as[i]);
-        if (zs[i]) {
-            free(zs[i]->aux);
-            free(zs[i]->x_offset);
-            free(zs[i]->msgs_e);
-            free(zs[i]);
-        }
-    }
-    return -1;
-}
-
-void free_structures_prove(
-    unsigned char *x_shares[NUM_ROUNDS][N_PARTIES],
-    a             *as[NUM_ROUNDS],
-    z             *zs[NUM_ROUNDS])
-{
-    for (int i = 0; i < NUM_ROUNDS; i++) {
-        for (int j = 0; j < N_PARTIES; j++) free(x_shares[i][j]);
-        free(as[i]);
-        if (zs[i]) {
-            free(zs[i]->aux);
-            free(zs[i]->x_offset);
-            free(zs[i]->msgs_e);
-            free(zs[i]);
-        }
-    }
-}
-
-/* ── Verify allocation ──────────────────────────────────────────────────── */
-
-int alloc_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
-{
-    for (int i = 0; i < NUM_ROUNDS; i++) { as[i] = NULL; zs[i] = NULL; }
-
-    int round = 0;
-    for (int i = 0; i < NUM_ROUNDS; i++) {
-        round = i;
-        as[i] = calloc(1, sizeof(a));
-        if (!as[i]) goto err;
-        zs[i] = calloc(1, sizeof(z));
-        if (!zs[i]) goto err;
-        zs[i]->aux = malloc((size_t)ySize * sizeof(uint32_t));
-        if (!zs[i]->aux) goto err;
-        zs[i]->x_offset = malloc((size_t)INPUT_LEN);
-        if (!zs[i]->x_offset) goto err;
-        zs[i]->msgs_e = malloc((size_t)2 * ySize * sizeof(uint32_t));
-        if (!zs[i]->msgs_e) goto err;
-    }
-    return 0;
-
-err:
-    for (int i = 0; i <= round; i++) {
-        free(as[i]);
-        if (zs[i]) {
-            free(zs[i]->aux);
-            free(zs[i]->x_offset);
-            free(zs[i]->msgs_e);
-            free(zs[i]);
-        }
-    }
-    return -1;
-}
-
-void free_structures_verify(a *as[NUM_ROUNDS], z *zs[NUM_ROUNDS])
-{
-    for (int i = 0; i < NUM_ROUNDS; i++) {
-        free(as[i]);
-        if (zs[i]) {
-            free(zs[i]->aux);
-            free(zs[i]->x_offset);
-            free(zs[i]->msgs_e);
-            free(zs[i]);
-        }
-    }
 }
