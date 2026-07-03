@@ -15,10 +15,11 @@ test:
 	$(MAKE) -C src test
 
 # Delegate to src (cleans src/*.o, src-built binaries, and src/tests/ binaries),
-# then remove the binaries moved up here plus any generated outputs.
+# then remove the binaries moved up here.  Only named build artifacts — no
+# *.txt / *.bin globs, which would delete tracked files like OPTIMIZATIONS.txt.
 clean:
 	$(MAKE) -C src clean
-	rm -f $(PROGS) *.o *.txt *.bin
+	rm -f $(PROGS) *.o
 
 help:
 	@echo "Usage: make <target>"

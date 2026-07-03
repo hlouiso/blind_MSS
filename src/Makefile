@@ -136,5 +136,7 @@ bench_pipeline_bin: $(LIB) bench_pipeline.c
 bench-pipeline: bench_pipeline_bin
 	@./bench_pipeline_bin
 
+# Only named build artifacts — no *.txt / *.bin globs, which would delete
+# tracked files if any lived here (see root Makefile).
 clean:
-	rm -f $(LIB) bench_bin bench_pipeline_bin *.o .n_stamp_* *.txt *.bin $(addprefix tests/,$(TESTS))
+	rm -f $(LIB) bench_bin bench_pipeline_bin *.o .n_stamp_* $(addprefix tests/,$(TESTS))
