@@ -14,3 +14,5 @@ src/test_*
 src/tests/test_*
 !src/tests/test_*.c
 output/*
+# Keep the optimization log under version control
+!OPTIMIZATIONS.txt

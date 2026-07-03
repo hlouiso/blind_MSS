@@ -245,13 +245,12 @@ static int cmp_int(const void *a, const void *b)
     return *(const int *)a - *(const int *)b;
 }
 
-void kkw_fiat_shamir(const unsigned char msg[32], const uint32_t pubout[8],
-                     const unsigned char pk_seed[XMSS_PK_SEED_BYTES],
-                     const unsigned char nonce[32],
-                     const unsigned char h_star[32],
-                     int C_out[NUM_ROUNDS], int p_out[NUM_ROUNDS])
+void kkw_fs_prefix(const unsigned char msg[32], const uint32_t pubout[8],
+                   const unsigned char pk_seed[XMSS_PK_SEED_BYTES],
+                   const unsigned char nonce[32],
+                   const unsigned char h_star[32],
+                   unsigned char h_pre[32])
 {
-    /* seed_FS = H(msg || pubout_be || pk_seed || nonce || h_star) */
     unsigned char pubout_bytes[32];
     for (int i = 0; i < 8; i++) {
         pubout_bytes[i*4+0] = (unsigned char)(pubout[i] >> 24);
@@ -259,9 +258,8 @@ void kkw_fiat_shamir(const unsigned char msg[32], const uint32_t pubout[8],
         pubout_bytes[i*4+2] = (unsigned char)(pubout[i] >>  8);
         pubout_bytes[i*4+3] = (unsigned char)(pubout[i]);
     }
-    unsigned char seed_FS[32];
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) { memset(C_out, 0, NUM_ROUNDS*sizeof(int)); memset(p_out, 0, NUM_ROUNDS*sizeof(int)); return; }
+    if (!ctx) { memset(h_pre, 0, 32); return; }
     unsigned int outl = 0;
     int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
              EVP_DigestUpdate(ctx, msg, 32) == 1 &&
@@ -269,10 +267,30 @@ void kkw_fiat_shamir(const unsigned char msg[32], const uint32_t pubout[8],
              EVP_DigestUpdate(ctx, pk_seed, XMSS_PK_SEED_BYTES) == 1 &&
              EVP_DigestUpdate(ctx, nonce, 32) == 1 &&
              EVP_DigestUpdate(ctx, h_star, 32) == 1 &&
-             EVP_DigestFinal_ex(ctx, seed_FS, &outl) == 1;
+             EVP_DigestFinal_ex(ctx, h_pre, &outl) == 1;
     EVP_MD_CTX_free(ctx);
-    if (!ok) { memset(C_out, 0, NUM_ROUNDS*sizeof(int)); memset(p_out, 0, NUM_ROUNDS*sizeof(int)); return; }
+    if (!ok) memset(h_pre, 0, 32);
+}
 
+int kkw_fs_seed(const unsigned char h_pre[32], uint32_t ctr,
+                unsigned char seed_FS[32])
+{
+    unsigned char in[36];
+    memcpy(in, h_pre, 32);
+    in[32] = (unsigned char)(ctr >> 24);
+    in[33] = (unsigned char)(ctr >> 16);
+    in[34] = (unsigned char)(ctr >>  8);
+    in[35] = (unsigned char)(ctr);
+    if (!sha256_once(in, 36, seed_FS)) { memset(seed_FS, 0, 32); return 0; }
+    /* Grinding predicate: the GRIND_W trailing bits of seed_FS are zero. */
+    for (int b = 0; b < GRIND_W; b++)
+        if ((seed_FS[31 - b/8] >> (b % 8)) & 1) return 0;
+    return 1;
+}
+
+void kkw_fs_expand(const unsigned char seed_FS[32],
+                   int C_out[NUM_ROUNDS], int p_out[NUM_ROUNDS])
+{
     prg_ctx prg;
     prg_init(&prg, seed_FS);
 

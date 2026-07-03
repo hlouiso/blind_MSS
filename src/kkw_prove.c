@@ -65,8 +65,8 @@ int kkw_prove(const unsigned char *input,
               FILE *out)
 {
     if (kkw_verbose)
-        printf("KKW N=%d  M=%d  τ=%d  soundness 2^{-128}  threads=%d\n\n",
-               N_PARTIES, M_KKW, NUM_ROUNDS, omp_get_max_threads());
+        printf("KKW N=%d  M=%d  τ=%d  W=%d  security 2^{-128}  threads=%d\n\n",
+               N_PARTIES, M_KKW, NUM_ROUNDS, GRIND_W, omp_get_max_threads());
 
     unsigned char (*seed_stars)[SEED_SIZE] = malloc((size_t)M_KKW * SEED_SIZE);
     unsigned char (*h_j_all)[32]           = malloc((size_t)M_KKW * 32);
@@ -190,9 +190,16 @@ int kkw_prove(const unsigned char *input,
         return -1;
     }
 
-    /* ── Fiat–Shamir challenge ────────────────────────────────────────────── */
+    /* ── Fiat–Shamir challenge with grinding ─────────────────────────────── */
+    /* Find ctr such that the challenge hash ends in GRIND_W zero bits
+     * (~2^GRIND_W single-compression hashes; ~15 ms at W=16). */
+    unsigned char h_pre[32], seed_FS[32];
+    kkw_fs_prefix(m_hat, pubout, pk_seed, nonce, h_star, h_pre);
+    uint32_t ctr = 0;
+    while (!kkw_fs_seed(h_pre, ctr, seed_FS))
+        ctr++;
     int C_out[NUM_ROUNDS], p_out[NUM_ROUNDS];
-    kkw_fiat_shamir(m_hat, pubout, pk_seed, nonce, h_star, C_out, p_out);
+    kkw_fs_expand(seed_FS, C_out, p_out);
 
     bool in_C[M_KKW];
     memset(in_C, 0, sizeof(in_C));
@@ -275,14 +282,17 @@ int kkw_prove(const unsigned char *input,
     {
         bool write_ok = true;
 
-        /* Header: magic "KKW2" + N + M + tau + ySize (all uint32_t LE). */
-        const unsigned char magic[4] = {'K','K','W','2'};
-        uint32_t hdr[4] = { (uint32_t)N_PARTIES, (uint32_t)M_KKW,
-                             (uint32_t)NUM_ROUNDS, (uint32_t)ySize };
+        /* Header: magic "KKW3" + N + M + tau + ySize + GRIND_W (uint32_t LE),
+         * then nonce, h*, and the grinding counter ctr (uint32_t LE). */
+        const unsigned char magic[4] = {'K','K','W','3'};
+        uint32_t hdr[5] = { (uint32_t)N_PARTIES, (uint32_t)M_KKW,
+                             (uint32_t)NUM_ROUNDS, (uint32_t)ySize,
+                             (uint32_t)GRIND_W };
         if (fwrite(magic, 4, 1, out) != 1) write_ok = false;
         if (fwrite(hdr,   sizeof(hdr), 1, out) != 1) write_ok = false;
         if (fwrite(nonce, 32, 1, out) != 1) write_ok = false;
         if (fwrite(h_star, 32, 1, out) != 1) write_ok = false;
+        if (fwrite(&ctr, sizeof(ctr), 1, out) != 1) write_ok = false;
 
         /* ZK remark: for opened (offline) instances all tapes are derivable
          * from seed_star, so h'_j and h_out_j are hashes of witness-dependent

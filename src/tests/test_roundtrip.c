@@ -241,22 +241,31 @@ static void test_preproc_smoke(void)
     RAND_bytes(h_star, 32);
     RAND_bytes(pk_seed_fs, XMSS_PK_SEED_BYTES);
     RAND_bytes(nonce_fs, 32);
+    unsigned char h_pre[32], seed_FS[32];
+    kkw_fs_prefix(m_hat, pubout, pk_seed_fs, nonce_fs, h_star, h_pre);
+    /* Grind until the predicate holds (as the prover does). */
+    uint32_t ctr = 0;
+    while (!kkw_fs_seed(h_pre, ctr, seed_FS)) ctr++;
     int C_out[NUM_ROUNDS], p_out[NUM_ROUNDS];
-    kkw_fiat_shamir(m_hat, pubout, pk_seed_fs, nonce_fs, h_star, C_out, p_out);
+    kkw_fs_expand(seed_FS, C_out, p_out);
     int fs_ok = 1;
     for (int k = 0; k < NUM_ROUNDS; k++) {
         if (C_out[k] < 0 || C_out[k] >= M_KKW) { fs_ok = 0; break; }
         if (k > 0 && C_out[k] <= C_out[k-1])   { fs_ok = 0; break; }
         if (p_out[k] < 0 || p_out[k] >= N_PARTIES) { fs_ok = 0; break; }
     }
-    CHECK(fs_ok, "kkw_fiat_shamir: C sorted/distinct in [0,M), p in [0,N)");
+    CHECK(fs_ok, "kkw_fs_expand: C sorted/distinct in [0,M), p in [0,N)");
 
-    /* kkw_fiat_shamir: deterministic */
+    /* fs_seed/fs_expand: deterministic, and grind predicate stable */
+    unsigned char seed_FS2[32];
+    CHECK(kkw_fs_seed(h_pre, ctr, seed_FS2) == 1 &&
+          memcmp(seed_FS, seed_FS2, 32) == 0,
+          "kkw_fs_seed: deterministic, grind predicate stable");
     int C_out2[NUM_ROUNDS], p_out2[NUM_ROUNDS];
-    kkw_fiat_shamir(m_hat, pubout, pk_seed_fs, nonce_fs, h_star, C_out2, p_out2);
+    kkw_fs_expand(seed_FS2, C_out2, p_out2);
     CHECK(memcmp(C_out, C_out2, NUM_ROUNDS * sizeof(int)) == 0 &&
           memcmp(p_out, p_out2, NUM_ROUNDS * sizeof(int)) == 0,
-          "kkw_fiat_shamir: deterministic");
+          "kkw_fs_expand: deterministic");
 
     free(aux1); free(aux2); free(aux3);
 }

@@ -33,41 +33,131 @@
 #define N_PARTIES 4
 #endif
 
-#if   N_PARTIES == 4
-#  define M_KKW      218   /* soundness 2^{-128.00}, τ=65  */
-#  define NUM_ROUNDS  65
-#elif N_PARTIES == 8
-#  define M_KKW      252   /* soundness 2^{-128.05}, τ=44  */
-#  define NUM_ROUNDS  44
-#elif N_PARTIES == 12
-#  define M_KKW      295   /* soundness 2^{-128.02}, τ=37  */
-#  define NUM_ROUNDS  37
-#elif N_PARTIES == 16
-#  define M_KKW      352   /* soundness 2^{-128.00}, τ=33  */
-#  define NUM_ROUNDS  33
-#elif N_PARTIES == 20
-#  define M_KKW      366   /* soundness 2^{-128.00}, τ=31  */
-#  define NUM_ROUNDS  31
-#elif N_PARTIES == 24
-#  define M_KKW      425   /* soundness 2^{-128.03}, τ=29  */
-#  define NUM_ROUNDS  29
-#elif N_PARTIES == 28
-#  define M_KKW      433   /* soundness 2^{-128.01}, τ=28  */
-#  define NUM_ROUNDS  28
-#elif N_PARTIES == 32
-#  define M_KKW      462   /* soundness 2^{-128.03}, τ=27  */
-#  define NUM_ROUNDS  27
-#elif N_PARTIES == 64
-#  define M_KKW      631   /* soundness 2^{-128.03}, τ=23  */
-#  define NUM_ROUNDS  23
-#elif N_PARTIES == 128
-#  define M_KKW      916   /* soundness 2^{-128.01}, τ=20  */
-#  define NUM_ROUNDS  20
-#elif N_PARTIES == 256
-#  define M_KKW     1794   /* soundness 2^{-128.01}, τ=17  */
-#  define NUM_ROUNDS  17
+/* ── Grinding (FAESTER-style proof of work, eprint 2024/490 §4) ──────────────
+ * GRIND_W: the Fiat–Shamir challenge hash must end in GRIND_W zero bits; the
+ * prover greps for a counter ctr achieving this (~2^W short hashes, one-time).
+ * Every forgery attempt pays the same 2^W, so the cut-and-choose target can
+ * be relaxed to 2^{-(128-W)} — total attack cost stays 2^128 (per RO query:
+ * P[W zero bits AND cheatable challenge] = 2^{-W} · 2^{-(128-W)} = 2^{-128}).
+ * τ = ⌈(128-W)/log₂N⌉ + 1; M from params.py with target 128-W.
+ * Override at build time: make W=<0|16|24>. */
+#ifndef GRIND_W
+#define GRIND_W 16
+#endif
+
+#if GRIND_W == 0
+#  if   N_PARTIES == 4
+#    define M_KKW 218
+#    define NUM_ROUNDS 65
+#  elif N_PARTIES == 8
+#    define M_KKW 252
+#    define NUM_ROUNDS 44
+#  elif N_PARTIES == 12
+#    define M_KKW 295
+#    define NUM_ROUNDS 37
+#  elif N_PARTIES == 16
+#    define M_KKW 352
+#    define NUM_ROUNDS 33
+#  elif N_PARTIES == 20
+#    define M_KKW 366
+#    define NUM_ROUNDS 31
+#  elif N_PARTIES == 24
+#    define M_KKW 425
+#    define NUM_ROUNDS 29
+#  elif N_PARTIES == 28
+#    define M_KKW 433
+#    define NUM_ROUNDS 28
+#  elif N_PARTIES == 32
+#    define M_KKW 462
+#    define NUM_ROUNDS 27
+#  elif N_PARTIES == 64
+#    define M_KKW 631
+#    define NUM_ROUNDS 23
+#  elif N_PARTIES == 128
+#    define M_KKW 916
+#    define NUM_ROUNDS 20
+#  elif N_PARTIES == 256
+#    define M_KKW 1794
+#    define NUM_ROUNDS 17
+#  else
+#    error "Unsupported N_PARTIES: no KKW (M,τ) parameters in table"
+#  endif
+#elif GRIND_W == 16
+#  if   N_PARTIES == 4
+#    define M_KKW 189
+#    define NUM_ROUNDS 57
+#  elif N_PARTIES == 8
+#    define M_KKW 209
+#    define NUM_ROUNDS 39
+#  elif N_PARTIES == 12
+#    define M_KKW 237
+#    define NUM_ROUNDS 33
+#  elif N_PARTIES == 16
+#    define M_KKW 301
+#    define NUM_ROUNDS 29
+#  elif N_PARTIES == 20
+#    define M_KKW 330
+#    define NUM_ROUNDS 27
+#  elif N_PARTIES == 24
+#    define M_KKW 327
+#    define NUM_ROUNDS 26
+#  elif N_PARTIES == 28
+#    define M_KKW 344
+#    define NUM_ROUNDS 25
+#  elif N_PARTIES == 32
+#    define M_KKW 374
+#    define NUM_ROUNDS 24
+#  elif N_PARTIES == 64
+#    define M_KKW 573
+#    define NUM_ROUNDS 20
+#  elif N_PARTIES == 128
+#    define M_KKW 963
+#    define NUM_ROUNDS 17
+#  elif N_PARTIES == 256
+#    define M_KKW 1488
+#    define NUM_ROUNDS 15
+#  else
+#    error "Unsupported N_PARTIES: no KKW (M,τ) parameters in table"
+#  endif
+#elif GRIND_W == 24
+#  if   N_PARTIES == 4
+#    define M_KKW 175
+#    define NUM_ROUNDS 53
+#  elif N_PARTIES == 8
+#    define M_KKW 199
+#    define NUM_ROUNDS 36
+#  elif N_PARTIES == 12
+#    define M_KKW 211
+#    define NUM_ROUNDS 31
+#  elif N_PARTIES == 16
+#    define M_KKW 276
+#    define NUM_ROUNDS 27
+#  elif N_PARTIES == 20
+#    define M_KKW 259
+#    define NUM_ROUNDS 26
+#  elif N_PARTIES == 24
+#    define M_KKW 314
+#    define NUM_ROUNDS 24
+#  elif N_PARTIES == 28
+#    define M_KKW 335
+#    define NUM_ROUNDS 23
+#  elif N_PARTIES == 32
+#    define M_KKW 372
+#    define NUM_ROUNDS 22
+#  elif N_PARTIES == 64
+#    define M_KKW 474
+#    define NUM_ROUNDS 19
+#  elif N_PARTIES == 128
+#    define M_KKW 823
+#    define NUM_ROUNDS 16
+#  elif N_PARTIES == 256
+#    define M_KKW 1339
+#    define NUM_ROUNDS 14
+#  else
+#    error "Unsupported N_PARTIES: no KKW (M,τ) parameters in table"
+#  endif
 #else
-#  error "Unsupported N_PARTIES: no KKW (M,τ) parameters in table"
+#  error "Unsupported GRIND_W: run src/params.py and add a (τ,M) table"
 #endif
 
 _Static_assert(N_PARTIES >= 4 && N_PARTIES <= 256, "N_PARTIES must be 4..256");
@@ -162,20 +252,33 @@ void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE],
  * the gate-type table that drives the fast aux path. NULL in normal operation. */
 extern uint8_t *g_gate_type_rec;
 
-/* ── Fiat–Shamir challenge (full KKW protocol) ──────────────────────────── */
+/* ── Fiat–Shamir challenge with grinding (full KKW protocol) ────────────── */
 
 /**
- * Derive the KKW challenge from the global commitment h_star:
+ * h_pre = H(msg || pubout_be || pk_seed || nonce || h_star).
+ * Hashed once; the grinding loop then costs one compression per candidate.
+ */
+void kkw_fs_prefix(const unsigned char msg[32], const uint32_t pubout[8],
+                   const unsigned char pk_seed[XMSS_PK_SEED_BYTES],
+                   const unsigned char nonce[32],
+                   const unsigned char h_star[32],
+                   unsigned char h_pre[32]);
+
+/**
+ * seed_FS = H(h_pre || ctr_be4).  Returns 1 iff seed_FS ends in GRIND_W zero
+ * bits (the grinding predicate); the prover increments ctr until this holds,
+ * the verifier checks it for the ctr carried in the proof.
+ */
+int kkw_fs_seed(const unsigned char h_pre[32], uint32_t ctr,
+                unsigned char seed_FS[32]);
+
+/**
+ * Expand seed_FS into the KKW challenge:
  *   C_out[NUM_ROUNDS]: sorted, distinct indices in [0..M_KKW-1] — online instances.
  *   p_out[NUM_ROUNDS]: party index in [0..N_PARTIES-1] for each online instance.
- * Uses hash-based PRG seeded by H(msg || pubout_be || pk_seed || nonce || h_star).
- * nonce is a fresh 32-byte random value generated by the prover and stored in the proof.
  */
-void kkw_fiat_shamir(const unsigned char msg[32], const uint32_t pubout[8],
-                     const unsigned char pk_seed[XMSS_PK_SEED_BYTES],
-                     const unsigned char nonce[32],
-                     const unsigned char h_star[32],
-                     int C_out[NUM_ROUNDS], int p_out[NUM_ROUNDS]);
+void kkw_fs_expand(const unsigned char seed_FS[32],
+                   int C_out[NUM_ROUNDS], int p_out[NUM_ROUNDS]);
 
 /* ── SHA-256 / commitment helpers ───────────────────────────────────────── */
 

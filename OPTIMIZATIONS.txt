@@ -1,0 +1,99 @@
+================================================================================
+ blind_MSS — Optimization log
+ Baseline: commit 875e176 (July 2026).  Reference machine: Intel i5-9300H,
+ 8 threads, N=4 (M=218, tau=65) unless stated otherwise.
+================================================================================
+
+Baseline numbers (before any change)
+  e2e pipeline (keygen+sign+prove+verify+2 negative tests) : 22.4 s
+  prove ~3.5 s | verify ~2 s | proof size 108.8 MB
+
+--------------------------------------------------------------------------------
+1. Remove redundant per-party H_com from the proof            [commit 075d776]
+--------------------------------------------------------------------------------
+  What : the per-round h[N][32] field (H_com(seed||x||yp) per party) was
+         written to the proof and checked, but never bound into h* before the
+         challenge.  The verifier recomputes every input to it from proof
+         data, so the check added no soundness: binding is already complete
+         via h_j (seeds+aux), h' (all broadcasts, hence x-shares) and h_out
+         (all yp shares) — exactly the KKW binding set.
+  Also : error-path memory-leak fixes in kkw_prove; kkw_verify M x 32 tables
+         moved from stack to heap; proof magic bumped KKW1 -> KKW2.
+  Gain : -N*32 B/round (tiny); strictly less data revealed; correctness.
+
+--------------------------------------------------------------------------------
+2. Vectorised MPC gates (portable 128-bit vector types)       [commit be4850e]
+--------------------------------------------------------------------------------
+  What : mpc_ADD/mpc_ADD_verify reformulated branch-free and packed 4 parties
+         per GCC/Clang vector_size(16) lane (SSE on x86, NEON on arm64, no
+         per-ISA intrinsics).  Verify side pads N-1 slots with inert zero
+         lanes.
+  Safety: transcript proven bit-identical to the reference implementation
+         (random-input equivalence harness, N=4 and N=8, all hidden parties).
+  Gain : circuit eval ~2x (building_views 79 -> 49 ms/instance);
+         e2e 22.4 -> 14.5 s (with -O3, see 3).
+
+--------------------------------------------------------------------------------
+3. Build flags                                                [commit be4850e]
+--------------------------------------------------------------------------------
+  What : default OPT -O2 -> -O3; -march=native on Linux only (Apple clang
+         already targets NEON+crypto by default).
+  Gain : ~8% alone; enabler for 2.
+
+--------------------------------------------------------------------------------
+4. Single-shot AES-CTR tape expansion                         [commit 729721d]
+--------------------------------------------------------------------------------
+  What : the 64-byte chunk loop paid EVP_EncryptUpdate call overhead ~28k
+         times per tape; replaced by one in-place update (same keystream).
+  Gain : expansion 8.6 -> 3.7 ms/instance; e2e 14.5 -> 12.8 s.
+
+--------------------------------------------------------------------------------
+5. Per-thread scratch reuse in kkw_prove                      [commit 918987f]
+--------------------------------------------------------------------------------
+  What : each pass-1 instance malloc/freed ~13 MB (tapes, x-shares, aux,
+         da_db_all) — ~2.8 GB of allocator churn per proof.  Buffers are now
+         allocated once per OpenMP thread and reused across both passes.
+  Gain : e2e 12.8 -> 12.45 s; removes per-instance OOM paths.
+
+--------------------------------------------------------------------------------
+6. Word-parallel mpc_ADD (no per-bit carry loop on prove)     [commit c4ade15]
+--------------------------------------------------------------------------------
+  What : two observations kill the 31-iteration bit loop:
+         (a) the global carry word equals that of the REAL addition of the
+             reconstructed operands: cg = (xg+yg) ^ xg ^ yg;
+         (b) each party's carry word is the prefix-XOR of its whole-word AND
+             outputs (log2 shift trick, 5 shift/XOR pairs).
+         Verify keeps a 31-step scalar recurrence to rebuild DA/DB (it lacks
+         the hidden party) but the per-slot work is word-parallel.
+  Safety: bit-identical transcript (same equivalence harness as 2).
+  Gain : building_views 47 -> 21 ms/instance; e2e 12.4 -> 7.8 s.
+         Prove ~1.8 s, verify ~0.9 s (bench_pipeline medians).
+
+--------------------------------------------------------------------------------
+Attempted and reverted
+--------------------------------------------------------------------------------
+  * compute_aux_from_seeds streaming restructure: no measurable gain — the
+    old 12-stream gather was already prefetcher-friendly; cost is AES
+    expansion (fixed by 4).  Reverted per the "keep only if it improves" rule.
+  * GGM / one-tree BAVC (eprint 2024/490 §3): analysed, not implemented.
+    It compresses seed openings, which total ~11 KB of a 108.8 MB proof
+    (<0.01%): our proof is dominated by the online transcript (aux+msgs,
+    12 B/gate x 152504 gates x tau rounds), unlike Picnic/FAEST signatures
+    where seeds dominate.  Also our cut-and-choose hides tau/M ~ 30% of
+    leaves (dense regime, paths barely merge).
+
+--------------------------------------------------------------------------------
+In progress (July 2026)
+--------------------------------------------------------------------------------
+  7. Grinding / proof-of-work on the Fiat-Shamir challenge (FAESTER-style,
+     eprint 2024/490 §4): require GRIND_W zero bits in the challenge hash,
+     found by incrementing a counter (~2^W hashes, one-time, prover side).
+     Any forger pays the same 2^W per attempt, so the cut-and-choose target
+     can be relaxed to 2^-(128-W): total attack cost stays 2^128.
+     tau = ceil((128-W)/log2 N)+1;  N=4: W=16 -> tau=57, M=189 (-12% proof,
+     ~15 ms PoW);  W=24 -> tau=53, M=175 (-18%, ~4 s PoW).
+  8. Masked-values online phase (the original KKW formulation): every wire
+     carries a public masked value; one broadcast word per gate per party
+     instead of two (da,db).  Proof cost per gate 12 -> 8 B (-33%), h' hashes
+     half the data.  Combined 7+8 target: ~65-70 MB at N=4.
+================================================================================

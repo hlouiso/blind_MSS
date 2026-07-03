@@ -59,6 +59,11 @@ CFLAGS = $(OPT) $(NATIVE) $(WARNINGS) $(OMP_CFLAGS) $(OPENSSL_CFLAGS) $(EXTRA_CF
 ifdef N
 CFLAGS += -DN_PARTIES=$(N)
 endif
+# Grinding parameter (proof-of-work bits on the Fiat-Shamir challenge).
+# Supported: 0, 16 (default), 24 — see src/params.py for the (tau, M) tables.
+ifdef W
+CFLAGS += -DGRIND_W=$(W)
+endif
 LDFLAGS = $(OMP_LDFLAGS)
 LDLIBS = $(OMP_LIBS) $(OPENSSL_LIBS) -lm
 
@@ -74,11 +79,10 @@ LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.
 # make the first object file the default goal).
 .DEFAULT_GOAL := lib
 
-# Rebuild all objects (and the library/bench) when N changes.  The stamp file is
-# named .n_stamp_<N>; switching N deletes the old stamp and every build product
-# so they are recompiled for the new N.  LIBOBJS is defined above so $(LIBOBJS)
-# expands correctly in both the rule target and the recipe.
-N_ACTUAL := $(if $(N),$(N),default)
+# Rebuild all objects (and the library/bench) when N or W changes.  The stamp
+# file is named .n_stamp_<N>_w<W>; switching either deletes the old stamp and
+# every build product so they are recompiled for the new parameters.
+N_ACTUAL := $(if $(N),$(N),default)_w$(if $(W),$(W),default)
 N_STAMP  := .n_stamp_$(N_ACTUAL)
 $(N_STAMP):
 	@rm -f .n_stamp_* $(LIBOBJS) $(LIB) bench_bin bench_pipeline_bin && touch $@

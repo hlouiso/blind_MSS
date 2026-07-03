@@ -44,10 +44,15 @@ Halevi–Micali commitment (`commitment.h`):
 - `HM_NONCES = 6`, `HM_LINES = 2`, field `GF(2¹²⁸)` — same layout as the Longfellow-based instantiation.
 - Opening `(r, a)` is `96 + 192 = 288` bytes; the commitment `com = a‖b‖y` is `256` bytes.
 
-KKW proof (`shared.h`, selectable at build time with `N=<N>`):
+KKW proof (`shared.h`, selectable at build time with `N=<N>` and `W=<W>`):
 - `N_PARTIES` — number of MPC parties (default 4)
 - `NUM_ROUNDS` (`τ`) — online rounds included in the proof; drives prove/verify cost
 - `M_KKW` (`M`) — total preprocessing instances; drives pass-1 cost (offline section ≈ negligible)
+- `GRIND_W` (`W`, default 16) — FAESTER-style grinding: the Fiat–Shamir challenge
+  hash must end in `W` zero bits, found by counting a `ctr` (~2^W short hashes at
+  prove time, one-time). Every forgery attempt pays the same 2^W, so the
+  cut-and-choose target relaxes to 2^-(128-W) and τ shrinks — total attack cost
+  stays 2^128. Supported: 0, 16, 24 (τ = 65/57/53 at N=4).
 - `INPUT_LEN = 2762` — witness byte length
 - `ySize = 152504` — nonlinear-gate count in the SHA-256/WOTS/XMSS circuit
 
@@ -95,7 +100,8 @@ are the API. The full flow is shown in [`src/tests/test_e2e.c`](src/tests/test_e
 
 The proof is a byte stream (a `FILE *`, e.g. an on-disk file or `tmpfile()`), so
 it can be stored or sent over a wire between the client and the verifier. Its
-format is `"KKW2"` magic (4 B) + header (N, M, τ, ySize as uint32_t LE, 16 B) +
+format is `"KKW3"` magic (4 B) + header (N, M, τ, ySize, W as uint32_t LE, 20 B) +
+grinding counter `ctr` (4 B) +
 nonce (32 B) + h\* (32 B) + offline section ((M−τ) × 96 B) + online section
 (τ rounds). A verifier built for a different N rejects it on the header check.
 
@@ -125,17 +131,17 @@ Measured on Intel i5-9300H @ 2.40 GHz, 8 threads, 1 iteration (N=4 default):
 | Secret key (`sk_seed ‖ pk_seed ‖ leaf_index`) | 52 B |
 | Commitment `com = a ‖ b ‖ y` | 256 B |
 | Raw XMSS signature (`leaf ‖ nonce ‖ 144 chains ‖ 10 path`) | 2.42 KB |
-| **Blind signature (KKW proof, N=4)** | ≈ 108 MB |
+| **Blind signature (KKW proof, N=4, W=16)** | ≈ 95 MB |
 
-### Timing (N=4, τ=65, M=218)
+### Timing (N=4, W=16: τ=57, M=189)
 
 | Phase | Time |
 |---|---:|
 | Commitment computation | < 1 ms |
 | Key generation | ≈ 130 ms |
 | Signing | ≈ 130 ms |
-| Proof generation | ≈ 1.8 s |
-| Proof verification | ≈ 0.9 s |
+| Proof generation | ≈ 1.6 s |
+| Proof verification | ≈ 0.85 s |
 
 Prove/verify times reflect the word-parallel MPC gates (SIMD over parties via
 portable vector extensions — SSE on x86, NEON on arm64) and single-shot

@@ -17,17 +17,18 @@ int kkw_verify(FILE *proof,
     /* ── Check proof header ─────────────────────────────────────────────── */
     {
         unsigned char magic[4];
-        uint32_t hdr[4];
+        uint32_t hdr[5];
         if (fread(magic, 4, 1, proof) != 1 || fread(hdr, sizeof(hdr), 1, proof) != 1) {
             fprintf(stderr, "kkw_verify: read error (header)\n"); return -1;
         }
-        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='2') {
+        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='3') {
             fprintf(stderr, "kkw_verify: bad magic\n"); return -1;
         }
         if (hdr[0]!=(uint32_t)N_PARTIES || hdr[1]!=(uint32_t)M_KKW ||
-            hdr[2]!=(uint32_t)NUM_ROUNDS || hdr[3]!=(uint32_t)ySize) {
-            fprintf(stderr, "kkw_verify: parameter mismatch (proof compiled for N=%u M=%u tau=%u ySize=%u)\n",
-                    hdr[0], hdr[1], hdr[2], hdr[3]);
+            hdr[2]!=(uint32_t)NUM_ROUNDS || hdr[3]!=(uint32_t)ySize ||
+            hdr[4]!=(uint32_t)GRIND_W) {
+            fprintf(stderr, "kkw_verify: parameter mismatch (proof compiled for N=%u M=%u tau=%u ySize=%u W=%u)\n",
+                    hdr[0], hdr[1], hdr[2], hdr[3], hdr[4]);
             return -1;
         }
     }
@@ -42,8 +43,22 @@ int kkw_verify(FILE *proof,
         fprintf(stderr, "kkw_verify: read error (h_star)\n"); return -1;
     }
 
+    uint32_t ctr;
+    if (fread(&ctr, sizeof(ctr), 1, proof) != 1) {
+        fprintf(stderr, "kkw_verify: read error (ctr)\n"); return -1;
+    }
+
+    /* Grinding check: the challenge hash for this ctr must end in GRIND_W
+     * zero bits — this is what forces a forger to pay ~2^GRIND_W hashes per
+     * attempt.  Rejecting here is mandatory for the soundness argument. */
+    unsigned char h_pre[32], seed_FS[32];
+    kkw_fs_prefix(m_hat, pubout, pk_seed, nonce, h_star, h_pre);
+    if (!kkw_fs_seed(h_pre, ctr, seed_FS)) {
+        fprintf(stderr, "kkw_verify: grinding check failed\n"); return -1;
+    }
+
     int C_out[NUM_ROUNDS], p_out[NUM_ROUNDS];
-    kkw_fiat_shamir(m_hat, pubout, pk_seed, nonce, h_star, C_out, p_out);
+    kkw_fs_expand(seed_FS, C_out, p_out);
 
     bool in_C[M_KKW];
     memset(in_C, 0, sizeof(in_C));
