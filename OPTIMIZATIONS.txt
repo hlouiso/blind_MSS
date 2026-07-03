@@ -63,6 +63,11 @@ Baseline numbers at 875e176 (before this log's changes)
          (random-input equivalence harness, N=4 and N=8, all hidden parties).
   Gain : circuit eval ~2x (building_views 79 -> 49 ms/instance);
          e2e 22.4 -> 14.5 s (with -O3, see 3).
+  Note : SUPERSEDED by 8 (masked values, commit 20cf642).  The masked-values
+         rewrite reformulated mpc_ADD/mpc_ADD_verify around one broadcast word
+         per party and dropped the vector_size(16) packing; the party loops are
+         now scalar and left to -O3 -march=native auto-vectorisation (see 3).
+         No net regression: 8 is faster overall despite losing explicit SIMD.
 
 --------------------------------------------------------------------------------
 3. Build flags                                                [commit be4850e]
