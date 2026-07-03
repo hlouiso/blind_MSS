@@ -4,9 +4,40 @@
  8 threads, N=4 (M=218, tau=65) unless stated otherwise.
 ================================================================================
 
-Baseline numbers (before any change)
-  e2e pipeline (keygen+sign+prove+verify+2 negative tests) : 22.4 s
+--------------------------------------------------------------------------------
+0. Pre-baseline optimizations (before this log, from the git history)
+--------------------------------------------------------------------------------
+  0.a  ZKBoo -> KKW migration                                [commit 30202b6]
+       The original prover was ZKBoo-style (N=3, 219 rounds); moving to the
+       KKW preprocessing/cut-and-choose model made N a parameter and cut the
+       round count to tau = ceil(128/log2 N)+1 — the foundational proof-size
+       decision of the project.
+  0.b  OpenMP parallelisation                       [commits 537d389, 3a3c261]
+       Prove pass 1/pass 2 and the verifier (offline preprocessing check with
+       per-thread aux buffers, then the online rounds) run on all cores.
+  0.c  Strict minimum M                             [commits 25937bf, c040084]
+       Exact KKW soundness formula in params.py instead of conservative
+       over-provisioning: smallest M per (N, tau) — less pass-1 work and a
+       smaller offline section.
+  0.d  Proof-content trimming                       [commits 2e606e9, decf48f]
+       Per-party broadcast pairs replacing a redundant global broadcast copy,
+       and removal of the hidden party's yp_e duplicate from the proof.
+  0.e  Offline-verify fast path (~2-3x)                      [commit 3378c32]
+       aux recomputed from the Beaver tapes alone, skipping the circuit
+       re-run per opened instance.  Superseded by 8 (masked values), where
+       aux depends on the mask flow and the circuit is re-run with zero
+       publics; see "mask-flow aggregation" under Ideas below.
+  0.f  Library + in-memory pipeline                          [commit d34ce7c]
+       File-passing CLI binaries replaced by libblindmss.a and an in-memory
+       test suite: no serialisation to disk between protocol phases.
+
+Baseline numbers at 875e176 (before this log's changes)
+  e2e harness (keygen+sign+prove+verify+negative tests) : 22.4 s
   prove ~3.5 s | verify ~2 s | proof size 108.8 MB
+  (Note: until the harness fix below, the e2e test ran prove and each verify
+   TWICE via a double-evaluating CHECK macro; all e2e times in this log share
+   that bias, so their ratios remain valid.  The per-phase bench_pipeline
+   numbers are unaffected and authoritative.)
 
 --------------------------------------------------------------------------------
 1. Remove redundant per-party H_com from the proof            [commit 075d776]
@@ -121,5 +152,37 @@ Summary (N=4, i5-9300H, 8 threads)
   proof size           108.8 MB              57.5 MB   (-47%)
   prove                ~3.5 s                1.38 s    (2.5x)
   verify               ~2 s                  0.90 s    (2.2x)
-  e2e pipeline         22.4 s                5.5 s     (4.1x)
+  e2e harness*         22.4 s                5.5 s     (4.1x)
+  * both measured with the double-running CHECK harness (see note above)
+
+  N trade-off (W=16): N=8 -> 44.1 MB (prove 2.35 s), N=16 -> 35.5 MB (6.05 s).
+
+--------------------------------------------------------------------------------
+Audit notes (July 2026, after the masked-values switch)
+--------------------------------------------------------------------------------
+  * Binding reviewed: h* = H(H(h_j)||H(h')||H(h_out)) commits, before the
+    challenge, to seeds+aux (h_j, incl. aux inside com_{j,0}), the masked
+    witness d and every party's broadcast stream (h'), and the output-mask
+    shares (h_out).  The verifier's grinding check is mandatory and present.
+  * New e2e tamper test: single-byte flips at targeted offsets (nonce, h*,
+    ctr, offline section, com_hidden) and random online offsets must all be
+    rejected — passes.  While writing it we found and fixed a test-harness
+    bug: the CHECK macro evaluated its condition twice, so the e2e test had
+    been running kkw_prove twice (two proofs appended to the file) and each
+    kkw_verify twice.  Protocol unaffected; e2e timings were inflated ~2x.
+  * Known accepted limitations: raw-struct serialisation (host endianness);
+    the verifier ignores trailing bytes after the proof (streams); offline
+    h'_j/h_out_j are witness-dependent hashes (ROM + witness min-entropy,
+    documented in kkw_prove.c); mpc_sha256 returns silently on OOM.
+
+--------------------------------------------------------------------------------
+Ideas not (yet) implemented
+--------------------------------------------------------------------------------
+  * Mask-flow aggregation for offline verify: recompute aux on the XOR-
+    aggregate of the N tapes (one synthetic party) instead of an N-party
+    circuit run — would make the offline check N-independent again (matters
+    at N>=16, where it dominates verify).
+  * GGM/one-tree seed trees (eprint 2024/490 §3): compresses seed openings,
+    which total ~11 KB of a ~58 MB proof here (<0.02%) — not worth it for
+    this circuit size; the same paper's grinding idea (7) was the useful one.
 ================================================================================

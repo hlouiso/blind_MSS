@@ -21,9 +21,11 @@
 #include <string.h>
 
 static int failures = 0;
+/* Evaluate the condition exactly once (side-effecting expressions). */
 #define CHECK(c, m) do { \
-    printf("  %s %s\n", (c) ? "ok  " : "FAIL", (m)); \
-    if (!(c)) failures++; \
+    int check_ok_ = (c); \
+    printf("  %s %s\n", check_ok_ ? "ok  " : "FAIL", (m)); \
+    if (!check_ok_) failures++; \
 } while (0)
 
 /* ── Build XMSS witness ─────────────────────────────────────────────────── */

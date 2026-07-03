@@ -24,9 +24,12 @@
 #include <string.h>
 
 static int failures = 0;
+/* Evaluate the condition exactly once: CHECK(kkw_prove(...) == 0, ...) must
+ * not run the prover twice (it used to, appending two proofs to the file). */
 #define CHECK(c, m) do { \
-    printf("  %s %s\n", (c) ? "ok  " : "FAIL", (m)); \
-    if (!(c)) failures++; \
+    int check_ok_ = (c); \
+    printf("  %s %s\n", check_ok_ ? "ok  " : "FAIL", (m)); \
+    if (!check_ok_) failures++; \
 } while (0)
 
 /* Run keygen + blind + sign + witness assembly exactly as the separate parties
@@ -99,6 +102,54 @@ int main(void)
     bad_pubout[0] ^= 0x01;
     rewind(proof);
     CHECK(kkw_verify(proof, m_hat, pk_seed, bad_pubout) != 0, "verify rejects a forged public key");
+
+    /* Negative: every byte of the proof must be binding — flip one byte at
+     * targeted offsets (nonce, h*, ctr, offline section, online section) and
+     * at random offsets; the verifier must reject each time. */
+    {
+        fseek(proof, 0, SEEK_END);
+        long plen = ftell(proof);
+        rewind(proof);
+        unsigned char *buf = malloc((size_t)plen);
+        if (!buf || fread(buf, 1, (size_t)plen, proof) != (size_t)plen) {
+            printf("FAIL: proof read-back\n"); return 1;
+        }
+
+        const long hdr_end     = 4 + 5*4 + 32 + 32 + 4;      /* magic..ctr */
+        const long online_off  = hdr_end + (long)(M_KKW - NUM_ROUNDS) * 96;
+        long offsets[10];
+        int  n_off = 0;
+        offsets[n_off++] = 4 + 5*4 + 3;            /* nonce */
+        offsets[n_off++] = 4 + 5*4 + 32 + 7;       /* h*    */
+        offsets[n_off++] = hdr_end - 2;            /* ctr   */
+        offsets[n_off++] = hdr_end + 40;           /* offline: inside a seed*/
+        offsets[n_off++] = online_off + 16;        /* online: com_hidden    */
+        for (int i = 0; i < 5; i++) {              /* random online bytes   */
+            uint32_t rnd;
+            RAND_bytes((unsigned char *)&rnd, 4);
+            offsets[n_off++] = online_off + (long)(rnd % (uint32_t)(plen - online_off));
+        }
+
+        int all_rejected = 1;
+        FILE *tampered = tmpfile();
+        if (!tampered) { printf("FAIL: tmpfile\n"); return 1; }
+        for (int i = 0; i < n_off; i++) {
+            buf[offsets[i]] ^= 0x01;
+            rewind(tampered);
+            if (fwrite(buf, 1, (size_t)plen, tampered) != (size_t)plen) {
+                printf("FAIL: tamper write\n"); return 1;
+            }
+            rewind(tampered);
+            if (kkw_verify(tampered, m_hat, pk_seed, pubout) == 0) {
+                printf("  FAIL byte flip at offset %ld ACCEPTED\n", offsets[i]);
+                all_rejected = 0;
+            }
+            buf[offsets[i]] ^= 0x01;               /* restore */
+        }
+        fclose(tampered);
+        free(buf);
+        CHECK(all_rejected, "verify rejects every single-byte proof tampering (10 offsets)");
+    }
 
     fclose(proof);
 
