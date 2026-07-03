@@ -100,9 +100,9 @@ are the API. The full flow is shown in [`src/tests/test_e2e.c`](src/tests/test_e
 
 The proof is a byte stream (a `FILE *`, e.g. an on-disk file or `tmpfile()`), so
 it can be stored or sent over a wire between the client and the verifier. Its
-format is `"KKW3"` magic (4 B) + header (N, M, τ, ySize, W as uint32_t LE, 20 B) +
-grinding counter `ctr` (4 B) +
-nonce (32 B) + h\* (32 B) + offline section ((M−τ) × 96 B) + online section
+format is `"KKW4"` magic (4 B) + header (N, M, τ, ySize, W as uint32_t LE, 20 B) +
+nonce (32 B) + h\* (32 B) + grinding counter `ctr` (4 B) +
+offline section ((M−τ) × 96 B) + online section
 (τ rounds). A verifier built for a different N rejects it on the header check.
 
 ## Protocol
@@ -131,7 +131,7 @@ Measured on Intel i5-9300H @ 2.40 GHz, 8 threads, 1 iteration (N=4 default):
 | Secret key (`sk_seed ‖ pk_seed ‖ leaf_index`) | 52 B |
 | Commitment `com = a ‖ b ‖ y` | 256 B |
 | Raw XMSS signature (`leaf ‖ nonce ‖ 144 chains ‖ 10 path`) | 2.42 KB |
-| **Blind signature (KKW proof, N=4, W=16)** | ≈ 95 MB |
+| **Blind signature (KKW proof, N=4, W=16)** | ≈ 58 MB |
 
 ### Timing (N=4, W=16: τ=57, M=189)
 
@@ -140,21 +140,23 @@ Measured on Intel i5-9300H @ 2.40 GHz, 8 threads, 1 iteration (N=4 default):
 | Commitment computation | < 1 ms |
 | Key generation | ≈ 130 ms |
 | Signing | ≈ 130 ms |
-| Proof generation | ≈ 1.6 s |
-| Proof verification | ≈ 0.85 s |
+| Proof generation | ≈ 1.4 s |
+| Proof verification | ≈ 0.9 s |
 
-Prove/verify times reflect the word-parallel MPC gates (SIMD over parties via
-portable vector extensions — SSE on x86, NEON on arm64) and single-shot
-AES-CTR tape expansion; the transcript is bit-identical to the reference
-bit-serial implementation.
+The online phase uses the masked-values KKW formulation: every wire carries a
+public masked value, linear gates are public computation, and each nonlinear
+gate broadcasts one word per party.  See `OPTIMIZATIONS.txt` for the full
+optimization history (4.1× end-to-end, −47% proof size vs. the baseline).
 
-The proof is large because the online section dominates: each of the τ rounds serialises `aux` (ySize words) and `msgs_e` (2·ySize words) for the hidden party, plus the committed output shares for all N parties:
+The proof is still large because the online section dominates: each of the τ
+rounds serialises the hidden party's broadcast stream `msgs_e` (ySize words)
+and `aux` (ySize words, absent when party 0 is the hidden one):
 
 ```
-proof ≈ header(20) + nonce(32) + h*(32) + (M−τ)·96          [offline, tiny]
-       + τ · (sizeof(a) + (N−1)·SEED_SIZE + INPUT_LEN + aux + 2·aux)
-       ≈ τ · 3·ySize·4  [dominant term]
-       = 65 · 3 · 152504 · 4  ≈  119 MB  [upper bound; conditional terms reduce it]
+proof ≈ header(24) + nonce(32) + h*(32) + ctr(4) + (M−τ)·96   [offline, tiny]
+       + τ · (sizeof(a) + (N−1)·SEED_SIZE + INPUT_LEN + msgs + aux)
+       ≈ τ · 2·ySize·4  [dominant term]
+       = 57 · 2 · 152504 · 4  ≈  70 MB  [upper bound; e=0 rounds skip aux]
 ```
 
 Larger N reduces τ (fewer rounds) → smaller proof, at the cost of more parties per circuit evaluation and a larger M (more preprocessing instances). The offline section grows by only tens of KB.

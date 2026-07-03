@@ -83,17 +83,43 @@ Attempted and reverted
     leaves (dense regime, paths barely merge).
 
 --------------------------------------------------------------------------------
-In progress (July 2026)
+7. Grinding / proof-of-work on the Fiat-Shamir challenge      [commit a79a24e]
 --------------------------------------------------------------------------------
-  7. Grinding / proof-of-work on the Fiat-Shamir challenge (FAESTER-style,
-     eprint 2024/490 §4): require GRIND_W zero bits in the challenge hash,
-     found by incrementing a counter (~2^W hashes, one-time, prover side).
-     Any forger pays the same 2^W per attempt, so the cut-and-choose target
-     can be relaxed to 2^-(128-W): total attack cost stays 2^128.
-     tau = ceil((128-W)/log2 N)+1;  N=4: W=16 -> tau=57, M=189 (-12% proof,
-     ~15 ms PoW);  W=24 -> tau=53, M=175 (-18%, ~4 s PoW).
-  8. Masked-values online phase (the original KKW formulation): every wire
-     carries a public masked value; one broadcast word per gate per party
-     instead of two (da,db).  Proof cost per gate 12 -> 8 B (-33%), h' hashes
-     half the data.  Combined 7+8 target: ~65-70 MB at N=4.
+  What : FAESTER-style (eprint 2024/490 §4): the challenge hash must end in
+         GRIND_W zero bits, found by incrementing a counter ctr (~2^W short
+         hashes, one-time, prover side; ctr goes into the proof).  Any forger
+         pays the same 2^W per attempt, so the cut-and-choose target relaxes
+         to 2^-(128-W): total attack cost stays 2^128 (per RO query:
+         2^-W * 2^-(128-W) = 2^-128).  tau = ceil((128-W)/log2 N)+1, M from
+         params.py (tables for W in {0,16,24}; build with make W=<W>).
+  Gain : N=4, W=16 (default): tau 65->57, M 218->189.
+         Proof 108.8 -> 94.7 MB, prove 1.77 -> 1.61 s, PoW ~15 ms.
+         Proof format KKW3 (header carries W; ctr after h*).
+
+--------------------------------------------------------------------------------
+8. Masked-values online phase (original KKW formulation)      [commit 20cf642]
+--------------------------------------------------------------------------------
+  What : every wire carries a PUBLIC masked value (value XOR mask) plus the
+         parties' XOR-shares of the mask.  Linear gates are public; each
+         nonlinear gate broadcasts ONE word per party (shares of the masked
+         output) instead of the two Beaver openings (da, db).  Per gate the
+         proof carries 8 B (s_e + aux) instead of 12; h' hashes half the
+         broadcast volume; tapes shrink to 2 words/gate; the masked witness
+         d = w XOR lambda_w travels once per round (all mask shares are
+         seed-derived, no more witness-offset party).  aux depends on the
+         mask flow, so the offline check re-runs the circuit with zero
+         publics (masks are witness/public-independent).
+  Safety: full suite at N=4 and N=8, ASan+UBSan clean; gate count unchanged;
+         round-trip test checks prover/verifier masked-output agreement.
+         Proof format KKW4.
+  Gain : proof 94.7 -> 57.5 MB; prove 1.61 -> 1.38 s; e2e 7.8 -> 5.5 s.
+
+--------------------------------------------------------------------------------
+Summary (N=4, i5-9300H, 8 threads)
+--------------------------------------------------------------------------------
+                       baseline 875e176      after 20cf642
+  proof size           108.8 MB              57.5 MB   (-47%)
+  prove                ~3.5 s                1.38 s    (2.5x)
+  verify               ~2 s                  0.90 s    (2.2x)
+  e2e pipeline         22.4 s                5.5 s     (4.1x)
 ================================================================================
