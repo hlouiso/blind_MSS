@@ -2,18 +2,23 @@
 #define XMSS_NATIVE_H
 
 /*
- * Native (host-side) target-sum WOTS+ / XMSS, the variant used by the
- * Longfellow- and Binius64-based instantiations of the paper.  SHA-256 with
- * SPHINCS+-style keyed/tweaked hashing; every internal node is a SHA-256 output
- * truncated to 16 bytes (128-bit).  Byte formats are identical to
- * https://github.com/diegode/blind-longfellow so the security analysis carries over.
+ * Native (host-side) target-sum WOTS+ / XMSS.  All hashing is the BLAKE3
+ * tweakable hash Th (blake3.h) — the construction of binius-zk/binius64
+ * PR #1620 — with SPHINCS+-style domain separation; every internal node is a
+ * Th output truncated to 16 bytes (128-bit).  This is NOT byte-compatible
+ * with the SHA-256 blind-longfellow instantiation any more: the security
+ * argument is "same construction as Binius64's audited BLAKE3 XMSS verifier
+ * (+ eprint 2025/055 framework)", under the assumption that the BLAKE3
+ * compression function is ideal.
  *
- * Tweaked-hash byte formats (chain and tree-node inputs fit in one SHA-256
- * block; the message and public-key inputs span two and 37 blocks):
- *   message    : pk_seed(16) || 0x02 || epoch(4 BE) || nonce(6) || message(msg_len)
- *   chain step : pk_seed(16) || 0x00 || epoch(4 BE) || in(16) || chain_idx(1) || pos(1)
- *   tree node  : pk_seed(16) || 0x01 || level(1) || index(2 LE) || left(16) || right(16)
- *   public key : pk_seed(16) || 0x01 || epoch(4 BE) || pk_hash[0] || ... || pk_hash[LEN-1]
+ * Th call layouts (Th(domain -> cv, data -> 64-byte blocks), blake3.h):
+ *   message    : dom = pk_seed(16)||0x02||epoch(4 BE)   data = nonce(6)||msg
+ *   chain step : dom = in(16)                           data = pk_seed(16)||0x00||epoch(4 BE)||chain_idx(1)||pos(1)
+ *   tree node  : dom = pk_seed(16)||0x01||level(1)||index(2 LE)   data = left(16)||right(16)
+ *   leaf (pk)  : dom = pk_seed(16)||0x03||epoch(4 BE)   data = pk_hash[0..LEN-1]
+ * The 0x03 leaf separator is REQUIRED: leaf and tree-node domains are both
+ * zero-padded to 32 B, and under a shared separator they collide whenever
+ * epoch's bytes match level||index (epochs < 1024 x levels 0..9 overlap).
  *
  * WOTS+ uses the target-sum encoding (no checksum chains): the low
  * XMSS_MSG_HASH_LEN bytes of the message hash decode into XMSS_WOTS_LEN base-w
@@ -25,7 +30,7 @@
 #include <stdint.h>
 
 /* ── Parameters ───────────────────────────────────────────────────────────── */
-#define XMSS_NODE_BYTES 16    /* SHA-256 truncated to 128 bits */
+#define XMSS_NODE_BYTES 16    /* Th output truncated to 128 bits */
 #define XMSS_PK_SEED_BYTES 16 /* domain parameter */
 #define XMSS_H 10             /* tree height: 2^10 = 1024 leaves */
 #define XMSS_WOTS_W 2         /* Winternitz parameter (1-bit coords) */
@@ -42,6 +47,7 @@
 #define XMSS_TWEAK_CHAIN 0x00
 #define XMSS_TWEAK_TREE 0x01
 #define XMSS_TWEAK_MESSAGE 0x02
+#define XMSS_TWEAK_LEAF 0x03 /* leaf/pk hash — MUST differ from TREE (see above) */
 
 /* A truncated tweakable-hash value (and the pk_seed type). */
 typedef uint8_t xmss_node[XMSS_NODE_BYTES];
@@ -58,11 +64,11 @@ typedef struct
 
 /* ── Tweaked hashes (exposed for the circuit / witness builder) ───────────── */
 
-/* SHA256(pk_seed || 0x02 || epoch || nonce || message), full 32-byte digest. */
+/* Th(pk_seed||0x02||epoch, nonce||message), full 32-byte output. */
 void xmss_hash_message(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch, const uint8_t *nonce,
                        size_t nonce_len, const uint8_t *message, size_t message_len, uint8_t out32[32]);
 
-/* trunc16(SHA256(pk_seed || 0x00 || epoch || in || chain_idx || pos)). */
+/* trunc16(Th(in, pk_seed||0x00||epoch||chain_idx||pos)) — one compression. */
 void xmss_hash_chain_step(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch, const xmss_node in,
                           uint8_t chain_idx, uint8_t pos, xmss_node out);
 
@@ -71,12 +77,12 @@ void xmss_hash_chain_step(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t ep
 void xmss_hash_chain_multi(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch, const xmss_node start,
                            uint8_t chain_idx, uint8_t start_pos, uint8_t steps, xmss_node out);
 
-/* trunc16(SHA256(pk_seed || 0x01 || level || index || left || right)).  No
- * epoch: the (level, index) tweak already binds the node to its position. */
+/* trunc16(Th(pk_seed||0x01||level||index, left||right)).  No epoch: the
+ * (level, index) tweak already binds the node to its position. */
 void xmss_hash_tree_node(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_node left, const xmss_node right,
                          uint32_t level, uint32_t index, xmss_node out);
 
-/* trunc16(SHA256(pk_seed || 0x01 || epoch || pk_hash[0] || ... || pk_hash[LEN-1])). */
+/* trunc16(Th(pk_seed||0x03||epoch, pk_hash[0] || ... || pk_hash[LEN-1])). */
 void xmss_hash_public_key(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch,
                           const xmss_node pk_hashes[XMSS_WOTS_LEN], xmss_node out);
 

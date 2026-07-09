@@ -1,4 +1,5 @@
 #include "xmss.h"
+#include "blake3.h"
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -6,18 +7,6 @@
 #include <string.h>
 
 /* ── Low-level primitives ─────────────────────────────────────────────────── */
-
-static void sha256_raw(const uint8_t *in, size_t inlen, uint8_t out32[32])
-{
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) { memset(out32, 0, 32); return; }
-    unsigned int outl = 0;
-    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, in, inlen) == 1 &&
-             EVP_DigestFinal_ex(ctx, out32, &outl) == 1;
-    EVP_MD_CTX_free(ctx);
-    if (!ok) memset(out32, 0, 32);
-}
 
 /* AES-256-CTR PRF used to derive WOTS+ secret keys from sk_seed.  Same IV
  * scheme as shared.c's aes_ctr_expand (domain byte replicated in iv[0..3],
@@ -64,42 +53,38 @@ static void put_epoch_be(uint8_t *buf, size_t *o, uint32_t epoch)
 void xmss_hash_message(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch, const uint8_t *nonce,
                        size_t nonce_len, const uint8_t *message, size_t message_len, uint8_t out32[32])
 {
-    size_t n = XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + nonce_len + message_len;
-    uint8_t *buf = malloc(n);
-    if (!buf)
+    uint8_t dom[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES];
+    size_t o = 0;
+    memcpy(dom + o, pk_seed, XMSS_PK_SEED_BYTES);
+    o += XMSS_PK_SEED_BYTES;
+    dom[o++] = XMSS_TWEAK_MESSAGE;
+    put_epoch_be(dom, &o, epoch);
+
+    uint8_t *data = malloc(nonce_len + message_len);
+    if (!data)
     {
         memset(out32, 0, 32);
         return;
     }
-    size_t o = 0;
-    memcpy(buf + o, pk_seed, XMSS_PK_SEED_BYTES);
-    o += XMSS_PK_SEED_BYTES;
-    buf[o++] = XMSS_TWEAK_MESSAGE;
-    put_epoch_be(buf, &o, epoch);
-    memcpy(buf + o, nonce, nonce_len);
-    o += nonce_len;
-    memcpy(buf + o, message, message_len);
-    o += message_len;
-    sha256_raw(buf, o, out32);
-    free(buf);
+    memcpy(data, nonce, nonce_len);
+    memcpy(data + nonce_len, message, message_len);
+    blake3_th(dom, o, data, nonce_len + message_len, out32, 32);
+    free(data);
 }
 
 void xmss_hash_chain_step(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch, const xmss_node in,
                           uint8_t chain_idx, uint8_t pos, xmss_node out)
 {
-    uint8_t buf[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + XMSS_NODE_BYTES + 1 + 1];
+    /* dom = previous node; the tweak travels in the (single) data block. */
+    uint8_t data[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + 1 + 1];
     size_t o = 0;
-    memcpy(buf + o, pk_seed, XMSS_PK_SEED_BYTES);
+    memcpy(data + o, pk_seed, XMSS_PK_SEED_BYTES);
     o += XMSS_PK_SEED_BYTES;
-    buf[o++] = XMSS_TWEAK_CHAIN;
-    put_epoch_be(buf, &o, epoch);
-    memcpy(buf + o, in, XMSS_NODE_BYTES);
-    o += XMSS_NODE_BYTES;
-    buf[o++] = chain_idx;
-    buf[o++] = pos;
-    uint8_t full[32];
-    sha256_raw(buf, o, full);
-    memcpy(out, full, XMSS_NODE_BYTES);
+    data[o++] = XMSS_TWEAK_CHAIN;
+    put_epoch_be(data, &o, epoch);
+    data[o++] = chain_idx;
+    data[o++] = pos;
+    blake3_th(in, XMSS_NODE_BYTES, data, o, out, XMSS_NODE_BYTES);
 }
 
 void xmss_hash_chain_multi(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch, const xmss_node start,
@@ -120,40 +105,31 @@ void xmss_hash_chain_multi(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t e
 void xmss_hash_tree_node(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], const xmss_node left, const xmss_node right,
                          uint32_t level, uint32_t index, xmss_node out)
 {
-    uint8_t buf[XMSS_PK_SEED_BYTES + 1 + 1 + 2 + XMSS_NODE_BYTES + XMSS_NODE_BYTES];
+    uint8_t dom[XMSS_PK_SEED_BYTES + 1 + 1 + 2];
+    uint8_t data[2 * XMSS_NODE_BYTES];
     size_t o = 0;
-    memcpy(buf + o, pk_seed, XMSS_PK_SEED_BYTES);
+    memcpy(dom + o, pk_seed, XMSS_PK_SEED_BYTES);
     o += XMSS_PK_SEED_BYTES;
-    buf[o++] = XMSS_TWEAK_TREE;
-    buf[o++] = (uint8_t)(level & 0xff);
-    buf[o++] = (uint8_t)(index & 0xff);        /* index, 2-byte LE */
-    buf[o++] = (uint8_t)((index >> 8) & 0xff);
-    memcpy(buf + o, left, XMSS_NODE_BYTES);
-    o += XMSS_NODE_BYTES;
-    memcpy(buf + o, right, XMSS_NODE_BYTES);
-    o += XMSS_NODE_BYTES;
-    uint8_t full[32];
-    sha256_raw(buf, o, full);
-    memcpy(out, full, XMSS_NODE_BYTES);
+    dom[o++] = XMSS_TWEAK_TREE;
+    dom[o++] = (uint8_t)(level & 0xff);
+    dom[o++] = (uint8_t)(index & 0xff);        /* index, 2-byte LE */
+    dom[o++] = (uint8_t)((index >> 8) & 0xff);
+    memcpy(data, left, XMSS_NODE_BYTES);
+    memcpy(data + XMSS_NODE_BYTES, right, XMSS_NODE_BYTES);
+    blake3_th(dom, o, data, sizeof data, out, XMSS_NODE_BYTES);
 }
 
 void xmss_hash_public_key(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch,
                           const xmss_node pk_hashes[XMSS_WOTS_LEN], xmss_node out)
 {
-    uint8_t buf[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES];
+    uint8_t dom[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES];
     size_t o = 0;
-    memcpy(buf + o, pk_seed, XMSS_PK_SEED_BYTES);
+    memcpy(dom + o, pk_seed, XMSS_PK_SEED_BYTES);
     o += XMSS_PK_SEED_BYTES;
-    buf[o++] = XMSS_TWEAK_TREE;
-    put_epoch_be(buf, &o, epoch);
-    for (int i = 0; i < XMSS_WOTS_LEN; i++)
-    {
-        memcpy(buf + o, pk_hashes[i], XMSS_NODE_BYTES);
-        o += XMSS_NODE_BYTES;
-    }
-    uint8_t full[32];
-    sha256_raw(buf, o, full);
-    memcpy(out, full, XMSS_NODE_BYTES);
+    dom[o++] = XMSS_TWEAK_LEAF;
+    put_epoch_be(dom, &o, epoch);
+    blake3_th(dom, o, (const uint8_t *)pk_hashes,
+              (size_t)XMSS_WOTS_LEN * XMSS_NODE_BYTES, out, XMSS_NODE_BYTES);
 }
 
 void xmss_extract_coords(const uint8_t *hash, int dimension, int res_bits, uint8_t *coords_out)

@@ -15,7 +15,7 @@
  *   sig_hashes  (LEN * NODE)        WOTS+ chain start values
  *   auth_path   (XMSS_H * NODE)     XMSS authentication path
  * The opening of the commitment is (r, a); b, y, com=a||b||y and the certified
- * digest d=SHA256(com) are all recomputed inside the circuit.
+ * digest d=Th("HMd",com) are all recomputed inside the circuit.
  * Total = INPUT_LEN (defined in shared.c, must equal W_END). */
 #define W_R_OFF 0
 #define W_R_LEN HM_R_BYTES                       /* 96  */

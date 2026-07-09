@@ -2,7 +2,7 @@
 
 This project implements a **blind signature** over **XMSS** (a stateful Merkle signature scheme) with **target-sum WOTS+** one-time signatures in the leaves, and a zero-knowledge proof in the **KKW / MPC-in-the-head** style (Katz-Kolesnikov-Wang 2018) to prove knowledge of a valid signature **without revealing** the secret material (the commitment opening, the leaf index, or the signature).
 
-The commitment scheme is **Halevi–Micali over GF(2¹²⁸)**, the signature is target-sum WOTS+/XMSS, and the NIZK is KKW (cut-and-choose over MPC preprocessing).
+The commitment scheme is **Halevi–Micali over GF(2¹²⁸)**, the signature is target-sum WOTS+/XMSS, and the NIZK is KKW (cut-and-choose over MPC preprocessing). All in-circuit hashing is a **tweakable hash built on the raw BLAKE3 compression function** (the construction of [binius64 PR #1620](https://github.com/binius-zk/binius64/pull/1620)); the KKW layer itself (commitments, Fiat–Shamir) stays SHA-256 natively.
 
 > ⚠️ This code is for research/education. Do not use in production.
 
@@ -32,17 +32,28 @@ keygen → blind → sign → prove → verify protocol in memory.
 
 ## Parameters
 
-Signature scheme (`xmss.h`), matching the Longfellow/Binius64 instantiations:
+Signature scheme (`xmss.h`), following the Binius64 BLAKE3 instantiation:
 - `XMSS_H = 10` — Merkle tree height (`2^10 = 1024` signatures per key pair)
 - `XMSS_WOTS_W = 2` — Winternitz parameter (1-bit coordinates)
 - `XMSS_WOTS_LEN = 144` — number of WOTS+ chains (target-sum encoding, no checksum)
 - `XMSS_TARGET_SUM = 72` — required sum of the 144 coordinates
-- `XMSS_NODE_BYTES = 16` — every internal node is a SHA-256 output truncated to 128 bits
+- `XMSS_NODE_BYTES = 16` — every internal node is a Th output truncated to 128 bits
 - `XMSS_PK_SEED_BYTES = 16`, `XMSS_NONCE_LEN = 6`
-- All hashing is SHA-256, SPHINCS+-style keyed/tweaked (tweaks `0x00` chain, `0x01` tree/pk, `0x02` message).
+- All hashing is the BLAKE3-compression tweakable hash `Th(domain, data)`
+  (`blake3.h`), SPHINCS+-style keyed/tweaked: domain separators `0x00` chain,
+  `0x01` tree, `0x02` message, `0x03` leaf/pk (the leaf separator is required —
+  leaf and tree-node domains are both zero-padded into the chaining value and
+  would collide under a shared separator). This is **not** BLAKE3-the-hash: no
+  tree mode or flags, so outputs do not match BLAKE3 digests, and the byte
+  formats are no longer compatible with the SHA-256 blind-longfellow
+  instantiation. The security assumption is that the BLAKE3 compression
+  function is ideal — the same heuristic SPHINCS+ makes for its tweakable
+  hashes (cf. SPHINCS+-Haraka), and the construction matches Binius64's
+  reviewed BLAKE3 XMSS verifier (their audit items S1–S5 are addressed in
+  `BLAKE3_MIGRATION.txt` §3).
 
 Halevi–Micali commitment (`commitment.h`):
-- `HM_NONCES = 6`, `HM_LINES = 2`, field `GF(2¹²⁸)` — same layout as the Longfellow-based instantiation.
+- `HM_NONCES = 6`, `HM_LINES = 2`, field `GF(2¹²⁸)` — structure as in the Longfellow-based instantiation, hashes moved to `Th("HMy", ·)` / `Th("HMd", ·)`.
 - Opening `(r, a)` is `96 + 192 = 288` bytes; the commitment `com = a‖b‖y` is `256` bytes.
 
 KKW proof (`shared.h`, selectable at build time with `N=<N>` and `W=<W>`):
@@ -55,7 +66,9 @@ KKW proof (`shared.h`, selectable at build time with `N=<N>` and `W=<W>`):
   cut-and-choose target relaxes to 2^-(128-W) and τ shrinks — total attack cost
   stays 2^128. Supported: 0, 16, 24 (τ = 65/57/53 at N=4).
 - `INPUT_LEN = 2762` — witness byte length
-- `ySize = 152504` — nonlinear-gate count in the SHA-256/WOTS/XMSS circuit
+- `ySize = 73096` — nonlinear-gate count in the BLAKE3-Th/WOTS/XMSS circuit
+  (was 152504 with SHA-256: BLAKE3's compression costs 336 gate slots vs 728,
+  and the tweak moves into the chaining value instead of consuming blocks)
 
 ### Soundness parameters (128-bit security, ROM)
 
@@ -95,10 +108,10 @@ grinding still buys exactly W bits, but off a 2λ baseline. Build it with
 
 | N | τ | M | Proof (approx.) |
 |--:|--:|--:|---:|
-| 4 | 121 | 426 | ≈ 130 MB |
-| 8 | 81 | 524 | ≈ 93 MB |
-| 16 | 61 | 726 | ≈ 72 MB |
-| 64 | 41 | 1645 | ≈ 50 MB |
+| 4 | 121 | 426 | ≈ 62 MB |
+| 8 | 81 | 524 | ≈ 45 MB |
+| 16 | 61 | 726 | ≈ 35 MB |
+| 64 | 41 | 1645 | ≈ 24 MB |
 
 Two caveats that belong in any write-up: there is no general security proof for
 the Fiat–Shamir transform against quantum adversaries (KKW §3.1 point to
@@ -126,7 +139,7 @@ are the API. The full flow is shown in [`src/tests/test_e2e.c`](src/tests/test_e
 
 The proof is a byte stream (a `FILE *`, e.g. an on-disk file or `tmpfile()`), so
 it can be stored or sent over a wire between the client and the verifier. Its
-format is `"KKW6"` magic (4 B) + header (N, M, τ, ySize, W as uint32_t LE, 20 B) +
+format is `"KKW7"` magic (4 B) + header (N, M, τ, ySize, W as uint32_t LE, 20 B) +
 nonce (32 B) + h\* (32 B) + grinding counter `ctr` (4 B) +
 offline section ((M−τ) × 64 B: seed\*_j + h'_j) + online section (τ rounds:
 com_hidden, the `yp` output-mask shares, N−1 seeds, the masked witness `d`,
@@ -162,22 +175,23 @@ Measured on Intel i5-9300H @ 2.40 GHz, 8 threads, 1 iteration (N=4 default):
 | Secret key (`sk_seed ‖ pk_seed ‖ leaf_index`) | 52 B |
 | Commitment `com = a ‖ b ‖ y` | 256 B |
 | Raw XMSS signature (`leaf ‖ nonce ‖ 144 chains ‖ 10 path`) | 2.42 KB |
-| **Blind signature (KKW proof, N=4, W=16)** | ≈ 58 MB |
+| **Blind signature (KKW proof, N=4, W=16)** | ≈ 29 MB |
 
-### Timing (N=4, W=16: τ=57, M=189)
+### Timing (N=4, W=16: τ=57, M=189, BLAKE3 Th)
 
 | Phase | Time |
 |---|---:|
 | Commitment computation | < 1 ms |
 | Key generation | ≈ 130 ms |
 | Signing | ≈ 130 ms |
-| Proof generation | ≈ 1.4 s |
-| Proof verification | ≈ 0.9 s |
+| Proof generation | ≈ 0.47 s |
+| Proof verification | ≈ 0.26 s |
 
 The online phase uses the masked-values KKW formulation: every wire carries a
 public masked value, linear gates are public computation, and each nonlinear
 gate broadcasts one word per party.  See `OPTIMIZATIONS.txt` for the full
-optimization history (4.1× end-to-end, −47% proof size vs. the baseline).
+optimization history (proof 108.8 → 28.8 MB, prove ~3.5 → 0.47 s vs. the
+baseline; the last −50% is the BLAKE3 tweakable-hash migration).
 
 The proof is still large because the online section dominates: each of the τ
 rounds serialises the hidden party's broadcast stream `msgs_e` (ySize words)
@@ -187,7 +201,7 @@ and `aux` (ySize words, absent when party 0 is the hidden one):
 proof ≈ header(24) + nonce(32) + h*(32) + ctr(4) + (M−τ)·64   [offline, tiny]
        + τ · (com(32) + yp(N·32) + (N−1)·SEED_SIZE + INPUT_LEN + msgs + aux + r_j(32))
        ≈ τ · 2·ySize·4  [dominant term]
-       = 57 · 2 · 152504 · 4  ≈  70 MB  [upper bound; e=0 rounds skip aux]
+       = 57 · 2 · 73096 · 4  ≈  33 MB  [upper bound; e=0 rounds skip aux]
 ```
 
 Larger N reduces τ (fewer rounds) → smaller proof, at the cost of more parties per circuit evaluation and a larger M (more preprocessing instances). The offline section grows by only tens of KB.
@@ -196,4 +210,6 @@ Larger N reduces τ (fewer rounds) → smaller proof, at the cost of more partie
 
 - [KKW: Improved Non-Interactive Zero Knowledge with Applications to Post-Quantum Signatures — CCS 2018](https://eprint.iacr.org/2018/475)
 - [Picnic: Post-Quantum Zero-Knowledge and Signatures from Symmetric-Key Primitives — CCS 2017](https://eprint.iacr.org/2017/279)
-- [XMSS — RFC 8391](https://datatracker.ietf.org/doc/html/rfc8391)
+- [XMSS — RFC 8391](https://datatracker.ietf.org/doc/html/rfc8391) (this target-sum BLAKE3 variant is not RFC 8391)
+- [binius64 PR #1620 — BLAKE3 tweakable-hash XMSS verifier](https://github.com/binius-zk/binius64/pull/1620) (the Th construction followed here)
+- [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) (only the raw compression function is used)

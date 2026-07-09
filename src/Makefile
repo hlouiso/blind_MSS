@@ -77,7 +77,7 @@ LDLIBS = $(OMP_LIBS) $(OPENSSL_LIBS) -lm
 # library, `make test` builds and runs the test suite, `make bench` benchmarks.
 # ---------------------------------------------------------------------------
 LIB     = libblindmss.a
-LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o gf128.o commitment.o kkw_prove.o kkw_verify.o
+LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o gf128.o commitment.o blake3.o kkw_prove.o kkw_verify.o
 
 # `make` with no target builds the library (rule order below would otherwise
 # make the first object file the default goal).
@@ -94,7 +94,7 @@ $(LIBOBJS): $(N_STAMP)
 
 # Tests in tests/ (built and run by `make test`).  test_e2e exercises the full
 # keygen→blind→sign→prove→verify protocol in memory.
-TESTS = test_xmss test_circuit test_roundtrip test_leaf test_e2e
+TESTS = test_blake3 test_xmss test_circuit test_roundtrip test_leaf test_e2e
 
 BENCH_NS := 4 8 16 32 64
 PIPELINE_ITERS ?= 100

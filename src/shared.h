@@ -316,10 +316,6 @@ extern const int TAPE_SIZE;
 #define GETBIT(x, i) (((x) >> (i)) & 0x01)
 #define SETBIT(x, i, b) x = (b) & 1 ? (x) | (1u << (i)) : (x) & (~(1u << (i)))
 
-/* SHA-256 IV and round constants */
-extern const uint32_t hA[8];
-extern const uint32_t k[64];
-
 /* ── Per-round commitment data ─────────────────────────────────────────── */
 /* Everything the verifier needs is bound in h* before the challenge:
  *   seeds+aux via h_j, masked witness + broadcasts via h'_j, output-mask

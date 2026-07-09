@@ -64,22 +64,22 @@ void mpc_ADDK_verify(const mwv *x, uint32_t K, mwv *z,
                      const uint32_t *msgs_e, const uint32_t *aux,
                      uint32_t *s_slots, int *gateCount);
 
-void mpc_MAJ_verify(const mwv *a, const mwv *b, const mwv *c, mwv *z,
-                    unsigned char *tapes[N_PARTIES - 1], int e,
-                    const uint32_t *msgs_e, const uint32_t *aux,
-                    uint32_t *s_slots, int *gateCount);
+/* Verify-side BLAKE3 compression / tweakable hash — mirror of the prove
+ * side (MPC_prove_functions.h); NULL lam arrays mean all-public bytes. */
+void mpc_blake3_compress_verify(const mwv cv[8], const mwv m[16],
+                                uint32_t block_len, mwv out[8],
+                                unsigned char *tapes[N_PARTIES - 1], int e,
+                                const uint32_t *msgs_e, const uint32_t *aux,
+                                uint32_t *s_slots, int *gateCount);
 
-void mpc_CH_verify(const mwv *e_w, const mwv *f, const mwv *g_w, mwv *z,
-                   unsigned char *tapes[N_PARTIES - 1], int e,
-                   const uint32_t *msgs_e, const uint32_t *aux,
-                   uint32_t *s_slots, int *gateCount);
-
-void mpc_sha256_verify(const unsigned char *in_pub,
-                       unsigned char *in_lam[N_PARTIES - 1], int numBits,
-                       unsigned char *out_pub,
-                       unsigned char *out_lam[N_PARTIES - 1],
-                       unsigned char *tapes[N_PARTIES - 1], int e,
-                       const uint32_t *msgs_e, const uint32_t *aux,
-                       uint32_t *s_slots, int *gateCount);
+void mpc_blake3_th_verify(const unsigned char *dom_pub,
+                          unsigned char *dom_lam[N_PARTIES - 1], int dom_len,
+                          const unsigned char *data_pub,
+                          unsigned char *data_lam[N_PARTIES - 1], int data_len,
+                          unsigned char *out_pub,
+                          unsigned char *out_lam[N_PARTIES - 1], int out_len,
+                          unsigned char *tapes[N_PARTIES - 1], int e,
+                          const uint32_t *msgs_e, const uint32_t *aux,
+                          uint32_t *s_slots, int *gateCount);
 
 #endif /* MPC_VERIFY_FUNCTIONS_H */

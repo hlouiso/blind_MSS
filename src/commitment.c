@@ -1,12 +1,17 @@
 #include "commitment.h"
+#include "blake3.h"
 #include "gf128.h"
 
-#include <openssl/sha.h>
 #include <string.h>
+
+/* Fixed Th domains for the two commitment hashes — distinct from each other
+ * and from every XMSS domain (those all start with the 16-byte pk_seed). */
+static const uint8_t HM_DOM_Y[3] = { 'H', 'M', 'y' };
+static const uint8_t HM_DOM_D[3] = { 'H', 'M', 'd' };
 
 void hm_y(const uint8_t r[HM_R_BYTES], uint8_t y[HM_Y_BYTES])
 {
-    SHA256(r, HM_R_BYTES, y);
+    blake3_th(HM_DOM_Y, sizeof HM_DOM_Y, r, HM_R_BYTES, y, HM_Y_BYTES);
 }
 
 void hm_lines(const uint8_t m_hat[32], const uint8_t a[HM_A_BYTES], const uint8_t r[HM_R_BYTES],
@@ -37,7 +42,7 @@ void hm_commitment(const uint8_t a[HM_A_BYTES], const uint8_t b[HM_B_BYTES], con
 
 void hm_digest(const uint8_t com[HM_COM_BYTES], uint8_t d[32])
 {
-    SHA256(com, HM_COM_BYTES, d);
+    blake3_th(HM_DOM_D, sizeof HM_DOM_D, com, HM_COM_BYTES, d, 32);
 }
 
 void hm_commit(const uint8_t m_hat[32], const uint8_t r[HM_R_BYTES], const uint8_t a[HM_A_BYTES],

@@ -191,17 +191,37 @@ Attempted and reverted
          byte-flip rejection).
 
 --------------------------------------------------------------------------------
+11. BLAKE3 tweakable-hash migration (binius64 PR #1620)          (KKW7)
+--------------------------------------------------------------------------------
+  What : every in-circuit SHA-256 replaced by Th built on the raw BLAKE3
+         compression function, per BLAKE3_MIGRATION.txt: 336 nonlinear slots
+         per compression vs 728 (free message-schedule permutation, XOR
+         feedforward), no SHA padding, tweaks in the chaining value for
+         free, new 0x03 leaf separator (required: leaf/tree-node domains
+         collide under zero-padding otherwise).  Native xmss.c/commitment.c
+         follow the same layouts (blake3.c reference, validated against
+         official BLAKE3 vectors via the root-flags path); dead SHA-256 MPC
+         gadgets removed.  The KKW layer (h_j, h', h*, FS) stays SHA-256.
+         Gate model from the plan was exact: predicted 73,096, measured
+         73,096.  BREAKS blind-longfellow byte compatibility (README).
+  Safety: test_blake3 (official vectors + Th structure + mpc gadget vs
+         native for all hidden parties), full suite at N=4/N=8/SEC=256,
+         ASan+UBSan clean e2e.  Proof format KKW6 -> KKW7.
+  Gain : ySize 152504 -> 73096 (-52%).  Measured (bench_pipeline, N=4):
+         proof 57.5 -> 28.8 MB, prove 1.38 -> 0.47 s, verify 0.90 -> 0.26 s.
+
+--------------------------------------------------------------------------------
 Summary (N=4, i5-9300H, 8 threads)
 --------------------------------------------------------------------------------
-                       baseline 875e176      after 20cf642
-  proof size           108.8 MB              57.5 MB   (-47%)
-  prove                ~3.5 s                1.38 s    (2.5x)
-  verify               ~2 s                  0.90 s    (2.2x)
+                       baseline 875e176      after 20cf642      after 11 (BLAKE3)
+  proof size           108.8 MB              57.5 MB   (-47%)    28.8 MB  (-74%)
+  prove                ~3.5 s                1.38 s    (2.5x)    0.47 s   (7.4x)
+  verify               ~2 s                  0.90 s    (2.2x)    0.26 s   (7.7x)
   e2e harness*         22.4 s                5.5 s     (4.1x)
   * both measured with the double-running CHECK harness (see note above)
   After 9+10 (KKW6): security fix, size-neutral (net -4 KB); timings unchanged.
 
-  N trade-off (W=16): N=8 -> 44.1 MB (prove 2.35 s), N=16 -> 35.5 MB (6.05 s).
+  N trade-off (W=16, SHA era): N=8 -> 44.1 MB (prove 2.35 s), N=16 -> 35.5 MB.
 
 --------------------------------------------------------------------------------
 Audit notes (July 2026, after the masked-values switch)

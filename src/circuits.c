@@ -16,46 +16,11 @@
 
 int g_circuit_gates = 0;
 
+/* Fixed Th domains for the HM commitment hashes (must match commitment.c). */
+static const unsigned char HM_DOM_Y[3] = {'H', 'M', 'y'};
+static const unsigned char HM_DOM_D[3] = {'H', 'M', 'd'};
+
 /* ── Prove-side helpers ─────────────────────────────────────────────────── */
-
-/* Run SHA-256 over [prefix | sec | suffix], truncating to out_len bytes.
- * prefix and suffix are public and go into the public buffer only. */
-static void mpc_thash(
-    unsigned char *tapes[N_PARTIES], uint32_t *aux, uint32_t *s_all, int *gc,
-    const unsigned char *prefix, int prefix_len,
-    const unsigned char *sec_pub, unsigned char *sec_lam[N_PARTIES], int sec_len,
-    const unsigned char *suffix, int suffix_len,
-    unsigned char *out_pub, unsigned char *out_lam[N_PARTIES], int out_len)
-{
-    int total = prefix_len + sec_len + suffix_len;
-    unsigned char *in_pub = calloc(total, 1);
-    unsigned char *in_lam[N_PARTIES];
-    unsigned char res_pub[32], res_lam_buf[N_PARTIES][32];
-    unsigned char *res_lam[N_PARTIES];
-    for (int i = 0; i < N_PARTIES; i++) { in_lam[i] = NULL; res_lam[i] = res_lam_buf[i]; }
-    bool ok = (in_pub != NULL);
-    for (int i = 0; i < N_PARTIES && ok; i++) {
-        in_lam[i] = calloc(total, 1);
-        if (!in_lam[i]) ok = false;
-    }
-    if (!ok) {
-        free(in_pub);
-        for (int i = 0; i < N_PARTIES; i++) free(in_lam[i]);
-        return;
-    }
-    if (prefix_len) memcpy(in_pub, prefix, prefix_len);
-    memcpy(in_pub + prefix_len, sec_pub, sec_len);
-    if (suffix_len) memcpy(in_pub + prefix_len + sec_len, suffix, suffix_len);
-    for (int i = 0; i < N_PARTIES; i++)
-        memcpy(in_lam[i] + prefix_len, sec_lam[i], sec_len);
-
-    mpc_sha256(in_pub, in_lam, total * 8, res_pub, res_lam, tapes, aux, s_all, gc);
-
-    memcpy(out_pub, res_pub, out_len);
-    for (int i = 0; i < N_PARTIES; i++) memcpy(out_lam[i], res_lam_buf[i], out_len);
-    free(in_pub);
-    for (int i = 0; i < N_PARTIES; i++) free(in_lam[i]);
-}
 
 /* Broadcast a masked selector bit to a full-word mask wire (value ±sel). */
 static void mask_from_bit(const mw *sel, mw *mask)
@@ -143,9 +108,9 @@ void building_views(
             ysh_lam[i] = ysh_lam_buf[i];
             sec_lam[i] = lam[i] + W_R_OFF;
         }
-        mpc_thash(tapes, aux, s_all, &gc, NULL, 0,
-                  d_pub + W_R_OFF, sec_lam, HM_R_BYTES, NULL, 0,
-                  ysh_pub, ysh_lam, 32);
+        mpc_blake3_th(HM_DOM_Y, NULL, 3,
+                      d_pub + W_R_OFF, sec_lam, HM_R_BYTES,
+                      ysh_pub, ysh_lam, 32, tapes, aux, s_all, &gc);
 
         /* (1b) b_k = m̂_k + Σ_i a_{k,i}·r_i over GF(2^128) */
         unsigned char bsh_pub[HM_B_BYTES], bsh_lam[N_PARTIES][HM_B_BYTES];
@@ -181,7 +146,7 @@ void building_views(
             }
         }
 
-        /* (1c) d = SHA256(a ‖ b ‖ y) */
+        /* (1c) d = Th("HMd", a ‖ b ‖ y) */
         unsigned char sec_pub[HM_COM_BYTES], secbuf[N_PARTIES][HM_COM_BYTES];
         unsigned char *sec_lam2[N_PARTIES];
         memcpy(sec_pub, d_pub + W_A_OFF, HM_A_BYTES);
@@ -193,44 +158,46 @@ void building_views(
             memcpy(secbuf[i] + HM_A_BYTES + HM_B_BYTES, ysh_lam_buf[i], HM_Y_BYTES);
             sec_lam2[i] = secbuf[i];
         }
-        mpc_thash(tapes, aux, s_all, &gc, NULL, 0,
-                  sec_pub, sec_lam2, HM_COM_BYTES, NULL, 0, dsh_pub, dsh_lam, 32);
+        mpc_blake3_th(HM_DOM_D, NULL, 3, sec_pub, sec_lam2, HM_COM_BYTES,
+                      dsh_pub, dsh_lam, 32, tapes, aux, s_all, &gc);
     }
 
-    /* ── (2) mh = SHA256(pk_seed ‖ 0x02 ‖ epoch ‖ nonce ‖ d) ── */
+    /* ── (2) mh = Th(pk_seed ‖ 0x02 ‖ epoch, nonce ‖ d) ── */
     unsigned char mh_pub[32], mh_lam[N_PARTIES][32];
     {
-        unsigned char prefix[XMSS_PK_SEED_BYTES + 1];
-        memcpy(prefix, pk_seed, XMSS_PK_SEED_BYTES);
-        prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_MESSAGE;
-        const int slen = XMSS_EPOCH_BYTES + XMSS_NONCE_LEN + 32;
-        unsigned char sec_pub[XMSS_EPOCH_BYTES + XMSS_NONCE_LEN + 32];
-        unsigned char secbuf[N_PARTIES][XMSS_EPOCH_BYTES + XMSS_NONCE_LEN + 32];
-        unsigned char *sec_lam[N_PARTIES], *out_lam[N_PARTIES];
-        memcpy(sec_pub, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
-        memcpy(sec_pub + XMSS_EPOCH_BYTES, d_pub + W_NONCE_OFF, XMSS_NONCE_LEN);
-        memcpy(sec_pub + XMSS_EPOCH_BYTES + XMSS_NONCE_LEN, dsh_pub, 32);
+        /* Domain: pk_seed and the tweak are public, epoch is masked. */
+        const int dlen = XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES;
+        unsigned char dom_pub[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES];
+        unsigned char dombuf[N_PARTIES][XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES];
+        unsigned char *dom_lam[N_PARTIES];
+        memcpy(dom_pub, pk_seed, XMSS_PK_SEED_BYTES);
+        dom_pub[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_MESSAGE;
+        memcpy(dom_pub + XMSS_PK_SEED_BYTES + 1, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
         for (int i = 0; i < N_PARTIES; i++) {
-            memcpy(secbuf[i], lam[i] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
-            memcpy(secbuf[i] + XMSS_EPOCH_BYTES, lam[i] + W_NONCE_OFF, XMSS_NONCE_LEN);
-            memcpy(secbuf[i] + XMSS_EPOCH_BYTES + XMSS_NONCE_LEN, dsh_lam_buf[i], 32);
+            memset(dombuf[i], 0, XMSS_PK_SEED_BYTES + 1);
+            memcpy(dombuf[i] + XMSS_PK_SEED_BYTES + 1, lam[i] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+            dom_lam[i] = dombuf[i];
+        }
+        const int slen = XMSS_NONCE_LEN + 32;
+        unsigned char sec_pub[XMSS_NONCE_LEN + 32];
+        unsigned char secbuf[N_PARTIES][XMSS_NONCE_LEN + 32];
+        unsigned char *sec_lam[N_PARTIES], *out_lam[N_PARTIES];
+        memcpy(sec_pub, d_pub + W_NONCE_OFF, XMSS_NONCE_LEN);
+        memcpy(sec_pub + XMSS_NONCE_LEN, dsh_pub, 32);
+        for (int i = 0; i < N_PARTIES; i++) {
+            memcpy(secbuf[i], lam[i] + W_NONCE_OFF, XMSS_NONCE_LEN);
+            memcpy(secbuf[i] + XMSS_NONCE_LEN, dsh_lam_buf[i], 32);
             sec_lam[i] = secbuf[i]; out_lam[i] = mh_lam[i];
         }
-        mpc_thash(tapes, aux, s_all, &gc, prefix, XMSS_PK_SEED_BYTES + 1,
-                  sec_pub, sec_lam, slen, NULL, 0, mh_pub, out_lam, 32);
+        mpc_blake3_th(dom_pub, dom_lam, dlen, sec_pub, sec_lam, slen,
+                      mh_pub, out_lam, 32, tapes, aux, s_all, &gc);
     }
 
     /* ── (3) WOTS+ chains → pk_hashes ── */
-    unsigned char pkh_pub[XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES];
-    unsigned char pkh_lam[N_PARTIES][XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES];
+    unsigned char pkh_pub[XMSS_WOTS_LEN * XMSS_NODE_BYTES];
+    unsigned char pkh_lam[N_PARTIES][XMSS_WOTS_LEN * XMSS_NODE_BYTES];
     {
-        unsigned char chain_prefix[XMSS_PK_SEED_BYTES + 1];
-        memcpy(chain_prefix, pk_seed, XMSS_PK_SEED_BYTES);
-        chain_prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_CHAIN;
         const int cpb = 8 / XMSS_COORD_RES_BITS;
-        memcpy(pkh_pub, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
-        for (int i = 0; i < N_PARTIES; i++)
-            memcpy(pkh_lam[i], lam[i] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
 
         for (int ci = 0; ci < XMSS_WOTS_LEN; ci++) {
             unsigned char x_pub[16], x_lam[N_PARTIES][16];
@@ -264,41 +231,52 @@ void building_views(
 #endif
             for (int stage = 0; stage < XMSS_WOTS_MAX_STEPS; stage++) {
                 unsigned char h_pub[16], h_lam[N_PARTIES][16];
-                unsigned char suffix[2] = {(unsigned char)ci, (unsigned char)(stage + 1)};
-                unsigned char xe_pub[XMSS_EPOCH_BYTES + XMSS_NODE_BYTES];
-                unsigned char xe_lam[N_PARTIES][XMSS_EPOCH_BYTES + XMSS_NODE_BYTES];
-                unsigned char *secp[N_PARTIES], *outp[N_PARTIES];
-                memcpy(xe_pub, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
-                memcpy(xe_pub + XMSS_EPOCH_BYTES, x_pub, XMSS_NODE_BYTES);
+                /* Th chain step: dom = current node, data = the tweak block
+                 * pk_seed ‖ 0x00 ‖ epoch ‖ chain ‖ pos (epoch masked). */
+                const int tlen = XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + 2;
+                unsigned char tw_pub[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + 2];
+                unsigned char twbuf[N_PARTIES][XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + 2];
+                unsigned char *tw_lam[N_PARTIES], *domp[N_PARTIES], *outp[N_PARTIES];
+                memcpy(tw_pub, pk_seed, XMSS_PK_SEED_BYTES);
+                tw_pub[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_CHAIN;
+                memcpy(tw_pub + XMSS_PK_SEED_BYTES + 1, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+                tw_pub[tlen - 2] = (unsigned char)ci;
+                tw_pub[tlen - 1] = (unsigned char)(stage + 1);
                 for (int i = 0; i < N_PARTIES; i++) {
-                    memcpy(xe_lam[i], lam[i] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
-                    memcpy(xe_lam[i] + XMSS_EPOCH_BYTES, x_lam[i], XMSS_NODE_BYTES);
-                    secp[i] = xe_lam[i]; outp[i] = h_lam[i];
+                    memset(twbuf[i], 0, tlen);
+                    memcpy(twbuf[i] + XMSS_PK_SEED_BYTES + 1, lam[i] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+                    tw_lam[i] = twbuf[i]; domp[i] = x_lam[i]; outp[i] = h_lam[i];
                 }
-                mpc_thash(tapes, aux, s_all, &gc, chain_prefix, XMSS_PK_SEED_BYTES + 1,
-                          xe_pub, secp, XMSS_EPOCH_BYTES + XMSS_NODE_BYTES,
-                          suffix, 2, h_pub, outp, 16);
+                mpc_blake3_th(x_pub, domp, XMSS_NODE_BYTES, tw_pub, tw_lam, tlen,
+                              h_pub, outp, 16, tapes, aux, s_all, &gc);
                 mw mask;
                 mask_from_bit(sels[stage], &mask);
                 mpc_mux16(x_pub, x_lam, h_pub, h_lam, &mask, tapes, aux, s_all, &gc);
             }
-            memcpy(pkh_pub + XMSS_EPOCH_BYTES + ci * XMSS_NODE_BYTES, x_pub, XMSS_NODE_BYTES);
+            memcpy(pkh_pub + ci * XMSS_NODE_BYTES, x_pub, XMSS_NODE_BYTES);
             for (int i = 0; i < N_PARTIES; i++)
-                memcpy(pkh_lam[i] + XMSS_EPOCH_BYTES + ci * XMSS_NODE_BYTES, x_lam[i], XMSS_NODE_BYTES);
+                memcpy(pkh_lam[i] + ci * XMSS_NODE_BYTES, x_lam[i], XMSS_NODE_BYTES);
         }
     }
 
-    /* ── (4) leaf = SHA256(pk_seed ‖ 0x01 ‖ epoch ‖ pk_hashes) ── */
+    /* ── (4) leaf = Th(pk_seed ‖ 0x03 ‖ epoch, pk_hashes) ── */
     unsigned char node_pub[16], node_lam[N_PARTIES][16];
     {
-        unsigned char prefix[XMSS_PK_SEED_BYTES + 1];
-        memcpy(prefix, pk_seed, XMSS_PK_SEED_BYTES);
-        prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_TREE;
-        unsigned char *sec_lam[N_PARTIES], *out_lam[N_PARTIES];
-        for (int i = 0; i < N_PARTIES; i++) { sec_lam[i] = pkh_lam[i]; out_lam[i] = node_lam[i]; }
-        mpc_thash(tapes, aux, s_all, &gc, prefix, XMSS_PK_SEED_BYTES + 1,
-                  pkh_pub, sec_lam, XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES,
-                  NULL, 0, node_pub, out_lam, 16);
+        const int dlen = XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES;
+        unsigned char dom_pub[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES];
+        unsigned char dombuf[N_PARTIES][XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES];
+        unsigned char *dom_lam[N_PARTIES], *sec_lam[N_PARTIES], *out_lam[N_PARTIES];
+        memcpy(dom_pub, pk_seed, XMSS_PK_SEED_BYTES);
+        dom_pub[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_LEAF;
+        memcpy(dom_pub + XMSS_PK_SEED_BYTES + 1, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+        for (int i = 0; i < N_PARTIES; i++) {
+            memset(dombuf[i], 0, XMSS_PK_SEED_BYTES + 1);
+            memcpy(dombuf[i] + XMSS_PK_SEED_BYTES + 1, lam[i] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+            dom_lam[i] = dombuf[i]; sec_lam[i] = pkh_lam[i]; out_lam[i] = node_lam[i];
+        }
+        mpc_blake3_th(dom_pub, dom_lam, dlen,
+                      pkh_pub, sec_lam, XMSS_WOTS_LEN * XMSS_NODE_BYTES,
+                      node_pub, out_lam, 16, tapes, aux, s_all, &gc);
     }
 
     /* ── (5) XMSS auth-path walk → root ── */
@@ -347,30 +325,34 @@ void building_views(
                 }
             }
 
-            unsigned char prefix[XMSS_PK_SEED_BYTES + 2];
-            memcpy(prefix, pk_seed, XMSS_PK_SEED_BYTES);
-            prefix[XMSS_PK_SEED_BYTES]     = XMSS_TWEAK_TREE;
-            prefix[XMSS_PK_SEED_BYTES + 1] = (unsigned char)level;
-            unsigned char sec_pub[2 + 16 + 16], secbuf[N_PARTIES][2 + 16 + 16];
-            unsigned char *sec_lam[N_PARTIES], *out_lam[N_PARTIES];
+            /* Th tree node: dom = pk_seed ‖ 0x01 ‖ level ‖ idx (idx masked),
+             * data = left ‖ right. */
+            const int dlen = XMSS_PK_SEED_BYTES + 2 + 2;
+            unsigned char dom_pub[XMSS_PK_SEED_BYTES + 2 + 2];
+            unsigned char dombuf[N_PARTIES][XMSS_PK_SEED_BYTES + 2 + 2];
+            unsigned char sec_pub[16 + 16], secbuf[N_PARTIES][16 + 16];
+            unsigned char *dom_lam[N_PARTIES], *sec_lam[N_PARTIES], *out_lam[N_PARTIES];
+            memcpy(dom_pub, pk_seed, XMSS_PK_SEED_BYTES);
+            dom_pub[XMSS_PK_SEED_BYTES]     = XMSS_TWEAK_TREE;
+            dom_pub[XMSS_PK_SEED_BYTES + 1] = (unsigned char)level;
             {
                 uint32_t idx = (li.h >> (level + 1)) & 0xFFFFu;
-                sec_pub[0] = (unsigned char)(idx & 0xFF);
-                sec_pub[1] = (unsigned char)((idx >> 8) & 0xFF);
-                memcpy(sec_pub + 2,      left_pub,  16);
-                memcpy(sec_pub + 2 + 16, right_pub, 16);
+                dom_pub[dlen - 2] = (unsigned char)(idx & 0xFF);
+                dom_pub[dlen - 1] = (unsigned char)((idx >> 8) & 0xFF);
             }
+            memcpy(sec_pub,      left_pub,  16);
+            memcpy(sec_pub + 16, right_pub, 16);
             for (int i = 0; i < N_PARTIES; i++) {
                 uint32_t idx = (li.l[i] >> (level + 1)) & 0xFFFFu;
-                secbuf[i][0] = (unsigned char)(idx & 0xFF);
-                secbuf[i][1] = (unsigned char)((idx >> 8) & 0xFF);
-                memcpy(secbuf[i] + 2,      left_lam[i],  16);
-                memcpy(secbuf[i] + 2 + 16, right_lam[i], 16);
-                sec_lam[i] = secbuf[i]; out_lam[i] = node_lam[i];
+                memset(dombuf[i], 0, dlen - 2);
+                dombuf[i][dlen - 2] = (unsigned char)(idx & 0xFF);
+                dombuf[i][dlen - 1] = (unsigned char)((idx >> 8) & 0xFF);
+                memcpy(secbuf[i],      left_lam[i],  16);
+                memcpy(secbuf[i] + 16, right_lam[i], 16);
+                dom_lam[i] = dombuf[i]; sec_lam[i] = secbuf[i]; out_lam[i] = node_lam[i];
             }
-            mpc_thash(tapes, aux, s_all, &gc,
-                      prefix, XMSS_PK_SEED_BYTES + 2,
-                      sec_pub, sec_lam, 2 + 16 + 16, NULL, 0, node_pub, out_lam, 16);
+            mpc_blake3_th(dom_pub, dom_lam, dlen, sec_pub, sec_lam, 16 + 16,
+                          node_pub, out_lam, 16, tapes, aux, s_all, &gc);
         }
     }
 
@@ -413,46 +395,6 @@ void building_views(
 }
 
 /* ── Verify-side helpers ────────────────────────────────────────────────── */
-
-static void mpc_thash_verify(
-    unsigned char *tapes[N_PARTIES-1], int e,
-    const uint32_t *msgs_e, const uint32_t *aux,
-    uint32_t *s_slots, int *gc,
-    const unsigned char *prefix, int prefix_len,
-    const unsigned char *sec_pub, unsigned char *sec_lam[N_PARTIES-1], int sec_len,
-    const unsigned char *suffix, int suffix_len,
-    unsigned char *out_pub, unsigned char *out_lam[N_PARTIES-1], int out_len)
-{
-    int total = prefix_len + sec_len + suffix_len;
-    unsigned char *in_pub = calloc(total, 1);
-    unsigned char *in_lam[N_PARTIES-1];
-    unsigned char res_pub[32], res_lam_buf[N_PARTIES-1][32];
-    unsigned char *res_lam[N_PARTIES-1];
-    for (int j = 0; j < N_PARTIES-1; j++) { in_lam[j] = NULL; res_lam[j] = res_lam_buf[j]; }
-    bool ok = (in_pub != NULL);
-    for (int j = 0; j < N_PARTIES-1 && ok; j++) {
-        in_lam[j] = calloc(total, 1);
-        if (!in_lam[j]) ok = false;
-    }
-    if (!ok) {
-        free(in_pub);
-        for (int j = 0; j < N_PARTIES-1; j++) free(in_lam[j]);
-        return;
-    }
-    if (prefix_len) memcpy(in_pub, prefix, prefix_len);
-    memcpy(in_pub + prefix_len, sec_pub, sec_len);
-    if (suffix_len) memcpy(in_pub + prefix_len + sec_len, suffix, suffix_len);
-    for (int j = 0; j < N_PARTIES-1; j++)
-        memcpy(in_lam[j] + prefix_len, sec_lam[j], sec_len);
-
-    mpc_sha256_verify(in_pub, in_lam, total * 8, res_pub, res_lam,
-                      tapes, e, msgs_e, aux, s_slots, gc);
-
-    memcpy(out_pub, res_pub, out_len);
-    for (int j = 0; j < N_PARTIES-1; j++) memcpy(out_lam[j], res_lam_buf[j], out_len);
-    free(in_pub);
-    for (int j = 0; j < N_PARTIES-1; j++) free(in_lam[j]);
-}
 
 static void mask_from_bit_v(const mwv *sel, mwv *mask)
 {
@@ -564,9 +506,10 @@ void verify(
             ysh_lam[j] = ysh_lam_buf[j];
             sec_lam[j] = vlam[j] + W_R_OFF;
         }
-        mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, s_slots, &gc, NULL, 0,
-                         d_pub + W_R_OFF, sec_lam, HM_R_BYTES, NULL, 0,
-                         ysh_pub, ysh_lam, 32);
+        mpc_blake3_th_verify(HM_DOM_Y, NULL, 3,
+                             d_pub + W_R_OFF, sec_lam, HM_R_BYTES,
+                             ysh_pub, ysh_lam, 32,
+                             tapes, e, msgs_e, z_proof->aux, s_slots, &gc);
 
         unsigned char bsh_pub[HM_B_BYTES], bsh_lam[N_PARTIES-1][HM_B_BYTES];
         for (int line = 0; line < HM_LINES; line++) {
@@ -611,45 +554,47 @@ void verify(
             memcpy(secbuf[j] + HM_A_BYTES + HM_B_BYTES, ysh_lam_buf[j], HM_Y_BYTES);
             sec_lam2[j] = secbuf[j];
         }
-        mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, s_slots, &gc, NULL, 0,
-                         sec_pub, sec_lam2, HM_COM_BYTES, NULL, 0, dsh_pub, dsh_lam, 32);
+        mpc_blake3_th_verify(HM_DOM_D, NULL, 3, sec_pub, sec_lam2, HM_COM_BYTES,
+                             dsh_pub, dsh_lam, 32,
+                             tapes, e, msgs_e, z_proof->aux, s_slots, &gc);
     }
 
     /* ── (2) mh ── */
     unsigned char mh_pub[32], mh_lam[N_PARTIES-1][32];
     {
-        unsigned char prefix[XMSS_PK_SEED_BYTES + 1];
-        memcpy(prefix, pk_seed, XMSS_PK_SEED_BYTES);
-        prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_MESSAGE;
-        const int slen = XMSS_EPOCH_BYTES + XMSS_NONCE_LEN + 32;
-        unsigned char sec_pub[XMSS_EPOCH_BYTES + XMSS_NONCE_LEN + 32];
-        unsigned char secbuf[N_PARTIES-1][XMSS_EPOCH_BYTES + XMSS_NONCE_LEN + 32];
-        unsigned char *sec_lam[N_PARTIES-1], *out_lam[N_PARTIES-1];
-        memcpy(sec_pub, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
-        memcpy(sec_pub + XMSS_EPOCH_BYTES, d_pub + W_NONCE_OFF, XMSS_NONCE_LEN);
-        memcpy(sec_pub + XMSS_EPOCH_BYTES + XMSS_NONCE_LEN, dsh_pub, 32);
+        const int dlen = XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES;
+        unsigned char dom_pub[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES];
+        unsigned char dombuf[N_PARTIES-1][XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES];
+        unsigned char *dom_lam[N_PARTIES-1];
+        memcpy(dom_pub, pk_seed, XMSS_PK_SEED_BYTES);
+        dom_pub[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_MESSAGE;
+        memcpy(dom_pub + XMSS_PK_SEED_BYTES + 1, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
         for (int j = 0; j < N_PARTIES-1; j++) {
-            memcpy(secbuf[j], vlam[j] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
-            memcpy(secbuf[j] + XMSS_EPOCH_BYTES, vlam[j] + W_NONCE_OFF, XMSS_NONCE_LEN);
-            memcpy(secbuf[j] + XMSS_EPOCH_BYTES + XMSS_NONCE_LEN, dsh_lam_buf[j], 32);
+            memset(dombuf[j], 0, XMSS_PK_SEED_BYTES + 1);
+            memcpy(dombuf[j] + XMSS_PK_SEED_BYTES + 1, vlam[j] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+            dom_lam[j] = dombuf[j];
+        }
+        const int slen = XMSS_NONCE_LEN + 32;
+        unsigned char sec_pub[XMSS_NONCE_LEN + 32];
+        unsigned char secbuf[N_PARTIES-1][XMSS_NONCE_LEN + 32];
+        unsigned char *sec_lam[N_PARTIES-1], *out_lam[N_PARTIES-1];
+        memcpy(sec_pub, d_pub + W_NONCE_OFF, XMSS_NONCE_LEN);
+        memcpy(sec_pub + XMSS_NONCE_LEN, dsh_pub, 32);
+        for (int j = 0; j < N_PARTIES-1; j++) {
+            memcpy(secbuf[j], vlam[j] + W_NONCE_OFF, XMSS_NONCE_LEN);
+            memcpy(secbuf[j] + XMSS_NONCE_LEN, dsh_lam_buf[j], 32);
             sec_lam[j] = secbuf[j]; out_lam[j] = mh_lam[j];
         }
-        mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, s_slots, &gc,
-                         prefix, XMSS_PK_SEED_BYTES + 1,
-                         sec_pub, sec_lam, slen, NULL, 0, mh_pub, out_lam, 32);
+        mpc_blake3_th_verify(dom_pub, dom_lam, dlen, sec_pub, sec_lam, slen,
+                             mh_pub, out_lam, 32,
+                             tapes, e, msgs_e, z_proof->aux, s_slots, &gc);
     }
 
     /* ── (3) WOTS+ chains ── */
-    unsigned char pkh_pub[XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES];
-    unsigned char pkh_lam[N_PARTIES-1][XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES];
+    unsigned char pkh_pub[XMSS_WOTS_LEN * XMSS_NODE_BYTES];
+    unsigned char pkh_lam[N_PARTIES-1][XMSS_WOTS_LEN * XMSS_NODE_BYTES];
     {
-        unsigned char chain_prefix[XMSS_PK_SEED_BYTES + 1];
-        memcpy(chain_prefix, pk_seed, XMSS_PK_SEED_BYTES);
-        chain_prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_CHAIN;
         const int cpb = 8 / XMSS_COORD_RES_BITS;
-        memcpy(pkh_pub, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
-        for (int j = 0; j < N_PARTIES-1; j++)
-            memcpy(pkh_lam[j], vlam[j] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
 
         for (int ci = 0; ci < XMSS_WOTS_LEN; ci++) {
             unsigned char x_pub[16], x_lam[N_PARTIES-1][16];
@@ -683,44 +628,53 @@ void verify(
 #endif
             for (int stage = 0; stage < XMSS_WOTS_MAX_STEPS; stage++) {
                 unsigned char h_pub[16], h_lam[N_PARTIES-1][16];
-                unsigned char suffix[2] = {(unsigned char)ci, (unsigned char)(stage + 1)};
-                unsigned char xe_pub[XMSS_EPOCH_BYTES + XMSS_NODE_BYTES];
-                unsigned char xe_lam[N_PARTIES-1][XMSS_EPOCH_BYTES + XMSS_NODE_BYTES];
-                unsigned char *secp[N_PARTIES-1], *outp[N_PARTIES-1];
-                memcpy(xe_pub, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
-                memcpy(xe_pub + XMSS_EPOCH_BYTES, x_pub, XMSS_NODE_BYTES);
+                const int tlen = XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + 2;
+                unsigned char tw_pub[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + 2];
+                unsigned char twbuf[N_PARTIES-1][XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES + 2];
+                unsigned char *tw_lam[N_PARTIES-1], *domp[N_PARTIES-1], *outp[N_PARTIES-1];
+                memcpy(tw_pub, pk_seed, XMSS_PK_SEED_BYTES);
+                tw_pub[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_CHAIN;
+                memcpy(tw_pub + XMSS_PK_SEED_BYTES + 1, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+                tw_pub[tlen - 2] = (unsigned char)ci;
+                tw_pub[tlen - 1] = (unsigned char)(stage + 1);
                 for (int j = 0; j < N_PARTIES-1; j++) {
-                    memcpy(xe_lam[j], vlam[j] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
-                    memcpy(xe_lam[j] + XMSS_EPOCH_BYTES, x_lam[j], XMSS_NODE_BYTES);
-                    secp[j] = xe_lam[j]; outp[j] = h_lam[j];
+                    memset(twbuf[j], 0, tlen);
+                    memcpy(twbuf[j] + XMSS_PK_SEED_BYTES + 1, vlam[j] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+                    tw_lam[j] = twbuf[j]; domp[j] = x_lam[j]; outp[j] = h_lam[j];
                 }
-                mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, s_slots, &gc,
-                                 chain_prefix, XMSS_PK_SEED_BYTES + 1,
-                                 xe_pub, secp, XMSS_EPOCH_BYTES + XMSS_NODE_BYTES,
-                                 suffix, 2, h_pub, outp, 16);
+                mpc_blake3_th_verify(x_pub, domp, XMSS_NODE_BYTES, tw_pub, tw_lam, tlen,
+                                     h_pub, outp, 16,
+                                     tapes, e, msgs_e, z_proof->aux, s_slots, &gc);
                 mwv mask;
                 mask_from_bit_v(sels[stage], &mask);
                 mpc_mux16_verify(x_pub, x_lam, h_pub, h_lam, &mask,
                                  tapes, e, msgs_e, z_proof->aux, s_slots, &gc);
             }
-            memcpy(pkh_pub + XMSS_EPOCH_BYTES + ci * XMSS_NODE_BYTES, x_pub, XMSS_NODE_BYTES);
+            memcpy(pkh_pub + ci * XMSS_NODE_BYTES, x_pub, XMSS_NODE_BYTES);
             for (int j = 0; j < N_PARTIES-1; j++)
-                memcpy(pkh_lam[j] + XMSS_EPOCH_BYTES + ci * XMSS_NODE_BYTES, x_lam[j], XMSS_NODE_BYTES);
+                memcpy(pkh_lam[j] + ci * XMSS_NODE_BYTES, x_lam[j], XMSS_NODE_BYTES);
         }
     }
 
     /* ── (4) leaf hash ── */
     unsigned char node_pub[16], node_lam[N_PARTIES-1][16];
     {
-        unsigned char prefix[XMSS_PK_SEED_BYTES + 1];
-        memcpy(prefix, pk_seed, XMSS_PK_SEED_BYTES);
-        prefix[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_TREE;
-        unsigned char *sec_lam[N_PARTIES-1], *out_lam[N_PARTIES-1];
-        for (int j = 0; j < N_PARTIES-1; j++) { sec_lam[j] = pkh_lam[j]; out_lam[j] = node_lam[j]; }
-        mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, s_slots, &gc,
-                         prefix, XMSS_PK_SEED_BYTES + 1,
-                         pkh_pub, sec_lam, XMSS_EPOCH_BYTES + XMSS_WOTS_LEN * XMSS_NODE_BYTES,
-                         NULL, 0, node_pub, out_lam, 16);
+        const int dlen = XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES;
+        unsigned char dom_pub[XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES];
+        unsigned char dombuf[N_PARTIES-1][XMSS_PK_SEED_BYTES + 1 + XMSS_EPOCH_BYTES];
+        unsigned char *dom_lam[N_PARTIES-1], *sec_lam[N_PARTIES-1], *out_lam[N_PARTIES-1];
+        memcpy(dom_pub, pk_seed, XMSS_PK_SEED_BYTES);
+        dom_pub[XMSS_PK_SEED_BYTES] = XMSS_TWEAK_LEAF;
+        memcpy(dom_pub + XMSS_PK_SEED_BYTES + 1, d_pub + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+        for (int j = 0; j < N_PARTIES-1; j++) {
+            memset(dombuf[j], 0, XMSS_PK_SEED_BYTES + 1);
+            memcpy(dombuf[j] + XMSS_PK_SEED_BYTES + 1, vlam[j] + W_LEAFIDX_OFF, XMSS_EPOCH_BYTES);
+            dom_lam[j] = dombuf[j]; sec_lam[j] = pkh_lam[j]; out_lam[j] = node_lam[j];
+        }
+        mpc_blake3_th_verify(dom_pub, dom_lam, dlen,
+                             pkh_pub, sec_lam, XMSS_WOTS_LEN * XMSS_NODE_BYTES,
+                             node_pub, out_lam, 16,
+                             tapes, e, msgs_e, z_proof->aux, s_slots, &gc);
     }
 
     /* ── (5) auth-path walk ── */
@@ -769,30 +723,33 @@ void verify(
                 }
             }
 
-            unsigned char prefix[XMSS_PK_SEED_BYTES + 2];
-            memcpy(prefix, pk_seed, XMSS_PK_SEED_BYTES);
-            prefix[XMSS_PK_SEED_BYTES]     = XMSS_TWEAK_TREE;
-            prefix[XMSS_PK_SEED_BYTES + 1] = (unsigned char)level;
-            unsigned char sec_pub[2 + 16 + 16], secbuf[N_PARTIES-1][2 + 16 + 16];
-            unsigned char *sec_lam[N_PARTIES-1], *out_lam[N_PARTIES-1];
+            const int dlen = XMSS_PK_SEED_BYTES + 2 + 2;
+            unsigned char dom_pub[XMSS_PK_SEED_BYTES + 2 + 2];
+            unsigned char dombuf[N_PARTIES-1][XMSS_PK_SEED_BYTES + 2 + 2];
+            unsigned char sec_pub[16 + 16], secbuf[N_PARTIES-1][16 + 16];
+            unsigned char *dom_lam[N_PARTIES-1], *sec_lam[N_PARTIES-1], *out_lam[N_PARTIES-1];
+            memcpy(dom_pub, pk_seed, XMSS_PK_SEED_BYTES);
+            dom_pub[XMSS_PK_SEED_BYTES]     = XMSS_TWEAK_TREE;
+            dom_pub[XMSS_PK_SEED_BYTES + 1] = (unsigned char)level;
             {
                 uint32_t idx = (li.h >> (level + 1)) & 0xFFFFu;
-                sec_pub[0] = (unsigned char)(idx & 0xFF);
-                sec_pub[1] = (unsigned char)((idx >> 8) & 0xFF);
-                memcpy(sec_pub + 2,      left_pub,  16);
-                memcpy(sec_pub + 2 + 16, right_pub, 16);
+                dom_pub[dlen - 2] = (unsigned char)(idx & 0xFF);
+                dom_pub[dlen - 1] = (unsigned char)((idx >> 8) & 0xFF);
             }
+            memcpy(sec_pub,      left_pub,  16);
+            memcpy(sec_pub + 16, right_pub, 16);
             for (int j = 0; j < N_PARTIES-1; j++) {
                 uint32_t idx = (li.l[j] >> (level + 1)) & 0xFFFFu;
-                secbuf[j][0] = (unsigned char)(idx & 0xFF);
-                secbuf[j][1] = (unsigned char)((idx >> 8) & 0xFF);
-                memcpy(secbuf[j] + 2,      left_lam[j],  16);
-                memcpy(secbuf[j] + 2 + 16, right_lam[j], 16);
-                sec_lam[j] = secbuf[j]; out_lam[j] = node_lam[j];
+                memset(dombuf[j], 0, dlen - 2);
+                dombuf[j][dlen - 2] = (unsigned char)(idx & 0xFF);
+                dombuf[j][dlen - 1] = (unsigned char)((idx >> 8) & 0xFF);
+                memcpy(secbuf[j],      left_lam[j],  16);
+                memcpy(secbuf[j] + 16, right_lam[j], 16);
+                dom_lam[j] = dombuf[j]; sec_lam[j] = secbuf[j]; out_lam[j] = node_lam[j];
             }
-            mpc_thash_verify(tapes, e, msgs_e, z_proof->aux, s_slots, &gc,
-                             prefix, XMSS_PK_SEED_BYTES + 2,
-                             sec_pub, sec_lam, 2 + 16 + 16, NULL, 0, node_pub, out_lam, 16);
+            mpc_blake3_th_verify(dom_pub, dom_lam, dlen, sec_pub, sec_lam, 16 + 16,
+                                 node_pub, out_lam, 16,
+                                 tapes, e, msgs_e, z_proof->aux, s_slots, &gc);
         }
     }
 

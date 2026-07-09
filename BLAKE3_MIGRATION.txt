@@ -2,6 +2,12 @@
  blind_MSS — BLAKE3 tweakable-hash migration plan
  Modeled on binius-zk/binius64 PR #1620 (BINIUS-162, merged):
  "rework the XMSS verifier onto a single BLAKE3 tweakable-hash family"
+
+ STATUS: IMPLEMENTED 2026-07-09 (branch blake3, proof format KKW7).
+ The gate model below was exact: measured ySize = 73,096.  Measured N=4/W=16:
+ proof 28.8 MB, prove 0.47 s, verify 0.26 s (better than projected — tape
+ expansion and hashing volume halve too).  S5 (nonce widening) NOT taken:
+ decide separately.  OPTIMIZATIONS.txt entry 11 is the implementation log.
 ================================================================================
 
 Goal: replace every in-circuit SHA-256 with a tweakable hash built on the raw

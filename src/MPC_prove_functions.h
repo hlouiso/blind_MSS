@@ -70,23 +70,25 @@ void mpc_ADDK(const mw *x, uint32_t K, mw *z,
               unsigned char *tapes[N_PARTIES], uint32_t *aux,
               uint32_t *s_all, int *gateCount);
 
-/* SHA-256 majority gate: z = MAJ(a, b, c). */
-void mpc_MAJ(const mw *a, const mw *b, const mw *c, mw *z,
-             unsigned char *tapes[N_PARTIES], uint32_t *aux,
-             uint32_t *s_all, int *gateCount);
+/* N-party BLAKE3 compression: out = first half of the output state.
+ * cv/m are masked words; counter=0 and flags=0 (Th usage, see blake3.h);
+ * block_len is public.  336 nonlinear gates (7 rounds x 8 G x 6 ADD). */
+void mpc_blake3_compress(const mw cv[8], const mw m[16], uint32_t block_len,
+                         mw out[8],
+                         unsigned char *tapes[N_PARTIES], uint32_t *aux,
+                         uint32_t *s_all, int *gateCount);
 
-/* SHA-256 choice gate: z = CH(e, f, g) = (e AND (f XOR g)) XOR g. */
-void mpc_CH(const mw *e, const mw *f, const mw *g, mw *z,
-            unsigned char *tapes[N_PARTIES], uint32_t *aux,
-            uint32_t *s_all, int *gateCount);
-
-/* N-party SHA-256 over numBits of input.
- * in_pub / in_lam[i]:  masked message bytes and per-party mask-share bytes.
- * out_pub / out_lam[i]: 32-byte masked digest and mask shares (output). */
-void mpc_sha256(const unsigned char *in_pub, unsigned char *in_lam[N_PARTIES],
-                int numBits,
-                unsigned char *out_pub, unsigned char *out_lam[N_PARTIES],
-                unsigned char *tapes[N_PARTIES],
-                uint32_t *aux, uint32_t *s_all, int *gateCount);
+/* N-party tweakable hash Th(domain, data) — see blake3.h for the mode.
+ * dom/data are masked byte buffers (little-endian word packing); a NULL
+ * lam array means all-zero mask shares (fully public bytes).
+ * dom_len <= 32, out_len <= 32. */
+void mpc_blake3_th(const unsigned char *dom_pub, unsigned char *dom_lam[N_PARTIES],
+                   int dom_len,
+                   const unsigned char *data_pub, unsigned char *data_lam[N_PARTIES],
+                   int data_len,
+                   unsigned char *out_pub, unsigned char *out_lam[N_PARTIES],
+                   int out_len,
+                   unsigned char *tapes[N_PARTIES], uint32_t *aux,
+                   uint32_t *s_all, int *gateCount);
 
 #endif /* FUNCTIONS_H */

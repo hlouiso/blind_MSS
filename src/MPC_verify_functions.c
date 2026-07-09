@@ -107,160 +107,108 @@ void mpc_ADDK_verify(const mwv *x, uint32_t K, mwv *z,
     mpc_ADD_verify(x, &kw, z, tapes, e, msgs_e, aux, s_slots, gateCount);
 }
 
-/* ── SHA-256 derived gates (verify) ─────────────────────────────────────── */
+/* ── N-1 party BLAKE3 compression / tweakable hash (verify) ─────────────── */
 
-void mpc_MAJ_verify(const mwv *a, const mwv *b, const mwv *c, mwv *z,
-                    unsigned char *tapes[N_PARTIES - 1], int e,
-                    const uint32_t *msgs_e, const uint32_t *aux,
-                    uint32_t *s_slots, int *gateCount)
-{
-    mwv t0, t1;
-    mpc_XOR_v(a, b, &t0);
-    mpc_XOR_v(a, c, &t1);
-    mpc_AND_verify(&t0, &t1, z, tapes, e, msgs_e, aux, s_slots, gateCount);
-    mpc_XOR_v(z, a, z);
-}
+static const uint32_t B3_IV4[4] = {0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A};
+static const uint8_t B3_PERM[16] = {2,6,3,10,7,0,4,13,1,11,12,5,9,14,15,8};
 
-void mpc_CH_verify(const mwv *e_w, const mwv *f, const mwv *g_w, mwv *z,
-                   unsigned char *tapes[N_PARTIES - 1], int e,
+static void b3_g_v(mwv v[16], int a, int b, int c, int d,
+                   const mwv *x, const mwv *y,
+                   unsigned char *tapes[N_PARTIES-1], int e,
                    const uint32_t *msgs_e, const uint32_t *aux,
-                   uint32_t *s_slots, int *gateCount)
+                   uint32_t *s_slots, int *gc)
 {
     mwv t;
-    mpc_XOR_v(f, g_w, &t);
-    mpc_AND_verify(e_w, &t, &t, tapes, e, msgs_e, aux, s_slots, gateCount);
-    mpc_XOR_v(&t, g_w, z);
+    mpc_ADD_verify(&v[a], &v[b], &t, tapes, e, msgs_e, aux, s_slots, gc);
+    mpc_ADD_verify(&t, x, &v[a], tapes, e, msgs_e, aux, s_slots, gc);
+    mpc_XOR_v(&v[d], &v[a], &t); mpc_RIGHTROTATE_v(&t, 16, &v[d]);
+    mpc_ADD_verify(&v[c], &v[d], &v[c], tapes, e, msgs_e, aux, s_slots, gc);
+    mpc_XOR_v(&v[b], &v[c], &t); mpc_RIGHTROTATE_v(&t, 12, &v[b]);
+    mpc_ADD_verify(&v[a], &v[b], &t, tapes, e, msgs_e, aux, s_slots, gc);
+    mpc_ADD_verify(&t, y, &v[a], tapes, e, msgs_e, aux, s_slots, gc);
+    mpc_XOR_v(&v[d], &v[a], &t); mpc_RIGHTROTATE_v(&t, 8, &v[d]);
+    mpc_ADD_verify(&v[c], &v[d], &v[c], tapes, e, msgs_e, aux, s_slots, gc);
+    mpc_XOR_v(&v[b], &v[c], &t); mpc_RIGHTROTATE_v(&t, 7, &v[b]);
 }
 
-/* ── N-1 party SHA-256 (verify) ─────────────────────────────────────────── */
-
-void mpc_sha256_verify(const unsigned char *in_pub,
-                       unsigned char *in_lam[N_PARTIES - 1], int numBits,
-                       unsigned char *out_pub,
-                       unsigned char *out_lam[N_PARTIES - 1],
-                       unsigned char *tapes[N_PARTIES - 1], int e,
-                       const uint32_t *msgs_e, const uint32_t *aux,
-                       uint32_t *s_slots, int *gateCount)
+void mpc_blake3_compress_verify(const mwv cv[8], const mwv m[16],
+                                uint32_t block_len, mwv out[8],
+                                unsigned char *tapes[N_PARTIES-1], int e,
+                                const uint32_t *msgs_e, const uint32_t *aux,
+                                uint32_t *s_slots, int *gateCount)
 {
-    const uint64_t bitlen64 = (uint64_t)((numBits < 0) ? 0 : numBits);
-    const size_t fullBytes = (size_t)(bitlen64 >> 3);
-    const int remBits = (int)(bitlen64 & 7);
-    const size_t srcBytes = fullBytes + (remBits ? 1 : 0);
-    const size_t bytesBeforeLen = fullBytes + 1;
-    const size_t padZeroBytes = (size_t)((56 - (int)(bytesBeforeLen % 64) + 64) % 64);
-    const size_t totalLen = bytesBeforeLen + padZeroBytes + 8;
-    const size_t nBlocks = totalLen / 64;
+    mwv v[16];
+    for (int i = 0; i < 8; i++) v[i] = cv[i];
+    for (int i = 0; i < 4; i++) mwv_const(B3_IV4[i], &v[8 + i]);
+    mwv_const(0, &v[12]);
+    mwv_const(0, &v[13]);
+    mwv_const(block_len, &v[14]);
+    mwv_const(0, &v[15]);
 
-    unsigned char *pad_pub = calloc(totalLen, 1);
-    unsigned char *pad_lam[N_PARTIES - 1];
-    for (int j = 0; j < N_PARTIES - 1; j++) pad_lam[j] = NULL;
-    bool ok = (pad_pub != NULL);
-    for (int j = 0; j < N_PARTIES - 1 && ok; j++) {
-        pad_lam[j] = calloc(totalLen, 1);
-        if (!pad_lam[j]) ok = false;
-    }
-    if (!ok) {
-        free(pad_pub);
-        for (int j = 0; j < N_PARTIES - 1; j++) free(pad_lam[j]);
-        return;
-    }
-    if (srcBytes) memcpy(pad_pub, in_pub, srcBytes);
-    for (int j = 0; j < N_PARTIES - 1; j++)
-        if (srcBytes) memcpy(pad_lam[j], in_lam[j], srcBytes);
-    if (remBits) {
-        unsigned char m = (unsigned char)(0xFFu << (8 - remBits));
-        pad_pub[fullBytes] = (unsigned char)((pad_pub[fullBytes] & m) | (0x80u >> remBits));
-        for (int j = 0; j < N_PARTIES - 1; j++) pad_lam[j][fullBytes] &= m;
-    } else {
-        pad_pub[fullBytes] = 0x80u;
-    }
-    for (int b = 0; b < 8; b++)
-        pad_pub[totalLen - 1 - b] = (unsigned char)((bitlen64 >> (8*b)) & 0xFF);
-
-    mwv H[8];
-    for (int j = 0; j < 8; j++) mwv_const(hA[j], &H[j]);
-
-    mwv w[64];
-    mwv A, B, C, D, E, F, G, Hv;
-    mwv s0, s1, t0, t1, maj, temp1, temp2;
-
-    for (size_t blk = 0; blk < nBlocks; blk++) {
-        for (int jw = 0; jw < 16; jw++) {
-            const unsigned char *bp = pad_pub + blk * 64 + (size_t)jw * 4;
-            w[jw].h = ((uint32_t)bp[0] << 24) | ((uint32_t)bp[1] << 16) |
-                      ((uint32_t)bp[2] <<  8) | ((uint32_t)bp[3]);
-            for (int j = 0; j < N_PARTIES - 1; j++) {
-                const unsigned char *bl = pad_lam[j] + blk * 64 + (size_t)jw * 4;
-                w[jw].l[j] = ((uint32_t)bl[0] << 24) | ((uint32_t)bl[1] << 16) |
-                             ((uint32_t)bl[2] <<  8) | ((uint32_t)bl[3]);
-            }
-        }
-
-        for (int jw = 16; jw < 64; jw++) {
-            mpc_RIGHTROTATE_v(&w[jw-15], 7,  &t0);
-            mpc_RIGHTROTATE_v(&w[jw-15], 18, &t1); mpc_XOR_v(&t0, &t1, &t0);
-            mpc_RIGHTSHIFT_v( &w[jw-15], 3,  &t1); mpc_XOR_v(&t0, &t1, &s0);
-
-            mpc_RIGHTROTATE_v(&w[jw-2], 17, &t0);
-            mpc_RIGHTROTATE_v(&w[jw-2], 19, &t1); mpc_XOR_v(&t0, &t1, &t0);
-            mpc_RIGHTSHIFT_v( &w[jw-2], 10, &t1); mpc_XOR_v(&t0, &t1, &s1);
-
-            mpc_ADD_verify(&w[jw-16], &s0, &t1,   tapes, e, msgs_e, aux, s_slots, gateCount);
-            mpc_ADD_verify(&w[jw-7],  &t1, &t1,   tapes, e, msgs_e, aux, s_slots, gateCount);
-            mpc_ADD_verify(&t1,       &s1, &w[jw], tapes, e, msgs_e, aux, s_slots, gateCount);
-        }
-
-        A = H[0]; B = H[1]; C = H[2]; D = H[3];
-        E = H[4]; F = H[5]; G = H[6]; Hv = H[7];
-
-        for (int jw = 0; jw < 64; jw++) {
-            mpc_RIGHTROTATE_v(&E, 6,  &t0);
-            mpc_RIGHTROTATE_v(&E, 11, &t1); mpc_XOR_v(&t0, &t1, &t0);
-            mpc_RIGHTROTATE_v(&E, 25, &t1); mpc_XOR_v(&t0, &t1, &s1);
-
-            mpc_ADD_verify(&Hv, &s1, &t0, tapes, e, msgs_e, aux, s_slots, gateCount);
-            mpc_CH_verify(&E, &F, &G, &t1, tapes, e, msgs_e, aux, s_slots, gateCount);
-            mpc_ADD_verify(&t0, &t1, &t1, tapes, e, msgs_e, aux, s_slots, gateCount);
-            mpc_ADDK_verify(&t1, k[jw], &t1, tapes, e, msgs_e, aux, s_slots, gateCount);
-            mpc_ADD_verify(&t1, &w[jw], &temp1, tapes, e, msgs_e, aux, s_slots, gateCount);
-
-            mpc_RIGHTROTATE_v(&A, 2,  &t0);
-            mpc_RIGHTROTATE_v(&A, 13, &t1); mpc_XOR_v(&t0, &t1, &t0);
-            mpc_RIGHTROTATE_v(&A, 22, &t1); mpc_XOR_v(&t0, &t1, &s0);
-
-            mpc_MAJ_verify(&A, &B, &C, &maj, tapes, e, msgs_e, aux, s_slots, gateCount);
-            mpc_ADD_verify(&s0, &maj, &temp2, tapes, e, msgs_e, aux, s_slots, gateCount);
-
-            Hv = G; G = F; F = E;
-            mpc_ADD_verify(&D, &temp1, &E, tapes, e, msgs_e, aux, s_slots, gateCount);
-            D = C; C = B; B = A;
-            mpc_ADD_verify(&temp1, &temp2, &A, tapes, e, msgs_e, aux, s_slots, gateCount);
-        }
-
-        mwv tmp;
-        mpc_ADD_verify(&H[0], &A,  &tmp, tapes, e, msgs_e, aux, s_slots, gateCount); H[0] = tmp;
-        mpc_ADD_verify(&H[1], &B,  &tmp, tapes, e, msgs_e, aux, s_slots, gateCount); H[1] = tmp;
-        mpc_ADD_verify(&H[2], &C,  &tmp, tapes, e, msgs_e, aux, s_slots, gateCount); H[2] = tmp;
-        mpc_ADD_verify(&H[3], &D,  &tmp, tapes, e, msgs_e, aux, s_slots, gateCount); H[3] = tmp;
-        mpc_ADD_verify(&H[4], &E,  &tmp, tapes, e, msgs_e, aux, s_slots, gateCount); H[4] = tmp;
-        mpc_ADD_verify(&H[5], &F,  &tmp, tapes, e, msgs_e, aux, s_slots, gateCount); H[5] = tmp;
-        mpc_ADD_verify(&H[6], &G,  &tmp, tapes, e, msgs_e, aux, s_slots, gateCount); H[6] = tmp;
-        mpc_ADD_verify(&H[7], &Hv, &tmp, tapes, e, msgs_e, aux, s_slots, gateCount); H[7] = tmp;
+    uint8_t s[16], t[16];
+    for (int i = 0; i < 16; i++) s[i] = (uint8_t)i;
+    for (int r = 0; r < 7; r++) {
+        b3_g_v(v, 0, 4,  8, 12, &m[s[0]],  &m[s[1]],  tapes, e, msgs_e, aux, s_slots, gateCount);
+        b3_g_v(v, 1, 5,  9, 13, &m[s[2]],  &m[s[3]],  tapes, e, msgs_e, aux, s_slots, gateCount);
+        b3_g_v(v, 2, 6, 10, 14, &m[s[4]],  &m[s[5]],  tapes, e, msgs_e, aux, s_slots, gateCount);
+        b3_g_v(v, 3, 7, 11, 15, &m[s[6]],  &m[s[7]],  tapes, e, msgs_e, aux, s_slots, gateCount);
+        b3_g_v(v, 0, 5, 10, 15, &m[s[8]],  &m[s[9]],  tapes, e, msgs_e, aux, s_slots, gateCount);
+        b3_g_v(v, 1, 6, 11, 12, &m[s[10]], &m[s[11]], tapes, e, msgs_e, aux, s_slots, gateCount);
+        b3_g_v(v, 2, 7,  8, 13, &m[s[12]], &m[s[13]], tapes, e, msgs_e, aux, s_slots, gateCount);
+        b3_g_v(v, 3, 4,  9, 14, &m[s[14]], &m[s[15]], tapes, e, msgs_e, aux, s_slots, gateCount);
+        for (int i = 0; i < 16; i++) t[i] = s[B3_PERM[i]];
+        memcpy(s, t, 16);
     }
 
-    free(pad_pub);
-    for (int j = 0; j < N_PARTIES - 1; j++) free(pad_lam[j]);
+    for (int i = 0; i < 8; i++) mpc_XOR_v(&v[i], &v[i + 8], &out[i]);
+}
 
-    for (int jw = 0; jw < 8; jw++) {
-        out_pub[jw*4+0] = (unsigned char)(H[jw].h >> 24);
-        out_pub[jw*4+1] = (unsigned char)(H[jw].h >> 16);
-        out_pub[jw*4+2] = (unsigned char)(H[jw].h >>  8);
-        out_pub[jw*4+3] = (unsigned char)(H[jw].h);
-        for (int j = 0; j < N_PARTIES - 1; j++) {
-            out_lam[j][jw*4+0] = (unsigned char)(H[jw].l[j] >> 24);
-            out_lam[j][jw*4+1] = (unsigned char)(H[jw].l[j] >> 16);
-            out_lam[j][jw*4+2] = (unsigned char)(H[jw].l[j] >>  8);
-            out_lam[j][jw*4+3] = (unsigned char)(H[jw].l[j]);
+static inline uint32_t b3_le_word(const unsigned char *buf, int len, int off)
+{
+    uint32_t v = 0;
+    for (int b = 3; b >= 0; b--) {
+        int i = off + b;
+        v = (v << 8) | (uint32_t)((buf && i < len) ? buf[i] : 0);
+    }
+    return v;
+}
+
+void mpc_blake3_th_verify(const unsigned char *dom_pub,
+                          unsigned char *dom_lam[N_PARTIES-1], int dom_len,
+                          const unsigned char *data_pub,
+                          unsigned char *data_lam[N_PARTIES-1], int data_len,
+                          unsigned char *out_pub,
+                          unsigned char *out_lam[N_PARTIES-1], int out_len,
+                          unsigned char *tapes[N_PARTIES-1], int e,
+                          const uint32_t *msgs_e, const uint32_t *aux,
+                          uint32_t *s_slots, int *gateCount)
+{
+    mwv cv[8];
+    for (int w = 0; w < 8; w++) {
+        cv[w].h = b3_le_word(dom_pub, dom_len, w * 4);
+        for (int j = 0; j < N_PARTIES-1; j++)
+            cv[w].l[j] = b3_le_word(dom_lam ? dom_lam[j] : NULL, dom_len, w * 4);
+    }
+
+    int nblocks = data_len ? (data_len + 63) / 64 : 1;
+    for (int b = 0; b < nblocks; b++) {
+        int off  = b * 64;
+        int blen = (data_len - off > 64) ? 64 : data_len - off;
+        mwv m[16];
+        for (int w = 0; w < 16; w++) {
+            m[w].h = b3_le_word(data_pub, data_len, off + w * 4);
+            for (int j = 0; j < N_PARTIES-1; j++)
+                m[w].l[j] = b3_le_word(data_lam ? data_lam[j] : NULL,
+                                       data_len, off + w * 4);
         }
+        mpc_blake3_compress_verify(cv, m, (uint32_t)blen, cv,
+                                   tapes, e, msgs_e, aux, s_slots, gateCount);
+    }
+
+    for (int i = 0; i < out_len; i++) {
+        out_pub[i] = (unsigned char)(cv[i / 4].h >> (8 * (i % 4)));
+        for (int j = 0; j < N_PARTIES-1; j++)
+            out_lam[j][i] = (unsigned char)(cv[i / 4].l[j] >> (8 * (i % 4)));
     }
 }
+
