@@ -8,7 +8,8 @@
  * truncated to 16 bytes (128-bit).  Byte formats are identical to
  * https://github.com/diegode/blind-longfellow so the security analysis carries over.
  *
- * Tweaked-hash byte formats (each a single SHA-256 block):
+ * Tweaked-hash byte formats (chain and tree-node inputs fit in one SHA-256
+ * block; the message and public-key inputs span two and 37 blocks):
  *   message    : pk_seed(16) || 0x02 || epoch(4 BE) || nonce(6) || message(msg_len)
  *   chain step : pk_seed(16) || 0x00 || epoch(4 BE) || in(16) || chain_idx(1) || pos(1)
  *   tree node  : pk_seed(16) || 0x01 || level(1) || index(2 LE) || left(16) || right(16)

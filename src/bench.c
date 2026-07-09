@@ -24,6 +24,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 
 #ifndef BENCH_ITERS
 #define BENCH_ITERS 100
@@ -31,11 +34,24 @@
 
 /* ── timing helpers ─────────────────────────────────────────────────────── */
 
+/* Free-running hardware counter (same caveats as bench_pipeline.c: on AArch64
+ * this is the fixed-frequency virtual counter, not CPU cycles — the wall-time
+ * column is the portable metric). */
 static uint64_t rdtsc(void)
 {
+#if defined(__x86_64__) || defined(__i386__)
     uint32_t lo, hi;
     __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
     return ((uint64_t)hi << 32) | lo;
+#elif defined(__aarch64__)
+    uint64_t v;
+    __asm__ __volatile__ ("mrs %0, cntvct_el0" : "=r"(v));
+    return v;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+#endif
 }
 
 static double elapsed_s(struct timespec a, struct timespec b)
@@ -59,6 +75,12 @@ static int cmp_u64(const void *a, const void *b)
 
 static void cpu_model(char *buf, size_t n)
 {
+#if defined(__APPLE__)
+    /* macOS has no /proc; query the machdep CPU brand string via sysctl. */
+    if (sysctlbyname("machdep.cpu.brand_string", buf, &n, NULL, 0) == 0) return;
+    snprintf(buf, n, "unknown");
+    return;
+#else
     FILE *f = fopen("/proc/cpuinfo", "r");
     if (!f) { snprintf(buf, n, "unknown"); return; }
     char line[256];
@@ -75,6 +97,7 @@ static void cpu_model(char *buf, size_t n)
     }
     fclose(f);
     snprintf(buf, n, "unknown");
+#endif
 }
 
 /* ── witness generation ─────────────────────────────────────────────────── */

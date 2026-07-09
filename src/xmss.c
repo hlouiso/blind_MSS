@@ -19,8 +19,11 @@ static void sha256_raw(const uint8_t *in, size_t inlen, uint8_t out32[32])
     if (!ok) memset(out32, 0, 32);
 }
 
-/* AES-256-CTR PRF used to derive WOTS+ secret keys from sk_seed.  Mirrors the
- * IV layout of shared.c's prf_aes256_ctr_32. */
+/* AES-256-CTR PRF used to derive WOTS+ secret keys from sk_seed.  Same IV
+ * scheme as shared.c's aes_ctr_expand (domain byte replicated in iv[0..3],
+ * counter in the low bytes).  The 0xA5 domain byte is also used there for
+ * tape expansion — safe only because the keys differ (sk_seed here vs. the
+ * KKW party seeds there); keep the domains distinct if that ever changes. */
 static void prf_sk(const uint8_t sk_seed[32], uint32_t leaf, uint32_t j, uint8_t out16[XMSS_NODE_BYTES])
 {
     uint8_t iv[16] = {0};

@@ -6,7 +6,8 @@
 /*
  * GF(2^128) = GF(2)[x] / (x^128 + x^7 + x^2 + x + 1)  (the AES-GCM polynomial).
  *
- * Canonical representation (shared by the native code and the ZKBoo MPC gadget):
+ * Canonical representation (shared by the native code and the in-circuit MPC
+ * gadget, circuits.c:mpc_gf128_mul):
  *   - A field element is 16 bytes.  Byte b holds coefficients x^(8b) .. x^(8b+7),
  *     LSB of the byte = the lowest degree.
  *   - In word form it is 4 little-endian uint32 words W[0..3]; bit i of W[w] is
