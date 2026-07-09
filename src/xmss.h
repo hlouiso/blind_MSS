@@ -16,9 +16,11 @@
  *   chain step : dom = in(16)                           data = pk_seed(16)||0x00||epoch(4 BE)||chain_idx(1)||pos(1)
  *   tree node  : dom = pk_seed(16)||0x01||level(1)||index(2 LE)   data = left(16)||right(16)
  *   leaf (pk)  : dom = pk_seed(16)||0x03||epoch(4 BE)   data = pk_hash[0..LEN-1]
- * The 0x03 leaf separator is REQUIRED: leaf and tree-node domains are both
- * zero-padded to 32 B, and under a shared separator they collide whenever
- * epoch's bytes match level||index (epochs < 1024 x levels 0..9 overlap).
+ * Domain separation is two-layered (see blake3.h): Th binds domain_len into
+ * cv[7], separating families of different lengths (chain 16 B, tree 20 B,
+ * message/leaf 21 B, HM 3 B) even where domain bytes are zero; the separator
+ * byte at offset 16 separates equal-length families — 0x03 vs 0x02 is what
+ * keeps leaf and message apart (both 21 B), so it stays REQUIRED.
  *
  * WOTS+ uses the target-sum encoding (no checksum chains): the low
  * XMSS_MSG_HASH_LEN bytes of the message hash decode into XMSS_WOTS_LEN base-w

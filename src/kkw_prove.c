@@ -285,12 +285,12 @@ int kkw_prove(const unsigned char *input,
     {
         bool write_ok = true;
 
-        /* Header: magic "KKW7" + N + M + tau + ySize + GRIND_W (uint32_t LE),
-         * then nonce, h*, and the grinding counter ctr (uint32_t LE). */
-        const unsigned char magic[4] = {'K','K','W','7'};
-        uint32_t hdr[5] = { (uint32_t)N_PARTIES, (uint32_t)M_KKW,
+        /* Header: magic "KKW8" + N + M + tau + ySize + GRIND_W + SEC_TARGET
+         * (uint32_t LE), then nonce, h*, and the grinding counter ctr. */
+        const unsigned char magic[4] = {'K','K','W','8'};
+        uint32_t hdr[6] = { (uint32_t)N_PARTIES, (uint32_t)M_KKW,
                              (uint32_t)NUM_ROUNDS, (uint32_t)ySize,
-                             (uint32_t)GRIND_W };
+                             (uint32_t)GRIND_W, (uint32_t)SEC_TARGET };
         if (fwrite(magic, 4, 1, out) != 1) write_ok = false;
         if (fwrite(hdr,   sizeof(hdr), 1, out) != 1) write_ok = false;
         if (fwrite(nonce, 32, 1, out) != 1) write_ok = false;

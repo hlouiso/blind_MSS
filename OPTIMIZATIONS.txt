@@ -211,6 +211,22 @@ Attempted and reverted
          proof 57.5 -> 28.8 MB, prove 1.38 -> 0.47 s, verify 0.90 -> 0.26 s.
 
 --------------------------------------------------------------------------------
+12. Th hardening + self-describing header                        (KKW8)
+--------------------------------------------------------------------------------
+  What : post-migration review fixes, all zero gate cost:
+         (a) cv[7] = domain_len in Th — without it Th(D,l) == Th(D||0^k,l+k)
+             and domain separation rested on the implicit invariant that no
+             call-site domain zero-extends another (true, but fragile);
+         (b) ROOT flag on the final compression — Th was length-extendable
+             exactly at Th("HMd", com) (256 = 4x64 B in, full 32 B out), not
+             exploitable in-protocol but bad for RO modeling of d;
+         Both diverge from PR #1620 as strict strengthenings (documented in
+         blake3.h and README).  (c) SEC_TARGET added to the proof header
+         (hdr 20 -> 24 B, KKW7 -> KKW8): a SEC mismatch was already caught
+         via (M, tau) but misreported.  (d) dead mpc_ADDK/_verify removed.
+  Gain : none (hardening); guard tests for (a)/(b) in test_blake3.
+
+--------------------------------------------------------------------------------
 Summary (N=4, i5-9300H, 8 threads)
 --------------------------------------------------------------------------------
                        baseline 875e176      after 20cf642      after 11 (BLAKE3)

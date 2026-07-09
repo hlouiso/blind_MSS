@@ -98,7 +98,39 @@ static void test_th(void)
     blake3_th((const uint8_t *)"dom1", 4, data, 65, b, 32);
     CHECK(memcmp(a, b, 32) != 0, "block-count separation");
 
-    /* Chain step = Th(domain=prev, data=23-byte tweak): one compression. */
+    /* cv[7] binds domain_len: a zero-extended domain is a DIFFERENT domain. */
+    blake3_th((const uint8_t *)"dom1\0", 5, data, 100, b, 32);
+    blake3_th((const uint8_t *)"dom1", 4, data, 100, a, 32);
+    CHECK(memcmp(a, b, 32) != 0, "domain-length binding (D vs D||0x00)");
+
+    /* ROOT finalisation: the 32-byte output of a block-aligned Th is NOT the
+     * chaining state, so Th(dom, data||E) cannot be computed from Th(dom,
+     * data) — recompressing the output must not match. */
+    uint8_t ext[64];
+    RAND_bytes(ext, 64);
+    blake3_th((const uint8_t *)"dom1", 4, data, 64, a, 32);      /* aligned */
+    uint8_t cat[128];
+    memcpy(cat, data, 64); memcpy(cat + 64, ext, 64);
+    blake3_th((const uint8_t *)"dom1", 4, cat, 128, b, 32);
+    uint32_t st[8], em[16];
+    for (int i = 0; i < 8; i++)
+        st[i] = (uint32_t)a[4*i] | ((uint32_t)a[4*i+1] << 8)
+              | ((uint32_t)a[4*i+2] << 16) | ((uint32_t)a[4*i+3] << 24);
+    for (int i = 0; i < 16; i++)
+        em[i] = (uint32_t)ext[4*i] | ((uint32_t)ext[4*i+1] << 8)
+              | ((uint32_t)ext[4*i+2] << 16) | ((uint32_t)ext[4*i+3] << 24);
+    blake3_compress(st, em, 0, 64, BLAKE3_ROOT, st);
+    uint8_t extended[32];
+    for (int i = 0; i < 8; i++) {
+        extended[i*4+0] = (uint8_t)(st[i]);
+        extended[i*4+1] = (uint8_t)(st[i] >> 8);
+        extended[i*4+2] = (uint8_t)(st[i] >> 16);
+        extended[i*4+3] = (uint8_t)(st[i] >> 24);
+    }
+    CHECK(memcmp(extended, b, 32) != 0, "not length-extendable (ROOT finalisation)");
+
+    /* Chain step = Th(domain=prev, data=23-byte tweak): one compression
+     * with cv = prev || 0-pad, cv[7] = 16, ROOT flag (single block). */
     uint8_t prev[16], tweak[23], cv_bytes[32];
     RAND_bytes(prev, 16); RAND_bytes(tweak, 23);
     blake3_th(prev, 16, tweak, 23, a, 16);
@@ -107,11 +139,12 @@ static void test_th(void)
     for (int i = 0; i < 8; i++)
         cv[i] = (uint32_t)cv_bytes[4*i] | ((uint32_t)cv_bytes[4*i+1] << 8)
               | ((uint32_t)cv_bytes[4*i+2] << 16) | ((uint32_t)cv_bytes[4*i+3] << 24);
+    cv[7] = 16;
     uint8_t blk[64] = {0}; memcpy(blk, tweak, 23);
     for (int i = 0; i < 16; i++)
         m[i] = (uint32_t)blk[4*i] | ((uint32_t)blk[4*i+1] << 8)
              | ((uint32_t)blk[4*i+2] << 16) | ((uint32_t)blk[4*i+3] << 24);
-    blake3_compress(cv, m, 0, 23, 0, cv);
+    blake3_compress(cv, m, 0, 23, BLAKE3_ROOT, cv);
     uint8_t direct[16];
     for (int i = 0; i < 4; i++) {
         direct[i*4+0] = (uint8_t)(cv[i]);

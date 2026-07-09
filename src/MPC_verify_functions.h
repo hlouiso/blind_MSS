@@ -59,15 +59,10 @@ void mpc_ADD_verify(const mwv *x, const mwv *y, mwv *z,
                     const uint32_t *msgs_e, const uint32_t *aux,
                     uint32_t *s_slots, int *gateCount);
 
-void mpc_ADDK_verify(const mwv *x, uint32_t K, mwv *z,
-                     unsigned char *tapes[N_PARTIES - 1], int e,
-                     const uint32_t *msgs_e, const uint32_t *aux,
-                     uint32_t *s_slots, int *gateCount);
-
 /* Verify-side BLAKE3 compression / tweakable hash — mirror of the prove
  * side (MPC_prove_functions.h); NULL lam arrays mean all-public bytes. */
 void mpc_blake3_compress_verify(const mwv cv[8], const mwv m[16],
-                                uint32_t block_len, mwv out[8],
+                                uint32_t block_len, uint32_t flags, mwv out[8],
                                 unsigned char *tapes[N_PARTIES - 1], int e,
                                 const uint32_t *msgs_e, const uint32_t *aux,
                                 uint32_t *s_slots, int *gateCount);

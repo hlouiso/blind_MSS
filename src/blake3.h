@@ -17,10 +17,23 @@
  * SPHINCS+ family makes for its tweakable hashes (cf. SPHINCS+-Haraka).
  *
  * Th(domain, data):
- *   cv <- domain, zero-padded to 32 bytes            (domain_len <= 32)
+ *   cv <- domain, zero-padded to 32 bytes, with cv word 7 = domain_len
+ *         (so domain_len <= 28)
  *   for each 64-byte block of data (>= 1 block even if data is empty):
- *       cv <- compress(cv, block zero-padded, counter=0, real_len, flags=0)
+ *       cv <- compress(cv, block zero-padded, counter=0, real_len,
+ *                      flags = ROOT on the last block, 0 otherwise)
  *   out = first out_len bytes of cv                  (out_len <= 32)
+ *
+ * Two deliberate strengthenings over the PR #1620 construction (both are
+ * public constants — zero cost in the MPC circuit):
+ *   1. cv[7] = domain_len makes domain separation structural: without it,
+ *      Th(D, l) == Th(D || 0^k, l+k), and separation rested on the implicit
+ *      invariant that no two call-site domains are zero-extensions of each
+ *      other (true today — every non-chain domain has a nonzero separator
+ *      byte at offset 16 — but fragile).
+ *   2. The ROOT flag finalises the last compression, so Th is not length-
+ *      extendable even where the full 32-byte cv is output on block-aligned
+ *      data (the Th("HMd", com) call site: 256 = 4x64 bytes).
  *
  * The WOTS+ chain step is Th with domain = previous node (16 B) and
  * data = the 23-byte tweak block — exactly one compression, no special case.
@@ -40,7 +53,7 @@ void blake3_compress(const uint32_t cv[8], const uint32_t block_words[16],
 #define BLAKE3_CHUNK_END   (1u << 1)
 #define BLAKE3_ROOT        (1u << 3)
 
-/* Tweakable hash as above.  domain_len <= 32, out_len <= 32. */
+/* Tweakable hash as above.  domain_len <= 28, out_len <= 32. */
 void blake3_th(const uint8_t *domain, size_t domain_len,
                const uint8_t *data, size_t data_len,
                uint8_t *out, size_t out_len);

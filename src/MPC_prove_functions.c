@@ -1,4 +1,5 @@
 #include "MPC_prove_functions.h"
+#include "blake3.h"
 #include "shared.h"
 
 #include <stdint.h>
@@ -89,17 +90,6 @@ void mpc_ADD(const mw *x, const mw *y, mw *z,
     (*gateCount)++;
 }
 
-/* ── ADD with public constant ───────────────────────────────────────────── */
-
-void mpc_ADDK(const mw *x, uint32_t K, mw *z,
-              unsigned char *tapes[N_PARTIES], uint32_t *aux,
-              uint32_t *s_all, int *gateCount)
-{
-    mw kw;
-    mw_const(K, &kw);
-    mpc_ADD(x, &kw, z, tapes, aux, s_all, gateCount);
-}
-
 /* ── N-party BLAKE3 compression / tweakable hash ────────────────────────── */
 
 /* v[8..11] of the compression state (= first half of the BLAKE3 IV). */
@@ -126,7 +116,7 @@ static void b3_g(mw v[16], int a, int b, int c, int d, const mw *x, const mw *y,
 }
 
 void mpc_blake3_compress(const mw cv[8], const mw m[16], uint32_t block_len,
-                         mw out[8],
+                         uint32_t flags, mw out[8],
                          unsigned char *tapes[N_PARTIES], uint32_t *aux,
                          uint32_t *s_all, int *gateCount)
 {
@@ -136,7 +126,7 @@ void mpc_blake3_compress(const mw cv[8], const mw m[16], uint32_t block_len,
     mw_const(0, &v[12]);          /* counter = 0 in Th usage */
     mw_const(0, &v[13]);
     mw_const(block_len, &v[14]);
-    mw_const(0, &v[15]);          /* flags = 0 in Th usage */
+    mw_const(flags, &v[15]);      /* public constant (ROOT on final block) */
 
     uint8_t s[16], t[16];
     for (int i = 0; i < 16; i++) s[i] = (uint8_t)i;
@@ -177,13 +167,15 @@ void mpc_blake3_th(const unsigned char *dom_pub, unsigned char *dom_lam[N_PARTIE
                    unsigned char *tapes[N_PARTIES], uint32_t *aux,
                    uint32_t *s_all, int *gateCount)
 {
-    /* cv <- domain, zero-padded to 32 bytes. */
+    /* cv <- domain, zero-padded to 32 bytes; cv[7] binds dom_len (<= 28,
+     * so word 7 of the loaded domain is always zero — see blake3.h). */
     mw cv[8];
     for (int w = 0; w < 8; w++) {
         cv[w].h = b3_le_word(dom_pub, dom_len, w * 4);
         for (int p = 0; p < N_PARTIES; p++)
             cv[w].l[p] = b3_le_word(dom_lam ? dom_lam[p] : NULL, dom_len, w * 4);
     }
+    cv[7].h = (uint32_t)dom_len;
 
     int nblocks = data_len ? (data_len + 63) / 64 : 1;
     for (int b = 0; b < nblocks; b++) {
@@ -196,7 +188,9 @@ void mpc_blake3_th(const unsigned char *dom_pub, unsigned char *dom_lam[N_PARTIE
                 m[w].l[p] = b3_le_word(data_lam ? data_lam[p] : NULL,
                                        data_len, off + w * 4);
         }
-        mpc_blake3_compress(cv, m, (uint32_t)blen, cv, tapes, aux, s_all, gateCount);
+        mpc_blake3_compress(cv, m, (uint32_t)blen,
+                            (b + 1 == nblocks) ? BLAKE3_ROOT : 0,
+                            cv, tapes, aux, s_all, gateCount);
     }
 
     for (int i = 0; i < out_len; i++) {

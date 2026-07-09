@@ -75,8 +75,10 @@ void blake3_th(const uint8_t *domain, size_t domain_len,
                const uint8_t *data, size_t data_len,
                uint8_t *out, size_t out_len)
 {
+    if (domain_len > 28) { memset(out, 0, out_len); return; }
     uint32_t cv[8];
     load_words_le(domain, domain_len, cv, 8);
+    cv[7] = (uint32_t)domain_len;   /* binds the domain length (see blake3.h) */
 
     size_t nblocks = data_len ? (data_len + 63) / 64 : 1;
     for (size_t b = 0; b < nblocks; b++) {
@@ -84,7 +86,8 @@ void blake3_th(const uint8_t *domain, size_t domain_len,
         size_t blen = (data_len - off > 64) ? 64 : data_len - off;
         uint32_t m[16];
         load_words_le(data ? data + off : NULL, data ? blen : 0, m, 16);
-        blake3_compress(cv, m, 0, (uint32_t)blen, 0, cv);
+        blake3_compress(cv, m, 0, (uint32_t)blen,
+                        (b + 1 == nblocks) ? BLAKE3_ROOT : 0, cv);
     }
 
     uint8_t full[32];

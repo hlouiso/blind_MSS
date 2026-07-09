@@ -1,4 +1,5 @@
 #include "MPC_verify_functions.h"
+#include "blake3.h"
 #include "shared.h"
 
 #include <stdint.h>
@@ -95,18 +96,6 @@ void mpc_ADD_verify(const mwv *x, const mwv *y, mwv *z,
     (*gateCount)++;
 }
 
-/* ── ADD with public constant (verify) ──────────────────────────────────── */
-
-void mpc_ADDK_verify(const mwv *x, uint32_t K, mwv *z,
-                     unsigned char *tapes[N_PARTIES - 1], int e,
-                     const uint32_t *msgs_e, const uint32_t *aux,
-                     uint32_t *s_slots, int *gateCount)
-{
-    mwv kw;
-    mwv_const(K, &kw);
-    mpc_ADD_verify(x, &kw, z, tapes, e, msgs_e, aux, s_slots, gateCount);
-}
-
 /* ── N-1 party BLAKE3 compression / tweakable hash (verify) ─────────────── */
 
 static const uint32_t B3_IV4[4] = {0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A};
@@ -132,7 +121,7 @@ static void b3_g_v(mwv v[16], int a, int b, int c, int d,
 }
 
 void mpc_blake3_compress_verify(const mwv cv[8], const mwv m[16],
-                                uint32_t block_len, mwv out[8],
+                                uint32_t block_len, uint32_t flags, mwv out[8],
                                 unsigned char *tapes[N_PARTIES-1], int e,
                                 const uint32_t *msgs_e, const uint32_t *aux,
                                 uint32_t *s_slots, int *gateCount)
@@ -143,7 +132,7 @@ void mpc_blake3_compress_verify(const mwv cv[8], const mwv m[16],
     mwv_const(0, &v[12]);
     mwv_const(0, &v[13]);
     mwv_const(block_len, &v[14]);
-    mwv_const(0, &v[15]);
+    mwv_const(flags, &v[15]);
 
     uint8_t s[16], t[16];
     for (int i = 0; i < 16; i++) s[i] = (uint8_t)i;
@@ -189,6 +178,7 @@ void mpc_blake3_th_verify(const unsigned char *dom_pub,
         for (int j = 0; j < N_PARTIES-1; j++)
             cv[w].l[j] = b3_le_word(dom_lam ? dom_lam[j] : NULL, dom_len, w * 4);
     }
+    cv[7].h = (uint32_t)dom_len;
 
     int nblocks = data_len ? (data_len + 63) / 64 : 1;
     for (int b = 0; b < nblocks; b++) {
@@ -201,7 +191,8 @@ void mpc_blake3_th_verify(const unsigned char *dom_pub,
                 m[w].l[j] = b3_le_word(data_lam ? data_lam[j] : NULL,
                                        data_len, off + w * 4);
         }
-        mpc_blake3_compress_verify(cv, m, (uint32_t)blen, cv,
+        mpc_blake3_compress_verify(cv, m, (uint32_t)blen,
+                                   (b + 1 == nblocks) ? BLAKE3_ROOT : 0, cv,
                                    tapes, e, msgs_e, aux, s_slots, gateCount);
     }
 

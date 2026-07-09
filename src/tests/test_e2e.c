@@ -115,12 +115,12 @@ int main(void)
             printf("FAIL: proof read-back\n"); return 1;
         }
 
-        const long hdr_end     = 4 + 5*4 + 32 + 32 + 4;      /* magic..ctr */
+        const long hdr_end     = 4 + 6*4 + 32 + 32 + 4;      /* magic..ctr */
         const long online_off  = hdr_end + (long)(M_KKW - NUM_ROUNDS) * 64;
         long offsets[12];
         int  n_off = 0;
-        offsets[n_off++] = 4 + 5*4 + 3;            /* nonce */
-        offsets[n_off++] = 4 + 5*4 + 32 + 7;       /* h*    */
+        offsets[n_off++] = 4 + 6*4 + 3;            /* nonce */
+        offsets[n_off++] = 4 + 6*4 + 32 + 7;       /* h*    */
         offsets[n_off++] = hdr_end - 2;            /* ctr   */
         offsets[n_off++] = hdr_end + 16;           /* offline: inside a seed* */
         offsets[n_off++] = hdr_end + 40;           /* offline: inside h'_j    */

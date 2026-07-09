@@ -3,7 +3,9 @@
  Modeled on binius-zk/binius64 PR #1620 (BINIUS-162, merged):
  "rework the XMSS verifier onto a single BLAKE3 tweakable-hash family"
 
- STATUS: IMPLEMENTED 2026-07-09 (branch blake3, proof format KKW7).
+ STATUS: IMPLEMENTED 2026-07-09 (branch blake3, proof format KKW7; KKW8 after
+ the Th hardening — cv[7] = domain_len + ROOT finalisation, two zero-cost
+ strengthenings over the PR construction, see OPTIMIZATIONS.txt entry 12).
  The gate model below was exact: measured ySize = 73,096.  Measured N=4/W=16:
  proof 28.8 MB, prove 0.47 s, verify 0.26 s (better than projected — tape
  expansion and hashing volume halve too).  S5 (nonce widening) NOT taken:

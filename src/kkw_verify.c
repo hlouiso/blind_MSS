@@ -17,18 +17,18 @@ int kkw_verify(FILE *proof,
     /* ── Check proof header ─────────────────────────────────────────────── */
     {
         unsigned char magic[4];
-        uint32_t hdr[5];
+        uint32_t hdr[6];
         if (fread(magic, 4, 1, proof) != 1 || fread(hdr, sizeof(hdr), 1, proof) != 1) {
             fprintf(stderr, "kkw_verify: read error (header)\n"); return -1;
         }
-        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='7') {
+        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='8') {
             fprintf(stderr, "kkw_verify: bad magic\n"); return -1;
         }
         if (hdr[0]!=(uint32_t)N_PARTIES || hdr[1]!=(uint32_t)M_KKW ||
             hdr[2]!=(uint32_t)NUM_ROUNDS || hdr[3]!=(uint32_t)ySize ||
-            hdr[4]!=(uint32_t)GRIND_W) {
-            fprintf(stderr, "kkw_verify: parameter mismatch (proof compiled for N=%u M=%u tau=%u ySize=%u W=%u)\n",
-                    hdr[0], hdr[1], hdr[2], hdr[3], hdr[4]);
+            hdr[4]!=(uint32_t)GRIND_W || hdr[5]!=(uint32_t)SEC_TARGET) {
+            fprintf(stderr, "kkw_verify: parameter mismatch (proof compiled for N=%u M=%u tau=%u ySize=%u W=%u SEC=%u)\n",
+                    hdr[0], hdr[1], hdr[2], hdr[3], hdr[4], hdr[5]);
             return -1;
         }
     }
