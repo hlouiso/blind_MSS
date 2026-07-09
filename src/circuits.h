@@ -51,16 +51,19 @@ extern int g_circuit_gates;
  * s_all:  output array (N*ySize uint32_t) for the broadcast streams, or NULL
  *         (aux-only mode: masks do not depend on d_pub/publics, so this mode
  *         serves compute_aux_from_seeds; h_prime is then not computed).
+ * r_j:    32-byte per-instance commitment randomiser (independent randomness,
+ *         never seed-derived); may be NULL when s_all is NULL.
  * zh_out: public masked circuit output (8 words).
  * Writes the output-wire mask shares into a->yp[N_PARTIES][8] and
- * h_prime = H(d_pub || s_all) into a->h_prime (when s_all != NULL).
+ * h_prime = H(d_pub || s_all || r_j) into a->h_prime (when s_all != NULL).
  */
 void building_views(a *a, const unsigned char message_digest[32],
                     const unsigned char pk_seed[XMSS_PK_SEED_BYTES],
                     const unsigned char *d_pub,
                     unsigned char *lam[N_PARTIES],
                     unsigned char *tapes[N_PARTIES],
-                    uint32_t *aux, uint32_t *s_all, uint32_t zh_out[8]);
+                    uint32_t *aux, uint32_t *s_all,
+                    const unsigned char *r_j, uint32_t zh_out[8]);
 
 /**
  * Verify one KKW round: re-run the online phase with the N-1 revealed

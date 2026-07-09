@@ -21,7 +21,7 @@ int kkw_verify(FILE *proof,
         if (fread(magic, 4, 1, proof) != 1 || fread(hdr, sizeof(hdr), 1, proof) != 1) {
             fprintf(stderr, "kkw_verify: read error (header)\n"); return -1;
         }
-        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='4') {
+        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='5') {
             fprintf(stderr, "kkw_verify: bad magic\n"); return -1;
         }
         if (hdr[0]!=(uint32_t)N_PARTIES || hdr[1]!=(uint32_t)M_KKW ||
@@ -156,6 +156,8 @@ int kkw_verify(FILE *proof,
         }
         if (fread(zs[k]->msgs_e, sizeof(uint32_t), (size_t)ySize, proof) != (size_t)ySize)
             { read_error = true; break; }
+        /* Commitment randomiser r_j (needed to recompute h'_j). */
+        if (fread(zs[k]->r_j, 32, 1, proof) != 1) { read_error = true; break; }
     }
     if (read_error) {
         fprintf(stderr, "kkw_verify: read error (online section)\n");

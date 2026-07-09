@@ -80,6 +80,7 @@ static void run_instance(const unsigned char seed_star[SEED_SIZE],
                           a *a_out,
                           uint32_t *aux_out,
                           uint32_t *s_all_out,                 /* N*ySize words */
+                          const unsigned char *r_j,            /* 32 B, NULL iff s_all NULL */
                           uint32_t zh_out[8])
 {
     expand_seed_star(seed_star, seeds_out);
@@ -92,7 +93,7 @@ static void run_instance(const unsigned char seed_star[SEED_SIZE],
         for (int b = 0; b < INPUT_LEN; b++)
             d_out[b] ^= lam_out[p][b];
     building_views(a_out, m_hat, pk_seed, d_out, lam_out, tapes_out,
-                   aux_out, s_all_out, zh_out);
+                   aux_out, s_all_out, r_j, zh_out);
 }
 
 /* ── Test 1: single-round prove+verify for e=0 and e=N_PARTIES-1 only ── */
@@ -117,10 +118,12 @@ static void test_single_round(void)
     unsigned char *d_pub = malloc(INPUT_LEN);
     uint32_t *aux   = malloc(ySize * sizeof(uint32_t));
     uint32_t *s_all = malloc((size_t)N_PARTIES * ySize * sizeof(uint32_t));
+    unsigned char r_j[32];
+    RAND_bytes(r_j, 32);
     a A;
     uint32_t zh[8];
     run_instance(seed_star, input, m_hat, pk_seed, seeds,
-                 lam, tapes, d_pub, &A, aux, s_all, zh);
+                 lam, tapes, d_pub, &A, aux, s_all, r_j, zh);
 
     int out_ok = 1;
     for (int j = 0; j < 8; j++) {
@@ -142,6 +145,7 @@ static void test_single_round(void)
             memcpy(Z.ke[j], seeds[orig], SEED_SIZE);
         }
         memcpy(Z.x_offset, d_pub, INPUT_LEN);
+        memcpy(Z.r_j, r_j, 32);
         compute_msgs_e(e, s_all, Z.msgs_e);
 
         bool err = false;
@@ -221,7 +225,8 @@ static void test_preproc_smoke(void)
         uint32_t *aux_ref = malloc(ySize * sizeof(uint32_t));
         a ref_a;
         uint32_t zh[8];
-        building_views(&ref_a, m_hat, pk_seed, d_pub, lam, tp, aux_ref, NULL, zh);
+        building_views(&ref_a, m_hat, pk_seed, d_pub, lam, tp, aux_ref, NULL,
+                       NULL, zh);
         CHECK(memcmp(aux1, aux_ref, ySize * sizeof(uint32_t)) == 0,
               "compute_aux_from_seeds == aux of a real-witness run");
         for (int p = 0; p < N_PARTIES; p++) { free(lam[p]); free(tp[p]); }
@@ -307,13 +312,13 @@ static void test_tamper(void)
     a A;
     uint32_t zh[8];
     run_instance(seed_star, input, m_hat, pk_seed, seeds,
-                 lam, tapes, d_pub, &A, aux, NULL, zh);
+                 lam, tapes, d_pub, &A, aux, NULL, NULL, zh);
 
     /* Tamper the masked witness (equivalent to a tampered signature hash). */
     d_pub[W_SIG_OFF] ^= 0x01;
     a A2;
     uint32_t zh2[8];
-    building_views(&A2, m_hat, pk_seed, d_pub, lam, tapes, aux, NULL, zh2);
+    building_views(&A2, m_hat, pk_seed, d_pub, lam, tapes, aux, NULL, NULL, zh2);
 
     int still_root = 1;
     for (int w = 0; w < YP_ROOT_WORDS; w++) {

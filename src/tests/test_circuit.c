@@ -80,9 +80,11 @@ int main(void)
     uint32_t *s_all = calloc((size_t)N_PARTIES * YBIG, sizeof(uint32_t));
     if (!aux || !s_all) { printf("FAIL: OOM\n"); return 1; }
 
+    unsigned char r_j[32];
+    RAND_bytes(r_j, 32);
     a A;
     uint32_t zh[8];
-    building_views(&A, m_hat, pk_seed, d_pub, lam, tapes, aux, s_all, zh);
+    building_views(&A, m_hat, pk_seed, d_pub, lam, tapes, aux, s_all, r_j, zh);
 
     /* Unmask output (ẑ XOR all mask shares) and compare with native values. */
     unsigned char circ_root[16];

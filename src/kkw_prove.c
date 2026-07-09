@@ -64,20 +64,27 @@ int kkw_prove(const unsigned char *input,
                N_PARTIES, M_KKW, NUM_ROUNDS, GRIND_W, omp_get_max_threads());
 
     unsigned char (*seed_stars)[SEED_SIZE] = malloc((size_t)M_KKW * SEED_SIZE);
+    unsigned char (*r_all)[32]             = malloc((size_t)M_KKW * 32);
     unsigned char (*h_j_all)[32]           = malloc((size_t)M_KKW * 32);
     unsigned char (*h_prime_all)[32]       = malloc((size_t)M_KKW * 32);
     unsigned char (*h_out_all)[32]         = malloc((size_t)M_KKW * 32);
-    if (!seed_stars || !h_j_all || !h_prime_all || !h_out_all) {
+    if (!seed_stars || !r_all || !h_j_all || !h_prime_all || !h_out_all) {
         fprintf(stderr, "kkw_prove: OOM\n");
-        free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
+        free(seed_stars); free(r_all);
+        free(h_j_all); free(h_prime_all); free(h_out_all);
         return -1;
     }
 
-    /* Pre-generate all seed_stars. */
+    /* Pre-generate all seed_stars and commitment randomisers r_j.  r_j is
+     * deliberately NOT derived from seed_star: seed*_j is published for
+     * opened instances, and a seed-derived r_j would make h'_j an offline-
+     * checkable deterministic commitment to the witness (no ZK). */
     for (int j = 0; j < M_KKW; j++) {
-        if (RAND_bytes(seed_stars[j], SEED_SIZE) != 1) {
+        if (RAND_bytes(seed_stars[j], SEED_SIZE) != 1 ||
+            RAND_bytes(r_all[j], 32) != 1) {
             fprintf(stderr, "kkw_prove: RAND_bytes failed\n");
-            free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
+            free(seed_stars); free(r_all);
+            free(h_j_all); free(h_prime_all); free(h_out_all);
             return -1;
         }
     }
@@ -102,7 +109,8 @@ int kkw_prove(const unsigned char *input,
     if (!scratch_ok) {
         fprintf(stderr, "kkw_prove: OOM (scratch)\n");
         free_scratch(nthreads, xbufs, tbufs, auxbufs, sbufs, dbufs);
-        free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
+        free(seed_stars); free(r_all);
+        free(h_j_all); free(h_prime_all); free(h_out_all);
         return -1;
     }
 
@@ -122,7 +130,7 @@ int kkw_prove(const unsigned char *input,
             a a_j;
             uint32_t zh[8];
             building_views(&a_j, m_hat, pk_seed, dbufs[t], lam_j, tapes_j,
-                           auxbufs[t], sbufs[t], zh);
+                           auxbufs[t], sbufs[t], r_all[j], zh);
 
             /* Real output = ẑ XOR the output-mask shares — must be pubout. */
             for (int w = 0; w < 8; w++) {
@@ -150,7 +158,8 @@ int kkw_prove(const unsigned char *input,
     if (pass1_error) {
         fprintf(stderr, "kkw_prove: pass 1 error\n");
         free_scratch(nthreads, xbufs, tbufs, auxbufs, sbufs, dbufs);
-        free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
+        free(seed_stars); free(r_all);
+        free(h_j_all); free(h_prime_all); free(h_out_all);
         return -1;
     }
 
@@ -184,7 +193,8 @@ int kkw_prove(const unsigned char *input,
     if (RAND_bytes(nonce, 32) != 1) {
         fprintf(stderr, "kkw_prove: RAND_bytes failed (nonce)\n");
         free_scratch(nthreads, xbufs, tbufs, auxbufs, sbufs, dbufs);
-        free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
+        free(seed_stars); free(r_all);
+        free(h_j_all); free(h_prime_all); free(h_out_all);
         return -1;
     }
 
@@ -241,9 +251,10 @@ int kkw_prove(const unsigned char *input,
 
             uint32_t zh[8];
             building_views(as[k], m_hat, pk_seed, dbufs[t], lam_j, tapes_j,
-                           zs[k]->aux, sbufs[t], zh);
+                           zs[k]->aux, sbufs[t], r_all[j], zh);
 
             compute_msgs_e(e, sbufs[t], zs[k]->msgs_e);
+            memcpy(zs[k]->r_j, r_all[j], 32);
 
             preproc_com_party(e, seeds_j[e],
                               (e == 0 ? zs[k]->aux : NULL),
@@ -274,9 +285,9 @@ int kkw_prove(const unsigned char *input,
     {
         bool write_ok = true;
 
-        /* Header: magic "KKW4" + N + M + tau + ySize + GRIND_W (uint32_t LE),
+        /* Header: magic "KKW5" + N + M + tau + ySize + GRIND_W (uint32_t LE),
          * then nonce, h*, and the grinding counter ctr (uint32_t LE). */
-        const unsigned char magic[4] = {'K','K','W','4'};
+        const unsigned char magic[4] = {'K','K','W','5'};
         uint32_t hdr[5] = { (uint32_t)N_PARTIES, (uint32_t)M_KKW,
                              (uint32_t)NUM_ROUNDS, (uint32_t)ySize,
                              (uint32_t)GRIND_W };
@@ -287,9 +298,11 @@ int kkw_prove(const unsigned char *input,
         if (fwrite(&ctr, sizeof(ctr), 1, out) != 1) write_ok = false;
 
         /* ZK remark: for opened (offline) instances all tapes are derivable
-         * from seed_star, so h'_j and h_out_j are hashes of witness-dependent
-         * data.  Hiding rests on the ROM plus the witness min-entropy (the HM
-         * opening r alone is 96 uniform bytes) — same structure as Picnic2. */
+         * from seed_star, so the rest of h'_j's preimage (d, s_all) is a
+         * deterministic function of the witness.  The unrevealed randomiser
+         * r_j is what makes h'_j hiding (a uniform RO output), per KKW Fig. 2.
+         * h_out_j is witness-independent: yp holds the output-wire mask
+         * shares, which are seed-derived like aux. */
         for (int j = 0; j < M_KKW && write_ok; j++) {
             if (in_C[j]) continue;
             if (fwrite(seed_stars[j],  SEED_SIZE, 1, out) != 1) write_ok = false;
@@ -312,6 +325,8 @@ int kkw_prove(const unsigned char *input,
             }
             if (fwrite(zs[k]->msgs_e, sizeof(uint32_t), (size_t)ySize, out) != (size_t)ySize)
                 write_ok = false;
+            /* Commitment randomiser r_j: revealed only for online rounds. */
+            if (fwrite(zs[k]->r_j, 32, 1, out) != 1) write_ok = false;
         }
 
         if (!write_ok) {
@@ -324,7 +339,8 @@ int kkw_prove(const unsigned char *input,
         free(as[k]);
         if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
-    free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
+    free(seed_stars); free(r_all);
+    free(h_j_all); free(h_prime_all); free(h_out_all);
     return 0;
 
 cleanup_fail:
@@ -333,6 +349,7 @@ cleanup_fail:
         free(as[k]);
         if (zs[k]) { free(zs[k]->aux); free(zs[k]->x_offset); free(zs[k]->msgs_e); free(zs[k]); }
     }
-    free(seed_stars); free(h_j_all); free(h_prime_all); free(h_out_all);
+    free(seed_stars); free(r_all);
+    free(h_j_all); free(h_prime_all); free(h_out_all);
     return -1;
 }

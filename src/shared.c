@@ -140,7 +140,8 @@ void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE], uint32_t 
     unsigned char zero_m[32] = {0}, zero_pk[XMSS_PK_SEED_BYTES] = {0};
     a dummy_a;
     uint32_t zh_dummy[8];
-    building_views(&dummy_a, zero_m, zero_pk, d0, lam, tapes, aux_out, NULL, zh_dummy);
+    building_views(&dummy_a, zero_m, zero_pk, d0, lam, tapes, aux_out, NULL,
+                   NULL, zh_dummy);
 
     free(d0);
     for (int p = 0; p < N_PARTIES; p++) { free(tapes[p]); free(lam[p]); }
@@ -294,10 +295,12 @@ int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32])
 /* ── KKW online-transcript helpers ─────────────────────────────────────── */
 
 void compute_h_prime(const unsigned char *d_pub, const uint32_t *s_all,
+                     const unsigned char r_j[32],
                      unsigned char h_prime[32])
 {
-    /* h'_j = H(d || s_0 || … || s_{N-1}): binds the masked witness and every
-     * party's broadcast stream (s_all[i*ySize + g] = s_i[g]). */
+    /* h'_j = H(d || s_0 || … || s_{N-1} || r_j): binds the masked witness and
+     * every party's broadcast stream (s_all[i*ySize + g] = s_i[g]).  r_j
+     * blinds the hash for unopened instances (revealed only for j ∈ C). */
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (!ctx) { memset(h_prime, 0, 32); return; }
     unsigned int outl = 0;
@@ -305,6 +308,7 @@ void compute_h_prime(const unsigned char *d_pub, const uint32_t *s_all,
              EVP_DigestUpdate(ctx, d_pub, (size_t)INPUT_LEN) == 1 &&
              EVP_DigestUpdate(ctx, s_all,
                               (size_t)N_PARTIES * ySize * sizeof(uint32_t)) == 1 &&
+             EVP_DigestUpdate(ctx, r_j, 32) == 1 &&
              EVP_DigestFinal_ex(ctx, h_prime, &outl) == 1;
     EVP_MD_CTX_free(ctx);
     if (!ok) memset(h_prime, 0, 32);
@@ -319,9 +323,10 @@ void compute_msgs_e(int e, const uint32_t *s_all, uint32_t *msgs_e_out)
 void recompute_h_prime_verify(int e, const unsigned char *d_pub,
                                const uint32_t *s_slots,
                                const uint32_t *msgs_e,
+                               const unsigned char r_j[32],
                                unsigned char h_prime_out[32])
 {
-    /* Reconstruct the prover's (d || s streams) in party order, then hash. */
+    /* Reconstruct the prover's (d || s streams || r_j) in party order, hash. */
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (!ctx) { memset(h_prime_out, 0, 32); return; }
     unsigned int outl = 0;
@@ -337,6 +342,7 @@ void recompute_h_prime_verify(int e, const unsigned char *d_pub,
                                   (size_t)ySize * sizeof(uint32_t)) == 1;
         }
     }
+    ok = ok && EVP_DigestUpdate(ctx, r_j, 32) == 1;
     ok = ok && EVP_DigestFinal_ex(ctx, h_prime_out, &outl) == 1;
     EVP_MD_CTX_free(ctx);
     if (!ok) memset(h_prime_out, 0, 32);

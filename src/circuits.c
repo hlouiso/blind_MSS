@@ -126,7 +126,8 @@ void building_views(
     const unsigned char *d_pub,
     unsigned char *lam[N_PARTIES],
     unsigned char *tapes[N_PARTIES],
-    uint32_t *aux, uint32_t *s_all, uint32_t zh_out[8])
+    uint32_t *aux, uint32_t *s_all,
+    const unsigned char *r_j, uint32_t zh_out[8])
 {
     int gc = 0;
 
@@ -406,9 +407,9 @@ void building_views(
     /* Record the gate count only when called standalone (test_circuit). */
     if (!omp_in_parallel()) g_circuit_gates = gc;
 
-    /* h'_j = H(d || s_all): masked witness + all broadcast streams,
-     * committed in h* before challenge derivation. */
-    if (s_all) compute_h_prime(d_pub, s_all, a->h_prime);
+    /* h'_j = H(d || s_all || r_j): masked witness + all broadcast streams,
+     * blinded by r_j, committed in h* before challenge derivation. */
+    if (s_all) compute_h_prime(d_pub, s_all, r_j, a->h_prime);
 }
 
 /* ── Verify-side helpers ────────────────────────────────────────────────── */
@@ -829,10 +830,11 @@ void verify(
             if (a_struct->yp[o][w] != 0) { *error = true; }
     }
 
-    /* ── Verify h'_j = H(d || s streams) ── */
+    /* ── Verify h'_j = H(d || s streams || r_j) ── */
     {
         unsigned char h_prime_check[32];
-        recompute_h_prime_verify(e, d_pub, s_slots, msgs_e, h_prime_check);
+        recompute_h_prime_verify(e, d_pub, s_slots, msgs_e, z_proof->r_j,
+                                 h_prime_check);
         if (memcmp(h_prime_check, a_struct->h_prime, 32) != 0) { *error = true; }
     }
 

@@ -188,8 +188,9 @@ typedef struct
     /* Per-party shares of the output-wire masks λ_out (masked-values online
      * phase): real output = ẑ_out XOR (XOR_i yp[i]). */
     uint32_t yp[N_PARTIES][8];
-    /* h'_j = H(d || s_0 || … || s_{N-1}) — masked witness and every party's
-     * per-gate broadcast stream.  Committed in h* before the challenge. */
+    /* h'_j = H(d || s_0 || … || s_{N-1} || r_j) — masked witness and every
+     * party's per-gate broadcast stream, blinded by the per-instance
+     * randomiser r_j (KKW Fig. 2).  Committed in h* before the challenge. */
     unsigned char h_prime[32];
 } a;
 
@@ -205,6 +206,11 @@ typedef struct
     uint32_t *msgs_e;
     /* Preprocessing commitment to hidden party: com_{j,e}. */
     unsigned char com_hidden[32];
+    /* Per-instance commitment randomiser r_j: revealed only for online
+     * instances (j ∈ C) so the verifier can recompute h'_j.  For j ∉ C it
+     * never leaves the prover, which is what makes h'_j hiding (the rest of
+     * its preimage is derivable from the published seed*_j and the witness). */
+    unsigned char r_j[32];
 } z;
 
 /* ── Tape / seed expansion ──────────────────────────────────────────────── */
@@ -282,9 +288,14 @@ int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32]);
 
 /* ── KKW online-transcript helpers ─────────────────────────────────────── */
 
-/* h'_j = H(d || s_all) where d is the masked witness (INPUT_LEN bytes) and
- * s_all is N×ySize uint32_t: s_all[i*ySize + g] = party i's broadcast s_i[g]. */
+/* h'_j = H(d || s_all || r_j) where d is the masked witness (INPUT_LEN bytes),
+ * s_all is N×ySize uint32_t (s_all[i*ySize + g] = party i's broadcast s_i[g])
+ * and r_j is the 32-byte per-instance commitment randomiser.  r_j MUST be
+ * independent randomness — never derived from seed*_j, which is published for
+ * opened instances (that would make h'_j a deterministic, offline-checkable
+ * commitment to the witness and break the ZK property). */
 void compute_h_prime(const unsigned char *d_pub, const uint32_t *s_all,
+                     const unsigned char r_j[32],
                      unsigned char h_prime[32]);
 
 /* Extract party e's broadcast stream from s_all into msgs_e_out (ySize). */
@@ -292,10 +303,12 @@ void compute_msgs_e(int e, const uint32_t *s_all, uint32_t *msgs_e_out);
 
 /* Recompute h'_j on the verify side.
  * s_slots: (N-1)×ySize array filled during circuit re-execution (slot order).
- * msgs_e:  ySize array from the proof (hidden party's stream). */
+ * msgs_e:  ySize array from the proof (hidden party's stream).
+ * r_j:     32-byte commitment randomiser from the proof's online section. */
 void recompute_h_prime_verify(int e, const unsigned char *d_pub,
                                const uint32_t *s_slots,
                                const uint32_t *msgs_e,
+                               const unsigned char r_j[32],
                                unsigned char h_prime_out[32]);
 
 /* ── Tape accessors ─────────────────────────────────────────────────────── */
