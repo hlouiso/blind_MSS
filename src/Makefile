@@ -90,7 +90,7 @@ $(LIBOBJS): $(N_STAMP)
 
 # Tests in tests/ (built and run by `make test`).  test_e2e exercises the full
 # keygen→blind→sign→prove→verify protocol in memory.
-TESTS = test_xmss test_circuit test_roundtrip test_e2e
+TESTS = test_xmss test_circuit test_roundtrip test_leaf test_e2e
 
 BENCH_NS := 4 8 16 32 64
 PIPELINE_ITERS ?= 100
