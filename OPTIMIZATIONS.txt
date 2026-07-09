@@ -221,7 +221,16 @@ Summary (N=4, i5-9300H, 8 threads)
   * both measured with the double-running CHECK harness (see note above)
   After 9+10 (KKW6): security fix, size-neutral (net -4 KB); timings unchanged.
 
-  N trade-off (W=16, SHA era): N=8 -> 44.1 MB (prove 2.35 s), N=16 -> 35.5 MB.
+  N trade-off (W=16, BLAKE3, BENCH_ITERS=3 medians):
+    N |  M  | tau | prove (s) | verify (s) | proof (MB)
+    4 | 189 |  57 |    0.44   |    0.26    |   28.8
+    8 | 209 |  39 |    0.72   |    0.36    |   22.4
+   16 | 301 |  29 |    1.68   |    0.84    |   16.8
+   32 | 374 |  24 |    4.05   |    1.93    |   13.9
+   64 | 573 |  20 |   11.82   |    6.77    |   11.9
+  Size flattens (msgs_e is N-independent; only aux and seeds shrink/grow)
+  while time grows ~linearly in N x M — mask-flow aggregation (Ideas) is
+  what would tame the N>=16 verify cost.
 
 --------------------------------------------------------------------------------
 Audit notes (July 2026, after the masked-values switch)
