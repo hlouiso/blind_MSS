@@ -116,15 +116,17 @@ int main(void)
         }
 
         const long hdr_end     = 4 + 5*4 + 32 + 32 + 4;      /* magic..ctr */
-        const long online_off  = hdr_end + (long)(M_KKW - NUM_ROUNDS) * 96;
-        long offsets[10];
+        const long online_off  = hdr_end + (long)(M_KKW - NUM_ROUNDS) * 64;
+        long offsets[12];
         int  n_off = 0;
         offsets[n_off++] = 4 + 5*4 + 3;            /* nonce */
         offsets[n_off++] = 4 + 5*4 + 32 + 7;       /* h*    */
         offsets[n_off++] = hdr_end - 2;            /* ctr   */
-        offsets[n_off++] = hdr_end + 40;           /* offline: inside a seed*/
-        offsets[n_off++] = online_off + 16;        /* online: com_hidden    */
-        for (int i = 0; i < 5; i++) {              /* random online bytes   */
+        offsets[n_off++] = hdr_end + 16;           /* offline: inside a seed* */
+        offsets[n_off++] = hdr_end + 40;           /* offline: inside h'_j    */
+        offsets[n_off++] = online_off + 16;        /* online: com_hidden      */
+        offsets[n_off++] = plen - 16;              /* r_j of the last round   */
+        for (int i = 0; i < 5; i++) {              /* random online bytes     */
             uint32_t rnd;
             RAND_bytes((unsigned char *)&rnd, 4);
             offsets[n_off++] = online_off + (long)(rnd % (uint32_t)(plen - online_off));
@@ -147,8 +149,21 @@ int main(void)
             buf[offsets[i]] ^= 0x01;               /* restore */
         }
         fclose(tampered);
+        CHECK(all_rejected, "verify rejects every single-byte proof tampering (12 offsets, incl. r_j)");
+
+        /* Negative: appending a byte to a valid proof must be rejected (the
+         * verifier requires EOF right after the online section). */
+        FILE *padded = tmpfile();
+        if (!padded) { printf("FAIL: tmpfile\n"); return 1; }
+        if (fwrite(buf, 1, (size_t)plen, padded) != (size_t)plen ||
+            fputc(0x00, padded) == EOF) {
+            printf("FAIL: padded write\n"); return 1;
+        }
+        rewind(padded);
+        CHECK(kkw_verify(padded, m_hat, pk_seed, pubout) != 0,
+              "verify rejects a proof with trailing data");
+        fclose(padded);
         free(buf);
-        CHECK(all_rejected, "verify rejects every single-byte proof tampering (10 offsets)");
     }
 
     fclose(proof);

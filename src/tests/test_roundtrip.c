@@ -133,6 +133,11 @@ static void test_single_round(void)
     }
     CHECK(out_ok, "prover unmasked output == pubout");
 
+    /* verify() overwrites A.h_prime with its recomputation — keep the
+     * prover's value to check they agree (the h* check relies on this). */
+    unsigned char hp_prover[32];
+    memcpy(hp_prover, A.h_prime, 32);
+
     int test_e[] = { 0, N_PARTIES - 1 };
     for (int ti = 0; ti < 2; ti++) {
         int e = test_e[ti];
@@ -156,6 +161,8 @@ static void test_single_round(void)
         CHECK(!err, msg);
         CHECK(memcmp(zh_check, zh, sizeof zh) == 0,
               "verify reconstructs the prover's public masked output");
+        CHECK(memcmp(A.h_prime, hp_prover, 32) == 0,
+              "verify recomputes the prover's h'_j");
         free(Z.x_offset); free(Z.msgs_e);
     }
 
@@ -194,13 +201,15 @@ static void test_preproc_smoke(void)
     expand_xshare(seeds[0], xs2);
     CHECK(memcmp(xs1, xs2, INPUT_LEN) == 0, "expand_xshare: deterministic");
 
-    /* compute_aux_from_seeds: deterministic */
+    /* compute_aux_from_seeds: deterministic (aux and h_out) */
     uint32_t *aux1 = malloc(ySize * sizeof(uint32_t));
     uint32_t *aux2 = malloc(ySize * sizeof(uint32_t));
-    compute_aux_from_seeds(seeds, aux1);
-    compute_aux_from_seeds(seeds, aux2);
-    CHECK(memcmp(aux1, aux2, ySize * sizeof(uint32_t)) == 0,
-          "compute_aux_from_seeds: deterministic");
+    unsigned char h_out1[32], h_out2[32];
+    compute_aux_from_seeds(seeds, aux1, h_out1);
+    compute_aux_from_seeds(seeds, aux2, h_out2);
+    CHECK(memcmp(aux1, aux2, ySize * sizeof(uint32_t)) == 0 &&
+          memcmp(h_out1, h_out2, 32) == 0,
+          "compute_aux_from_seeds: deterministic (aux + h_out)");
 
     /* aux depends only on the masks: a full run with a real witness and real
      * publics must produce the exact same aux stream (this is what makes the
@@ -229,6 +238,13 @@ static void test_preproc_smoke(void)
                        NULL, zh);
         CHECK(memcmp(aux1, aux_ref, ySize * sizeof(uint32_t)) == 0,
               "compute_aux_from_seeds == aux of a real-witness run");
+        /* yp (output-mask shares) must be witness-independent too: this is
+         * what lets the verifier recompute h_out_j from seed* alone. */
+        unsigned char h_out_ref[32];
+        sha256_once((const unsigned char *)ref_a.yp,
+                    N_PARTIES * 8 * sizeof(uint32_t), h_out_ref);
+        CHECK(memcmp(h_out1, h_out_ref, 32) == 0,
+              "compute_aux_from_seeds h_out == h_out of a real-witness run");
         for (int p = 0; p < N_PARTIES; p++) { free(lam[p]); free(tp[p]); }
         free(aux_ref); free(d_pub);
     }
@@ -245,7 +261,7 @@ static void test_preproc_smoke(void)
     unsigned char seeds3[N_PARTIES][SEED_SIZE];
     expand_seed_star(seed_star2, seeds3);
     uint32_t *aux3 = malloc(ySize * sizeof(uint32_t));
-    compute_aux_from_seeds(seeds3, aux3);
+    compute_aux_from_seeds(seeds3, aux3, NULL);
     unsigned char h3[32];
     preproc_commit_instance(seeds3, aux3, h3);
     CHECK(memcmp(h1, h3, 32) != 0, "preproc_commit_instance: distinct for different seeds");

@@ -830,13 +830,13 @@ void verify(
             if (a_struct->yp[o][w] != 0) { *error = true; }
     }
 
-    /* ── Verify h'_j = H(d || s streams || r_j) ── */
-    {
-        unsigned char h_prime_check[32];
-        recompute_h_prime_verify(e, d_pub, s_slots, msgs_e, z_proof->r_j,
-                                 h_prime_check);
-        if (memcmp(h_prime_check, a_struct->h_prime, 32) != 0) { *error = true; }
-    }
+    /* ── Recompute h'_j = H(d || s streams || r_j) ──
+     * Written into a_struct->h_prime for the caller to fold into the h*
+     * recomputation: a transcript inconsistent with the prover's commitment
+     * yields a different h'_j and the final h* check fails.  (h'_j itself no
+     * longer travels in the proof — it is redundant with this recomputation.) */
+    recompute_h_prime_verify(e, d_pub, s_slots, msgs_e, z_proof->r_j,
+                             a_struct->h_prime);
 
     free(s_slots);
     free(xbuf);

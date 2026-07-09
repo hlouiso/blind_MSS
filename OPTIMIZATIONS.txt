@@ -30,6 +30,8 @@
   0.f  Library + in-memory pipeline                          [commit d34ce7c]
        File-passing CLI binaries replaced by libblindmss.a and an in-memory
        test suite: no serialisation to disk between protocol phases.
+  (ZKBoo-era optimizations before 0.a — e.g. 3397f6f "reduced proof size",
+   Oct 2025 — are deliberately omitted: the KKW migration superseded them.)
 
 Baseline numbers at 875e176 (before this log's changes)
   e2e harness (keygen+sign+prove+verify+negative tests) : 22.4 s
@@ -139,7 +141,9 @@ Attempted and reverted
          parties' XOR-shares of the mask.  Linear gates are public; each
          nonlinear gate broadcasts ONE word per party (shares of the masked
          output) instead of the two Beaver openings (da, db).  Per gate the
-         proof carries 8 B (s_e + aux) instead of 12; h' hashes half the
+         proof carries 8 B (s_e + aux; aux is absent in the ~1/N of rounds
+         where party 0 is the hidden one — its com_{j,0} binds it) instead
+         of 12; h' hashes half the
          broadcast volume; tapes shrink to 2 words/gate; the masked witness
          d = w XOR lambda_w travels once per round (all mask shares are
          seed-derived, no more witness-offset party).  aux depends on the
@@ -151,6 +155,42 @@ Attempted and reverted
   Gain : proof 94.7 -> 57.5 MB; prove 1.61 -> 1.38 s; e2e 7.8 -> 5.5 s.
 
 --------------------------------------------------------------------------------
+9. Commitment randomiser r_j restored (KKW Fig. 2)           [commit 73f91b5]
+--------------------------------------------------------------------------------
+  What : h'_j = H(d || s_all) was a deterministic commitment to the witness
+         for opened instances (seed*_j is published, so d and s_all are
+         determined by w) — an offline guess-and-check oracle on w, i.e. the
+         NIZK was not zero-knowledge.  KKW §3.1 drop r_j deliberately and say
+         so, justified for signatures where w is the high-entropy secret key.
+         A blind signature needs blindness, whose distinguisher is the SIGNER,
+         who already knows sigma, the leaf index and d; only the HM opening
+         retains entropy.  Restoring h'_j = H(d || s_all || r_j), with r_j
+         revealed only for online rounds, gives back a real ZK simulator.
+         Online straight-line extraction is unaffected (d travels in the
+         clear; seed extraction goes through the com_hidden RO queries).
+  Note : r_j MUST NOT be seed-derived (seed*_j is published for opened
+         instances — that would reproduce the bug).
+  Cost : +tau*32 B (~1.8 KB).  Proof format KKW4 -> KKW5.
+
+--------------------------------------------------------------------------------
+10. Size-neutral cleanup: drop recomputable hashes from the wire  (KKW6)
+--------------------------------------------------------------------------------
+  What : (a) online h'_j no longer travels — the verifier recomputes it from
+         d, s_slots, msgs_e and r_j, and folds the recomputation into the h*
+         check (the old memcmp was subsumed by it).  -tau*32 B, paying for 9.
+         (b) offline h_out_j no longer travels — yp holds the output-wire
+         mask shares, seed-derived like aux, so the verifier recomputes it
+         from seed*_j in the same zero-publics run that recomputes aux.
+         -32*(M-tau) B.  Offline record: 96 -> 64 B.
+         (c) the verifier now requires EOF right after the online section —
+         canonical proof encoding, no trailing-byte malleability.
+         Also: make SEC=256 selects the rho=256 (post-quantum) parameter
+         tables; the default rho=128 tables are a classical bound (README).
+  Gain : net -32*(M-tau) B (~4.2 KB at N=4) vs. KKW4; guard tests added
+         (h_out witness-independence, prover/verifier h'_j agreement, r_j
+         byte-flip rejection).
+
+--------------------------------------------------------------------------------
 Summary (N=4, i5-9300H, 8 threads)
 --------------------------------------------------------------------------------
                        baseline 875e176      after 20cf642
@@ -159,6 +199,7 @@ Summary (N=4, i5-9300H, 8 threads)
   verify               ~2 s                  0.90 s    (2.2x)
   e2e harness*         22.4 s                5.5 s     (4.1x)
   * both measured with the double-running CHECK harness (see note above)
+  After 9+10 (KKW6): security fix, size-neutral (net -4 KB); timings unchanged.
 
   N trade-off (W=16): N=8 -> 44.1 MB (prove 2.35 s), N=16 -> 35.5 MB (6.05 s).
 
@@ -170,23 +211,32 @@ Audit notes (July 2026, after the masked-values switch)
     witness d and every party's broadcast stream (h'), and the output-mask
     shares (h_out).  The verifier's grinding check is mandatory and present.
   * New e2e tamper test: single-byte flips at targeted offsets (nonce, h*,
-    ctr, offline section, com_hidden) and random online offsets must all be
-    rejected — passes.  While writing it we found and fixed a test-harness
+    ctr, offline section, com_hidden, r_j) and random online offsets must all
+    be rejected — passes.  While writing it we found and fixed a test-harness
     bug: the CHECK macro evaluated its condition twice, so the e2e test had
     been running kkw_prove twice (two proofs appended to the file) and each
     kkw_verify twice.  Protocol unaffected; e2e timings were inflated ~2x.
+  * Two items from this audit were later found insufficient and fixed: the
+    deterministic h'_j broke ZK (see 9), and trailing proof bytes were
+    accepted (fixed with 9).  h_out_j was never witness-dependent (yp holds
+    seed-derived output-mask shares) and no longer travels (see 10).
   * Known accepted limitations: raw-struct serialisation (host endianness);
-    the verifier ignores trailing bytes after the proof (streams); offline
-    h'_j/h_out_j are witness-dependent hashes (ROM + witness min-entropy,
-    documented in kkw_prove.c); mpc_sha256 returns silently on OOM.
+    mpc_sha256 returns silently on OOM (and hash helpers zero their output
+    on EVP/alloc failure instead of aborting).
 
 --------------------------------------------------------------------------------
 Ideas not (yet) implemented
 --------------------------------------------------------------------------------
-  * Mask-flow aggregation for offline verify: recompute aux on the XOR-
-    aggregate of the N tapes (one synthetic party) instead of an N-party
-    circuit run — would make the offline check N-independent again (matters
-    at N>=16, where it dominates verify).
+  * Mask-flow aggregation for offline verify: recompute aux (and now h_out)
+    on the XOR-aggregate of the N tapes (one synthetic party) instead of an
+    N-party circuit run — would make the offline check N-independent again
+    (matters at N>=16, where it dominates verify).  Correctness argument
+    validated (audit 2026-07-09): aux/h_out only consume XOR-aggregates, and
+    the mask flow is F2-linear everywhere it is distributed (XOR trivially;
+    prefix_xor_shift distributes over XOR; mask_from_bit replicates one bit).
+    Needs a dedicated single-party mask-flow evaluator (the compiled
+    N_PARTIES loops don't shrink by zero-padding) plus a bit-exactness test
+    against compute_aux_from_seeds for N in {4,8,16}.
   * GGM/one-tree seed trees (eprint 2024/490 §3): compresses seed openings,
     which total ~11 KB of a ~58 MB proof here (<0.02%) — not worth it for
     this circuit size; the same paper's grinding idea (7) was the useful one.

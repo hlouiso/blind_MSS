@@ -8,13 +8,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-/* ySize: number of nonlinear gates (word-level) in one circuit execution.
- * Measured by test_circuit after any parameter change. */
-const int ySize = 152504;
+/* YSIZE_GATES: number of nonlinear gates (word-level) in one circuit
+ * execution.  Measured by test_circuit after any circuit change — update this
+ * single definition; ySize and TAPE_SIZE both derive from it. */
+#define YSIZE_GATES 152504
+const int ySize = YSIZE_GATES;
 const int INPUT_LEN = 2762; /* W_END — see circuits.h */
 
 /* TAPE_SIZE = 2 * ySize * 4 (λ_z and λ_x·λ_y product blocks, each ySize u32). */
-const int TAPE_SIZE = 2 * 152504 * 4; /* = 1 220 032 bytes */
+const int TAPE_SIZE = 2 * YSIZE_GATES * 4; /* = 1 220 032 bytes */
 
 const uint32_t hA[8] = {
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -110,7 +112,8 @@ void preproc_commit_instance(unsigned char seeds[N_PARTIES][SEED_SIZE],
     if (!ok) memset(h_j_out, 0, 32);
 }
 
-void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE], uint32_t *aux_out)
+void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE],
+                            uint32_t *aux_out, unsigned char *h_out32)
 {
     /* aux[g] = (λ_x AND λ_y) XOR (XOR_i t_i) where λ_x/λ_y are the gate's
      * input-wire masks.  Masks depend only on the tapes and witness-mask
@@ -134,6 +137,7 @@ void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE], uint32_t 
         free(d0);
         for (int p = 0; p < N_PARTIES; p++) { free(tapes[p]); free(lam[p]); }
         memset(aux_out, 0, (size_t)ySize * sizeof(uint32_t));
+        if (h_out32) memset(h_out32, 0, 32);
         return;
     }
 
@@ -142,6 +146,9 @@ void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE], uint32_t 
     uint32_t zh_dummy[8];
     building_views(&dummy_a, zero_m, zero_pk, d0, lam, tapes, aux_out, NULL,
                    NULL, zh_dummy);
+    if (h_out32)
+        sha256_once((const unsigned char *)dummy_a.yp,
+                    N_PARTIES * 8 * sizeof(uint32_t), h_out32);
 
     free(d0);
     for (int p = 0; p < N_PARTIES; p++) { free(tapes[p]); free(lam[p]); }

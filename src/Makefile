@@ -64,6 +64,10 @@ endif
 ifdef W
 CFLAGS += -DGRIND_W=$(W)
 endif
+# Security target: 128 (default, classical) or 256 (post-quantum margin).
+ifdef SEC
+CFLAGS += -DSEC_TARGET=$(SEC)
+endif
 LDFLAGS = $(OMP_LDFLAGS)
 LDLIBS = $(OMP_LIBS) $(OPENSSL_LIBS) -lm
 
@@ -79,10 +83,10 @@ LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.
 # make the first object file the default goal).
 .DEFAULT_GOAL := lib
 
-# Rebuild all objects (and the library/bench) when N or W changes.  The stamp
-# file is named .n_stamp_<N>_w<W>; switching either deletes the old stamp and
-# every build product so they are recompiled for the new parameters.
-N_ACTUAL := $(if $(N),$(N),default)_w$(if $(W),$(W),default)
+# Rebuild all objects (and the library/bench) when N, W or SEC changes.  The
+# stamp file is named .n_stamp_<N>_w<W>_s<SEC>; switching any of them deletes
+# the old stamp and every build product so they are recompiled.
+N_ACTUAL := $(if $(N),$(N),default)_w$(if $(W),$(W),default)_s$(if $(SEC),$(SEC),default)
 N_STAMP  := .n_stamp_$(N_ACTUAL)
 $(N_STAMP):
 	@rm -f .n_stamp_* $(LIBOBJS) $(LIB) bench_bin bench_pipeline_bin && touch $@

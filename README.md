@@ -20,6 +20,7 @@ Requirements:
 ```bash
 make          # build the static library libblindmss.a (default N=4)
 make N=<N>    # build with N a multiple of 4 ∈ {4, 8, …, 32} ∪ {64, 128, 256}
+make SEC=256  # post-quantum parameter set (ρ=256; default 128 is classical)
 make test     # build and run the test suite
 make bench    # benchmark all N values
 make clean    # remove build products
@@ -78,7 +79,32 @@ N ≤ 128 these reproduce Table 1 (ρ = 128) of the KKW paper exactly:
 | 256 | 17 | 1794 | 2^{-128.01} | 166.6 KB |
 
 τ controls prove/verify time; M only affects pass-1 (preprocessing) and the tiny
-offline proof section (96 bytes per checked instance: seed\* + h'_j + h_out).
+offline proof section (64 bytes per checked instance: seed\* + h'_j).
+
+### Classical vs. post-quantum target
+
+The tables above (and the default build) are KKW Table 1's **ρ = 128** column —
+a **classical** 128-bit Fiat–Shamir soundness bound. KKW themselves size their
+post-quantum signature parameters at **ρ = 256** (§3.2: M, n, τ set so that
+ε ≤ 2^-256). The reason: a quantum forger can Grover-search the grinding
+counter over the combined predicate [W zero bits ∧ cheatable challenge] at cost
+√(1/(2^-W · ε)), so 128-bit post-quantum security needs ε ≤ 2^-(256-W) —
+grinding still buys exactly W bits, but off a 2λ baseline. Build it with
+`make SEC=256` (τ = ⌈(256-W)/log₂N⌉ + 1; tables in `shared.h`, from
+`params.py`). At the default W = 16:
+
+| N | τ | M | Proof (approx.) |
+|--:|--:|--:|---:|
+| 4 | 121 | 426 | ≈ 130 MB |
+| 8 | 81 | 524 | ≈ 93 MB |
+| 16 | 61 | 726 | ≈ 72 MB |
+| 64 | 41 | 1645 | ≈ 50 MB |
+
+Two caveats that belong in any write-up: there is no general security proof for
+the Fiat–Shamir transform against quantum adversaries (KKW §3.1 point to
+Unruh's transform for that), and whether the 2λ doubling is truly necessary is
+debated (cf. FAEST and refined Grover-on-Fiat–Shamir bounds) — ρ = 256 is the
+conservative margin, not a theorem.
 
 ## Library API
 
@@ -100,11 +126,15 @@ are the API. The full flow is shown in [`src/tests/test_e2e.c`](src/tests/test_e
 
 The proof is a byte stream (a `FILE *`, e.g. an on-disk file or `tmpfile()`), so
 it can be stored or sent over a wire between the client and the verifier. Its
-format is `"KKW5"` magic (4 B) + header (N, M, τ, ySize, W as uint32_t LE, 20 B) +
+format is `"KKW6"` magic (4 B) + header (N, M, τ, ySize, W as uint32_t LE, 20 B) +
 nonce (32 B) + h\* (32 B) + grinding counter `ctr` (4 B) +
-offline section ((M−τ) × 96 B) + online section (τ rounds, each ending with the
-32 B commitment randomiser `r_j` that blinds `h'_j` for the unopened
-instances). A verifier built for a different N rejects it on the header check.
+offline section ((M−τ) × 64 B: seed\*_j + h'_j) + online section (τ rounds:
+com_hidden, the `yp` output-mask shares, N−1 seeds, the masked witness `d`,
+`aux` (absent when party 0 is hidden), `msgs_e`, and the 32 B commitment
+randomiser `r_j` that blinds `h'_j` for the unopened instances; the online
+`h'_j` and offline `h_out_j` are recomputed by the verifier, not sent). The
+verifier rejects trailing bytes, and a verifier built for different parameters
+rejects the proof on the header check.
 
 ## Protocol
 
@@ -154,8 +184,8 @@ rounds serialises the hidden party's broadcast stream `msgs_e` (ySize words)
 and `aux` (ySize words, absent when party 0 is the hidden one):
 
 ```
-proof ≈ header(24) + nonce(32) + h*(32) + ctr(4) + (M−τ)·96   [offline, tiny]
-       + τ · (sizeof(a) + (N−1)·SEED_SIZE + INPUT_LEN + msgs + aux)
+proof ≈ header(24) + nonce(32) + h*(32) + ctr(4) + (M−τ)·64   [offline, tiny]
+       + τ · (com(32) + yp(N·32) + (N−1)·SEED_SIZE + INPUT_LEN + msgs + aux + r_j(32))
        ≈ τ · 2·ySize·4  [dominant term]
        = 57 · 2 · 152504 · 4  ≈  70 MB  [upper bound; e=0 rounds skip aux]
 ```

@@ -21,7 +21,7 @@ int kkw_verify(FILE *proof,
         if (fread(magic, 4, 1, proof) != 1 || fread(hdr, sizeof(hdr), 1, proof) != 1) {
             fprintf(stderr, "kkw_verify: read error (header)\n"); return -1;
         }
-        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='5') {
+        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='6') {
             fprintf(stderr, "kkw_verify: bad magic\n"); return -1;
         }
         if (hdr[0]!=(uint32_t)N_PARTIES || hdr[1]!=(uint32_t)M_KKW ||
@@ -75,18 +75,17 @@ int kkw_verify(FILE *proof,
         (unsigned char (*)[SEED_SIZE])(hbuf + (size_t)3 * M_KKW * 32);
 
     /* ── Preprocessing check ─────────────────────────────────────────────── */
-    /* Pass 1: read offline data sequentially (fread is not thread-safe). */
+    /* Pass 1: read offline data sequentially (fread is not thread-safe).
+     * Only seed* and the (hiding) h'_j travel; h_out_j is seed-derived and
+     * recomputed in pass 2. */
     bool preproc_error = false;
     for (int j = 0; j < M_KKW; j++) {
         if (in_C[j]) continue;
-        unsigned char h_prime_j[32];
         if (fread(seed_star_buf[j], SEED_SIZE, 1, proof) != 1 ||
-            fread(h_prime_j,        32,         1, proof) != 1 ||
-            fread(h_out_all[j],     32,         1, proof) != 1) {
+            fread(h_prime_all[j],   32,         1, proof) != 1) {
             fprintf(stderr, "kkw_verify: read error (preprocessing j=%d)\n", j);
             preproc_error = true; break;
         }
-        memcpy(h_prime_all[j], h_prime_j, 32);
     }
     if (preproc_error) { free(hbuf); return -1; }
 
@@ -108,7 +107,8 @@ int kkw_verify(FILE *proof,
         if (in_C[j]) continue;
         unsigned char seeds_j[N_PARTIES][SEED_SIZE];
         expand_seed_star(seed_star_buf[j], seeds_j);
-        compute_aux_from_seeds(seeds_j, aux_arr[omp_get_thread_num()]);
+        compute_aux_from_seeds(seeds_j, aux_arr[omp_get_thread_num()],
+                               h_out_all[j]);
         preproc_commit_instance(seeds_j, aux_arr[omp_get_thread_num()], h_j_all[j]);
     }
 
@@ -141,7 +141,10 @@ int kkw_verify(FILE *proof,
     bool read_error = false;
     for (int k = 0; k < NUM_ROUNDS; k++) {
         if (fread(zs[k]->com_hidden, 32, 1, proof) != 1) { read_error = true; break; }
-        if (fread(as[k], sizeof(a), 1, proof) != 1)       { read_error = true; break; }
+        /* Only yp is in the proof; verify() fills as[k]->h_prime with the
+         * recomputed h'_j, folded into the h* check below. */
+        if (fread(as[k]->yp, sizeof(as[k]->yp), 1, proof) != 1)
+            { read_error = true; break; }
         if (fread(zs[k]->ke, SEED_SIZE, N_PARTIES - 1, proof) != (size_t)(N_PARTIES - 1))
             { read_error = true; break; }
         /* Public masked witness d (always present). */
@@ -161,6 +164,13 @@ int kkw_verify(FILE *proof,
     }
     if (read_error) {
         fprintf(stderr, "kkw_verify: read error (online section)\n");
+        goto free_and_fail;
+    }
+
+    /* The stream must end exactly here: reject trailing bytes so a valid
+     * proof has a single canonical byte encoding (no benign malleability). */
+    if (fgetc(proof) != EOF) {
+        fprintf(stderr, "kkw_verify: trailing data after proof\n");
         goto free_and_fail;
     }
 
@@ -205,6 +215,7 @@ int kkw_verify(FILE *proof,
 #pragma omp atomic write
             online_error = true;
         }
+        /* as[k]->h_prime holds the h'_j recomputed by verify() above. */
         memcpy(h_prime_all[C_out[k]], as[k]->h_prime, 32);
         sha256_once((const unsigned char *)as[k]->yp,
                     N_PARTIES * 8 * sizeof(uint32_t), h_out_all[C_out[k]]);

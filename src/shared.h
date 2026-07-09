@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-/* ── KKW parameters (ρ=128) ──────────────────────────────────────────────────
+/* ── KKW parameters ──────────────────────────────────────────────────────────
  * Override N_PARTIES at build time: make N=4  (or -DN_PARTIES=4).
  * Supported: N a multiple of 4 ∈ {4, 8, 12, …, 32} ∪ {64, 128, 256}.
  *
@@ -16,34 +16,54 @@
  * NUM_ROUNDS: τ — online instances included in the proof.
  *
  * Soundness formula (KKW cut-and-choose, see Katz-Kolesnikov-Wang 2018):
- *   ε = max_{0≤s≤τ} [C(M-s, τ-s) / C(M, τ)] · N^{-(τ-s)} ≤ 2^{-128}
+ *   ε = max_{0≤s≤τ} [C(M-s, τ-s) / C(M, τ)] · N^{-(τ-s)} ≤ 2^{-(SEC-W)}
  * Adversary strategy: corrupt s preprocessing instances (forces output=pubout
  * for any hidden party e), and predict party e for the τ-s honest online
  * instances (probability 1/N each). The s corrupted instances must all land
  * in the online set (probability C(M-s,τ-s)/C(M,τ)); the offline check
  * catches any corrupted instance in the opened set via aux recomputation.
  * Parameters computed by src/params.py (exact minimum M for each (N,τ)).
- * τ = ⌈128/log₂N⌉+1.  M_KKW only affects pass-1 and proof offline section.
+ * τ = ⌈(SEC-W)/log₂N⌉+1.  M_KKW only affects pass-1 and proof offline section.
  *
- * Trou 1 (preprocessing cut-and-choose): IMPLEMENTED.
- * Trou 2 (h'_j commitment): IMPLEMENTED.
- * Trou 3 (H3 binding msgs_e+aux): IMPLEMENTED. */
+ * The three KKW binding requirements are all implemented: the preprocessing
+ * cut-and-choose (h_j commits seeds+aux, recomputed for opened instances),
+ * the online-transcript commitment (h'_j commits d, every broadcast stream
+ * and the r_j randomiser), and the binding of msgs_e/aux to the challenge
+ * (both feed the h'_j / com_{j,0} recomputations checked against h*). */
 
 #ifndef N_PARTIES
 #define N_PARTIES 4
+#endif
+
+/* ── Security target (classical vs. post-quantum), make SEC=<128|256> ────────
+ * SEC_TARGET = 128 (default): ε ≤ 2^{-(128-W)} — KKW Table 1's ρ=128 column,
+ * a CLASSICAL 128-bit Fiat–Shamir soundness bound.
+ * SEC_TARGET = 256: ε ≤ 2^{-(256-W)} — the ρ=256 column KKW themselves use
+ * for post-quantum claims (§3.2: parameters set so ε ≤ 2^-256).  A quantum
+ * forger Grover-searches ctr over the combined predicate [W zero bits ∧
+ * cheatable challenge], at cost sqrt(1/(2^-W·ε)) ≥ 2^128 ⟹ ε ≤ 2^-(256-W):
+ * grinding still buys exactly W bits, off a 2λ baseline.  Caveats (also for
+ * the write-up): Fiat–Shamir has no general quantum security proof (KKW §3.1
+ * mention Unruh's transform), and whether the 2λ doubling is truly necessary
+ * is debated (FAEST, refined Grover-on-FS bounds) — 2λ is the conservative
+ * margin, not a theorem. */
+#ifndef SEC_TARGET
+#define SEC_TARGET 128
 #endif
 
 /* ── Grinding (FAESTER-style proof of work, eprint 2024/490 §4) ──────────────
  * GRIND_W: the Fiat–Shamir challenge hash must end in GRIND_W zero bits; the
  * prover greps for a counter ctr achieving this (~2^W short hashes, one-time).
  * Every forgery attempt pays the same 2^W, so the cut-and-choose target can
- * be relaxed to 2^{-(128-W)} — total attack cost stays 2^128 (per RO query:
- * P[W zero bits AND cheatable challenge] = 2^{-W} · 2^{-(128-W)} = 2^{-128}).
- * τ = ⌈(128-W)/log₂N⌉ + 1; M from params.py with target 128-W.
+ * be relaxed to 2^{-(SEC-W)} — total attack cost stays 2^SEC (per RO query:
+ * P[W zero bits AND cheatable challenge] = 2^{-W} · 2^{-(SEC-W)} = 2^{-SEC}).
+ * τ = ⌈(SEC-W)/log₂N⌉ + 1; M from params.py with target SEC-W.
  * Override at build time: make W=<0|16|24>. */
 #ifndef GRIND_W
 #define GRIND_W 16
 #endif
+
+#if SEC_TARGET == 128
 
 #if GRIND_W == 0
 #  if   N_PARTIES == 4
@@ -160,6 +180,127 @@
 #  error "Unsupported GRIND_W: run src/params.py and add a (τ,M) table"
 #endif
 
+#elif SEC_TARGET == 256
+
+#if GRIND_W == 0
+#  if   N_PARTIES == 4
+#    define M_KKW 456
+#    define NUM_ROUNDS 129
+#  elif N_PARTIES == 8
+#    define M_KKW 533
+#    define NUM_ROUNDS 87
+#  elif N_PARTIES == 12
+#    define M_KKW 634
+#    define NUM_ROUNDS 73
+#  elif N_PARTIES == 16
+#    define M_KKW 781
+#    define NUM_ROUNDS 65
+#  elif N_PARTIES == 20
+#    define M_KKW 799
+#    define NUM_ROUNDS 61
+#  elif N_PARTIES == 24
+#    define M_KKW 951
+#    define NUM_ROUNDS 57
+#  elif N_PARTIES == 28
+#    define M_KKW 957
+#    define NUM_ROUNDS 55
+#  elif N_PARTIES == 32
+#    define M_KKW 1024
+#    define NUM_ROUNDS 53
+#  elif N_PARTIES == 64
+#    define M_KKW 1662
+#    define NUM_ROUNDS 44
+#  elif N_PARTIES == 128
+#    define M_KKW 2540
+#    define NUM_ROUNDS 38
+#  elif N_PARTIES == 256
+#    define M_KKW 4547
+#    define NUM_ROUNDS 33
+#  else
+#    error "Unsupported N_PARTIES: no KKW (M,τ) parameters in table"
+#  endif
+#elif GRIND_W == 16
+#  if   N_PARTIES == 4
+#    define M_KKW 426
+#    define NUM_ROUNDS 121
+#  elif N_PARTIES == 8
+#    define M_KKW 524
+#    define NUM_ROUNDS 81
+#  elif N_PARTIES == 12
+#    define M_KKW 624
+#    define NUM_ROUNDS 68
+#  elif N_PARTIES == 16
+#    define M_KKW 726
+#    define NUM_ROUNDS 61
+#  elif N_PARTIES == 20
+#    define M_KKW 767
+#    define NUM_ROUNDS 57
+#  elif N_PARTIES == 24
+#    define M_KKW 825
+#    define NUM_ROUNDS 54
+#  elif N_PARTIES == 28
+#    define M_KKW 977
+#    define NUM_ROUNDS 51
+#  elif N_PARTIES == 32
+#    define M_KKW 1071
+#    define NUM_ROUNDS 49
+#  elif N_PARTIES == 64
+#    define M_KKW 1645
+#    define NUM_ROUNDS 41
+#  elif N_PARTIES == 128
+#    define M_KKW 2193
+#    define NUM_ROUNDS 36
+#  elif N_PARTIES == 256
+#    define M_KKW 4182
+#    define NUM_ROUNDS 31
+#  else
+#    error "Unsupported N_PARTIES: no KKW (M,τ) parameters in table"
+#  endif
+#elif GRIND_W == 24
+#  if   N_PARTIES == 4
+#    define M_KKW 411
+#    define NUM_ROUNDS 117
+#  elif N_PARTIES == 8
+#    define M_KKW 477
+#    define NUM_ROUNDS 79
+#  elif N_PARTIES == 12
+#    define M_KKW 585
+#    define NUM_ROUNDS 66
+#  elif N_PARTIES == 16
+#    define M_KKW 699
+#    define NUM_ROUNDS 59
+#  elif N_PARTIES == 20
+#    define M_KKW 751
+#    define NUM_ROUNDS 55
+#  elif N_PARTIES == 24
+#    define M_KKW 819
+#    define NUM_ROUNDS 52
+#  elif N_PARTIES == 28
+#    define M_KKW 850
+#    define NUM_ROUNDS 50
+#  elif N_PARTIES == 32
+#    define M_KKW 933
+#    define NUM_ROUNDS 48
+#  elif N_PARTIES == 64
+#    define M_KKW 1470
+#    define NUM_ROUNDS 40
+#  elif N_PARTIES == 128
+#    define M_KKW 2035
+#    define NUM_ROUNDS 35
+#  elif N_PARTIES == 256
+#    define M_KKW 4002
+#    define NUM_ROUNDS 30
+#  else
+#    error "Unsupported N_PARTIES: no KKW (M,τ) parameters in table"
+#  endif
+#else
+#  error "Unsupported GRIND_W: run src/params.py and add a (τ,M) table"
+#endif
+
+#else
+#  error "Unsupported SEC_TARGET: 128 or 256 (run src/params.py for tables)"
+#endif
+
 _Static_assert(N_PARTIES >= 4 && N_PARTIES <= 256, "N_PARTIES must be 4..256");
 _Static_assert(NUM_ROUNDS < M_KKW, "NUM_ROUNDS must be < M_KKW");
 
@@ -249,9 +390,12 @@ void preproc_commit_instance(unsigned char seeds[N_PARTIES][SEED_SIZE],
  * gate's input-wire masks.  Masks flow through the circuit, so this runs the
  * mask part of the circuit (building_views with zero public inputs; aux does
  * not depend on the witness or on public values).
+ * If h_out32 is non-NULL, also writes h_out_j = H(yp[0..N-1]) — the yp
+ * output-mask shares are seed-derived like aux, so the same zero-publics run
+ * reproduces them and the proof need not carry h_out_j for opened instances.
  */
 void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE],
-                             uint32_t *aux_out);
+                             uint32_t *aux_out, unsigned char *h_out32);
 
 /* ── Fiat–Shamir challenge with grinding (full KKW protocol) ────────────── */
 

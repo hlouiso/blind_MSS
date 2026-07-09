@@ -285,9 +285,9 @@ int kkw_prove(const unsigned char *input,
     {
         bool write_ok = true;
 
-        /* Header: magic "KKW5" + N + M + tau + ySize + GRIND_W (uint32_t LE),
+        /* Header: magic "KKW6" + N + M + tau + ySize + GRIND_W (uint32_t LE),
          * then nonce, h*, and the grinding counter ctr (uint32_t LE). */
-        const unsigned char magic[4] = {'K','K','W','5'};
+        const unsigned char magic[4] = {'K','K','W','6'};
         uint32_t hdr[5] = { (uint32_t)N_PARTIES, (uint32_t)M_KKW,
                              (uint32_t)NUM_ROUNDS, (uint32_t)ySize,
                              (uint32_t)GRIND_W };
@@ -301,18 +301,20 @@ int kkw_prove(const unsigned char *input,
          * from seed_star, so the rest of h'_j's preimage (d, s_all) is a
          * deterministic function of the witness.  The unrevealed randomiser
          * r_j is what makes h'_j hiding (a uniform RO output), per KKW Fig. 2.
-         * h_out_j is witness-independent: yp holds the output-wire mask
-         * shares, which are seed-derived like aux. */
+         * h_out_j is NOT sent: yp holds the output-wire mask shares, which
+         * are seed-derived like aux, so the verifier recomputes h_out_j from
+         * seed_star (compute_aux_from_seeds). */
         for (int j = 0; j < M_KKW && write_ok; j++) {
             if (in_C[j]) continue;
             if (fwrite(seed_stars[j],  SEED_SIZE, 1, out) != 1) write_ok = false;
             if (fwrite(h_prime_all[j], 32,        1, out) != 1) write_ok = false;
-            if (fwrite(h_out_all[j],   32,        1, out) != 1) write_ok = false;
         }
 
         for (int k = 0; k < NUM_ROUNDS && write_ok; k++) {
             if (fwrite(zs[k]->com_hidden, 32, 1, out) != 1) write_ok = false;
-            if (fwrite(as[k], sizeof(a), 1, out) != 1)      write_ok = false;
+            /* Only yp travels: the verifier recomputes h'_j itself, and a
+             * mismatch is caught by the final h* check. */
+            if (fwrite(as[k]->yp, sizeof(as[k]->yp), 1, out) != 1) write_ok = false;
             if (fwrite(zs[k]->ke, SEED_SIZE, N_PARTIES - 1, out) != (size_t)(N_PARTIES - 1))
                 write_ok = false;
             /* Public masked witness d (always present). */

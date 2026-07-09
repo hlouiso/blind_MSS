@@ -68,8 +68,10 @@ void building_views(a *a, const unsigned char message_digest[32],
 /**
  * Verify one KKW round: re-run the online phase with the N-1 revealed
  * parties, completing broadcasts with z->msgs_e.  Checks the revealed
- * parties' output-mask shares against a->yp and h_prime; returns the public
- * masked output in zh_out (the caller checks it against pubout).
+ * parties' output-mask shares against a->yp; returns the public masked
+ * output in zh_out (the caller checks it against pubout) and writes the
+ * recomputed h'_j into a->h_prime (the caller folds it into the h* check,
+ * which is what binds the transcript — h'_j is not in the proof).
  * e: hidden party index ∈ {0..N_PARTIES-1}.
  * Sets *error = true on any inconsistency.
  */

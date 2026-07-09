@@ -87,7 +87,10 @@ static void run_leaf(uint32_t leaf)
     CHECK(memcmp(circ_root, root, 16) == 0, "prover circuit root == native root");
     CHECK(circ_sum == (uint32_t)XMSS_TARGET_SUM, "prover circuit sum == target");
 
-    /* verify() for every hidden party e. */
+    /* verify() for every hidden party e.  verify() overwrites A.h_prime with
+     * its recomputation; keep the prover's value to check they agree. */
+    unsigned char hp_prover[32];
+    memcpy(hp_prover, A.h_prime, 32);
     for (int e = 0; e < N_PARTIES; e++) {
         z Z; Z.aux = aux; Z.x_offset = malloc(INPUT_LEN); Z.msgs_e = malloc((size_t)ySize*sizeof(uint32_t));
         for (int j = 0; j < N_PARTIES-1; j++) { int o=(j<e)?j:j+1; memcpy(Z.ke[j], seeds[o], SEED_SIZE); }
@@ -105,6 +108,8 @@ static void run_leaf(uint32_t leaf)
             if (v != pubout[w]) bind_ok = 0;
         }
         CHECK(bind_ok, "verify() output binding == pubout");
+        CHECK(memcmp(A.h_prime, hp_prover, 32) == 0,
+              "verify() recomputes the prover's h'_j");
         free(Z.x_offset); free(Z.msgs_e);
     }
 
