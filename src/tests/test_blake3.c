@@ -11,6 +11,7 @@
  */
 #include "../blake3.h"
 #include "../shared.h"
+#include "../xmss.h"
 #include "../MPC_prove_functions.h"
 #include "../MPC_verify_functions.h"
 
@@ -155,6 +156,84 @@ static void test_th(void)
     CHECK(memcmp(a, direct, 16) == 0, "chain step == single compression");
 }
 
+/* ── 2b. Call-site domain separation ─────────────────────────────────────── */
+
+/* Mirror blake3_th's cv construction: domain zero-padded to 32 bytes, then
+ * cv word 7 (bytes 28..31, LE) = domain_len. */
+static void build_cv(const uint8_t *dom, size_t len, uint8_t cv[32])
+{
+    memset(cv, 0, 32);
+    memcpy(cv, dom, len);
+    cv[28] = (uint8_t)len;
+}
+
+static void test_domains(void)
+{
+    printf("--- Test 2b: pairwise-distinct chaining values across call sites ---\n");
+
+    /* One fixed parameter set; family separation must not depend on values. */
+    uint8_t pk_seed[XMSS_PK_SEED_BYTES], node[16];
+    RAND_bytes(pk_seed, sizeof pk_seed);
+    RAND_bytes(node, sizeof node);
+    const uint32_t epoch = 0x000002A5, level = 3, idx = 0x0042;
+
+    enum { NDOM = 6 };
+    uint8_t dom[NDOM][32], cv[NDOM][32];
+    size_t len[NDOM];
+    const char *name[NDOM] = { "chain", "tree", "leaf", "message", "HMy", "HMd" };
+
+    /* chain: dom = previous node (16 B) — the tweak travels in the data. */
+    memcpy(dom[0], node, 16); len[0] = 16;
+    /* tree: pk_seed || 0x01 || level || idx (2 LE). */
+    memcpy(dom[1], pk_seed, 16);
+    dom[1][16] = XMSS_TWEAK_TREE;
+    dom[1][17] = (uint8_t)level;
+    dom[1][18] = (uint8_t)(idx & 0xFF);
+    dom[1][19] = (uint8_t)((idx >> 8) & 0xFF);
+    len[1] = 20;
+    /* leaf: pk_seed || 0x03 || epoch (4 BE). */
+    memcpy(dom[2], pk_seed, 16);
+    dom[2][16] = XMSS_TWEAK_LEAF;
+    for (int b = 0; b < 4; b++) dom[2][17 + b] = (uint8_t)(epoch >> (8 * (3 - b)));
+    len[2] = 21;
+    /* message: pk_seed || 0x02 || epoch (4 BE). */
+    memcpy(dom[3], dom[2], 21);
+    dom[3][16] = XMSS_TWEAK_MESSAGE;
+    len[3] = 21;
+    /* HM commitment hashes (fixed domains, match commitment.c). */
+    memcpy(dom[4], "HMy", 3); len[4] = 3;
+    memcpy(dom[5], "HMd", 3); len[5] = 3;
+
+    for (int i = 0; i < NDOM; i++) build_cv(dom[i], len[i], cv[i]);
+
+    int distinct = 1;
+    for (int i = 0; i < NDOM && distinct; i++)
+        for (int j = i + 1; j < NDOM && distinct; j++)
+            if (memcmp(cv[i], cv[j], 32) == 0) {
+                printf("  cv collision: %s vs %s\n", name[i], name[j]);
+                distinct = 0;
+            }
+    CHECK(distinct, "all six call-site cvs pairwise distinct");
+
+    /* Worst case for the chain family: its domain is the previous node,
+     * which the WITNESS chooses (chain starts are witness bytes).  Even a
+     * node equal to the first 16 bytes of another family's domain must give
+     * a different cv — this is exactly what cv[7] = domain_len (16 vs
+     * 20/21/3) guarantees, since the chain cv is zero from byte 16 on. */
+    int adv_ok = 1;
+    for (int j = 1; j < NDOM && adv_ok; j++) {
+        uint8_t evil_cv[32];
+        uint8_t evil_node[16] = {0};
+        memcpy(evil_node, dom[j], len[j] < 16 ? len[j] : 16);
+        build_cv(evil_node, 16, evil_cv);
+        if (memcmp(evil_cv, cv[j], 32) == 0) {
+            printf("  adversarial chain node collides with %s\n", name[j]);
+            adv_ok = 0;
+        }
+    }
+    CHECK(adv_ok, "witness-chosen chain node cannot reach another family's cv");
+}
+
 /* ── 3. MPC gadget vs native ─────────────────────────────────────────────── */
 
 static void test_mpc(void)
@@ -254,6 +333,7 @@ int main(void)
 {
     test_vectors();
     test_th();
+    test_domains();
     test_mpc();
     printf("\n%s (%d failure%s)\n", failures?"FAILURES":"ALL PASS", failures, failures==1?"":"s");
     return failures ? 1 : 0;
