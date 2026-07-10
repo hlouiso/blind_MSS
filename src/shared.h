@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ── KKW parameters ──────────────────────────────────────────────────────────
@@ -307,6 +308,22 @@ _Static_assert(NUM_ROUNDS < M_KKW, "NUM_ROUNDS must be < M_KKW");
 #define SEED_SIZE 32
 extern const int ySize;     /* gate count, measured by test_circuit */
 extern const int INPUT_LEN; /* witness byte length = W_END = 2762 */
+
+/* Compile-time parameters baked into libblindmss.a, exported so programs can
+ * detect a flag mismatch at startup: a binary built with a different
+ * N_PARTIES than the library corrupts memory (buffer sizes derive from it),
+ * and a different (M, τ) silently breaks the protocol logic.  `make test`
+ * always rebuilds consistently; this guards manual links. */
+extern const int lib_n_parties, lib_m_kkw, lib_num_rounds;
+#define ASSERT_LIB_PARAMS() do { \
+    if (lib_n_parties != N_PARTIES || lib_m_kkw != M_KKW || \
+        lib_num_rounds != NUM_ROUNDS) { \
+        fprintf(stderr, "libblindmss parameter mismatch: binary N=%d M=%d " \
+                "tau=%d vs library N=%d M=%d tau=%d (rebuild with the same " \
+                "N/W/SEC flags)\n", N_PARTIES, M_KKW, NUM_ROUNDS, \
+                lib_n_parties, lib_m_kkw, lib_num_rounds); \
+        exit(1); \
+    } } while (0)
 
 /* TAPE_SIZE = 2 * ySize * 4: per gate, each party's share of the fresh output
  * mask λ_z (lam block) and of the input-mask product λ_x·λ_y (prod block). */

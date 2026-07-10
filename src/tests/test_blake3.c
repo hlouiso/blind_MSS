@@ -331,6 +331,7 @@ static void test_mpc(void)
 
 int main(void)
 {
+    ASSERT_LIB_PARAMS();
     test_vectors();
     test_th();
     test_domains();

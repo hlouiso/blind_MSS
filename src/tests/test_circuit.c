@@ -23,6 +23,7 @@
 
 int main(void)
 {
+    ASSERT_LIB_PARAMS();
     unsigned char sk_seed[32], pk_seed[XMSS_PK_SEED_BYTES];
     RAND_bytes(sk_seed, sizeof sk_seed);
     RAND_bytes(pk_seed, sizeof pk_seed);

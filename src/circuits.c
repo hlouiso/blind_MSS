@@ -101,7 +101,7 @@ void building_views(
     unsigned char *dsh_lam[N_PARTIES];
     for (int i = 0; i < N_PARTIES; i++) dsh_lam[i] = dsh_lam_buf[i];
     {
-        /* (1a) y = SHA256(r_1 ‖ … ‖ r_6) */
+        /* (1a) y = Th("HMy", r_1 ‖ … ‖ r_6) */
         unsigned char ysh_pub[32], ysh_lam_buf[N_PARTIES][32];
         unsigned char *ysh_lam[N_PARTIES], *sec_lam[N_PARTIES];
         for (int i = 0; i < N_PARTIES; i++) {

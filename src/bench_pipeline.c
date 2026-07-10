@@ -120,6 +120,7 @@ static void cpu_model(char *buf, size_t n)
 
 int main(void)
 {
+    ASSERT_LIB_PARAMS();
     const int iters = PIPELINE_ITERS;
     kkw_verbose = 0;
 

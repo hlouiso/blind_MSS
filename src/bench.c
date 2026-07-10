@@ -141,6 +141,7 @@ static void build_witness(unsigned char *input,
 
 int main(int argc, char *argv[])
 {
+    ASSERT_LIB_PARAMS();
     char cpu[128]; cpu_model(cpu, sizeof cpu);
     int nthreads = omp_get_max_threads();
 

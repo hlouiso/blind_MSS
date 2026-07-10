@@ -350,6 +350,7 @@ static void test_tamper(void)
 
 int main(void)
 {
+    ASSERT_LIB_PARAMS();
     test_single_round();
     test_preproc_smoke();
     test_tamper();

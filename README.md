@@ -127,7 +127,7 @@ are the API. The full flow is shown in [`src/tests/test_e2e.c`](src/tests/test_e
 - **Key generation** — `xmss_compute_root(sk_seed, pk_seed, root)` builds the
   Merkle tree and returns the public root (`xmss.h`).
 - **Blinding** — `hm_commit(m_hat, r, a, com, d)` produces the Halevi–Micali
-  commitment `com = a‖b‖y` and the certified digest `d = SHA256(com)`
+  commitment `com = a‖b‖y` and the certified digest `d = Th("HMd", com)`
   (`commitment.h`). The opening `(r, a)` is the client's secret.
 - **Signing** — `xmss_sign(sk_seed, pk_seed, leaf, d, 32, &sig)` target-sum
   WOTS+/XMSS-signs the digest; `xmss_verify(...)` checks it (`xmss.h`).
@@ -156,8 +156,8 @@ The three parties never share secrets:
 1. **Signer** generates `(sk_seed, pk_seed)` and publishes `pk_seed ‖ root`.
 2. **Client** blinds its message `m` into `com` and keeps the opening `(r, a)`
    secret; it sends only `com` to the signer.
-3. **Signer** signs `d = SHA256(com)` with the next XMSS leaf and returns the
-   raw signature — it never learns `m` or the opening.
+3. **Signer** signs `d = Th("HMd", com)` with the next XMSS leaf and returns
+   the raw signature — it never learns `m` or the opening.
 4. **Client** builds a KKW zero-knowledge proof that it holds a valid XMSS
    signature on a commitment to `m`, **without** revealing the opening, the
    leaf index, or the signature.

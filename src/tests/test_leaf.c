@@ -119,6 +119,7 @@ static void run_leaf(uint32_t leaf)
 
 int main(void)
 {
+    ASSERT_LIB_PARAMS();
     run_leaf(1);
     run_leaf(0x2A5);   /* 677: mixed bit pattern across all 10 levels */
     run_leaf(1023);    /* last leaf: all path bits = 1 */

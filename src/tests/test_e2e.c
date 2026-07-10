@@ -74,6 +74,7 @@ static void run_parties(unsigned char input[W_END], unsigned char m_hat[32],
 
 int main(void)
 {
+    ASSERT_LIB_PARAMS();
     printf("--- End-to-end protocol (keygen→blind→sign→prove→verify) ---\n");
     kkw_verbose = 0;
 

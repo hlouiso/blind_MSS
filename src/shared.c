@@ -15,6 +15,11 @@
 const int ySize = YSIZE_GATES;
 const int INPUT_LEN = 2762; /* W_END — see circuits.h */
 
+/* Exported compile-time parameters (see ASSERT_LIB_PARAMS in shared.h). */
+const int lib_n_parties = N_PARTIES;
+const int lib_m_kkw     = M_KKW;
+const int lib_num_rounds = NUM_ROUNDS;
+
 /* TAPE_SIZE = 2 * ySize * 4 (λ_z and λ_x·λ_y product blocks, each ySize u32). */
 const int TAPE_SIZE = 2 * YSIZE_GATES * 4; /* = 584 768 bytes */
 
