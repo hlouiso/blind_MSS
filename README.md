@@ -47,10 +47,11 @@ Signature scheme (`xmss.h`), following the Binius64 BLAKE3 instantiation:
   The security assumption is that the BLAKE3 compression function is ideal —
   the same heuristic SPHINCS+ makes for its tweakable hashes (cf.
   SPHINCS+-Haraka), and the construction follows Binius64's reviewed BLAKE3
-  XMSS verifier (audit items S1–S5 addressed in `BLAKE3_MIGRATION.txt` §3)
-  with two zero-cost strengthenings over the PR: `domain_len` is bound into
-  the chaining value (structural domain separation across lengths) and the
-  final compression carries the `ROOT` flag (`Th` is not length-extendable).
+  XMSS verifier (their audit items S1–S5 are mapped to this codebase in
+  `OPTIMIZATIONS.txt`, entry 11) with two zero-cost strengthenings over the
+  PR: `domain_len` is bound into the chaining value (structural domain
+  separation across lengths) and the final compression carries the `ROOT`
+  flag (`Th` is not length-extendable).
 
 Halevi–Micali commitment (`commitment.h`):
 - `HM_NONCES = 6`, `HM_LINES = 2`, field `GF(2¹²⁸)` — structure as in the Longfellow-based instantiation, hashes moved to `Th("HMy", ·)` / `Th("HMd", ·)`.

@@ -14,7 +14,6 @@ src/test_*
 src/tests/test_*
 !src/tests/test_*.c
 output/*
-# Keep the tracked docs under version control (*.txt above would swallow them)
+# Keep the optimization log under version control (*.txt above would swallow it)
 !OPTIMIZATIONS.txt
-!BLAKE3_MIGRATION.txt
 __pycache__/

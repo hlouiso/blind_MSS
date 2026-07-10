@@ -194,9 +194,10 @@ Attempted and reverted
 11. BLAKE3 tweakable-hash migration (binius64 PR #1620)          (KKW7)
 --------------------------------------------------------------------------------
   What : every in-circuit SHA-256 replaced by Th built on the raw BLAKE3
-         compression function, per BLAKE3_MIGRATION.txt: 336 nonlinear slots
-         per compression vs 728 (free message-schedule permutation, XOR
-         feedforward), no SHA padding, tweaks in the chaining value for
+         compression function (plan: BLAKE3_MIGRATION.txt, deleted after
+         completion — see git history before 2026-07-10): 336 nonlinear
+         slots per compression vs 728 (free message-schedule permutation,
+         XOR feedforward), no SHA padding, tweaks in the chaining value for
          free, new 0x03 leaf separator (required: leaf/tree-node domains
          collide under zero-padding otherwise).  Native xmss.c/commitment.c
          follow the same layouts (blake3.c reference, validated against
@@ -204,6 +205,19 @@ Attempted and reverted
          gadgets removed.  The KKW layer (h_j, h', h*, FS) stays SHA-256.
          Gate model from the plan was exact: predicted 73,096, measured
          73,096.  BREAKS blind-longfellow byte compatibility (README).
+  Security review items from binius64 PR #1620, mapped to blind_MSS:
+         S1 leaf separator 0x03 required (zero-padded domains collide) —
+            done, superseded by the structural domain_len binding (12);
+         S2 chain start<->endpoint binding — already present (linear walk,
+            per-stage mux, position tweak);
+         S3 epoch binding — already present (epoch hash-bound into leaf and
+            every chain step; their explicit epoch<2^h range check not
+            needed);
+         S4 zero-pinned padding — N/A in KKW (padding is deterministic gate
+            code re-executed by the verifier, never prover-chosen wires);
+         S5 nonce widening 6 -> up to 32 B (eprint 2025/055 Param. Req. 2)
+            — NOT taken, zero circuit cost (nonce||d stays one block),
+            decide separately.
   Safety: test_blake3 (official vectors + Th structure + mpc gadget vs
          native for all hidden parties), full suite at N=4/N=8/SEC=256,
          ASan+UBSan clean e2e.  Proof format KKW6 -> KKW7.
