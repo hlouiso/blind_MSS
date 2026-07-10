@@ -11,7 +11,8 @@
 # To keep it running after you close the terminal:
 #   nohup ./run_benchmarks.sh > output/bench.log 2>&1 &
 #
-# WARNING: at 100 iterations, N=64 alone takes ~6 h (the whole run ~9 h).
+# At 100 iterations the whole run takes ~1 h with the BLAKE3 circuit
+# (N=64 alone ~30 min; it was ~9 h in the pre-optimization SHA-256 era).
 # Per-iteration progress is printed to the terminal; the tables go to the file.
 #
 # SHUTDOWN=1 powers off only AFTER all files are written and synced to disk, and
