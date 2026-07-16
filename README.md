@@ -6,10 +6,6 @@ The commitment scheme is **Halevi–Micali over GF(2¹²⁸)**, the signature is
 
 > ⚠️ This code is for research/education. Do not use in production.
 
-## Context
-
-This work was carried out during my final internship for the Master's degree in **Cryptology and Computer Security** at the [University of Bordeaux](https://mastercsi.labri.fr/). The internship took place in the first half of 2025 at [UPC (Barcelona)](https://www.upc.edu/ca), supervised by [Javier Herranz Sotoca](https://web.mat.upc.edu/javier.herranz/).
-
 ## Build & test
 
 Requirements:
@@ -82,15 +78,15 @@ The KKW cut-and-choose soundness formula is:
 Minimum M for each N (computed by `src/params.py`; τ = ⌈128/log₂N⌉ + 1). For
 N ≤ 128 these reproduce Table 1 (ρ = 128) of the KKW paper exactly:
 
-| N | τ | M | Soundness | Offline section |
-|--:|--:|--:|:---------:|----------------:|
-| 4 | 65 | 218 | 2^{-128.00} | 14.3 KB |
-| 8 | 44 | 252 | 2^{-128.05} | 19.5 KB |
-| 16 | 33 | 352 | 2^{-128.00} | 29.9 KB |
-| 32 | 27 | 462 | 2^{-128.03} | 40.8 KB |
-| 64 | 23 | 631 | 2^{-128.03} | 57.0 KB |
-| 128 | 20 | 916 | 2^{-128.01} | 84.0 KB |
-| 256 | 17 | 1794 | 2^{-128.01} | 166.6 KB |
+| N | τ | M | Soundness |
+|--:|--:|--:|:---------:|
+| 4 | 65 | 218 | 2^{-128.00} |
+| 8 | 44 | 252 | 2^{-128.05} |
+| 16 | 33 | 352 | 2^{-128.00} |
+| 32 | 27 | 462 | 2^{-128.03} |
+| 64 | 23 | 631 | 2^{-128.03} |
+| 128 | 20 | 916 | 2^{-128.01} |
+| 256 | 17 | 1794 | 2^{-128.01} |
 
 τ controls prove/verify time; M only affects pass-1 (preprocessing) and the tiny
 offline proof section (64 bytes per checked instance: seed\* + h'_j).
@@ -107,12 +103,12 @@ grinding still buys exactly W bits, but off a 2λ baseline. Build it with
 `make SEC=256` (τ = ⌈(256-W)/log₂N⌉ + 1; tables in `shared.h`, from
 `params.py`). At the default W = 16:
 
-| N | τ | M | Proof (approx.) |
-|--:|--:|--:|---:|
-| 4 | 121 | 426 | ≈ 62 MB |
-| 8 | 81 | 524 | ≈ 45 MB |
-| 16 | 61 | 726 | ≈ 35 MB |
-| 64 | 41 | 1645 | ≈ 24 MB |
+| N | τ | M |
+|--:|--:|--:|
+| 4 | 121 | 426 |
+| 8 | 81 | 524 |
+| 16 | 61 | 726 |
+| 64 | 41 | 1645 |
 
 Two caveats that belong in any write-up: there is no general security proof for
 the Fiat–Shamir transform against quantum adversaries (KKW §3.1 point to
@@ -163,49 +159,6 @@ The three parties never share secrets:
    signature on a commitment to `m`, **without** revealing the opening, the
    leaf index, or the signature.
 5. **Verifier** checks the proof against `pk_seed ‖ root` and `m`.
-
-## Performance
-
-Measured on Intel i5-9300H @ 2.40 GHz, 8 threads, 1 iteration (N=4 default):
-
-### Artefact sizes
-
-| Artefact | Size |
-|---|---:|
-| Public key (`pk_seed ‖ root`) | 32 B |
-| Secret key (`sk_seed ‖ pk_seed ‖ leaf_index`) | 52 B |
-| Commitment `com = a ‖ b ‖ y` | 256 B |
-| Raw XMSS signature (`leaf ‖ nonce ‖ 144 chains ‖ 10 path`) | 2.42 KB |
-| **Blind signature (KKW proof, N=4, W=16)** | ≈ 29 MB |
-
-### Timing (N=4, W=16: τ=57, M=189, BLAKE3 Th)
-
-| Phase | Time |
-|---|---:|
-| Commitment computation | < 1 ms |
-| Key generation | ≈ 130 ms |
-| Signing | ≈ 130 ms |
-| Proof generation | ≈ 0.47 s |
-| Proof verification | ≈ 0.26 s |
-
-The online phase uses the masked-values KKW formulation: every wire carries a
-public masked value, linear gates are public computation, and each nonlinear
-gate broadcasts one word per party.  See `OPTIMIZATIONS.txt` for the full
-optimization history (proof 108.8 → 28.8 MB, prove ~3.5 → 0.47 s vs. the
-baseline; the last −50% is the BLAKE3 tweakable-hash migration).
-
-The proof is still large because the online section dominates: each of the τ
-rounds serialises the hidden party's broadcast stream `msgs_e` (ySize words)
-and `aux` (ySize words, absent when party 0 is the hidden one):
-
-```
-proof ≈ header(24) + nonce(32) + h*(32) + ctr(4) + (M−τ)·64   [offline, tiny]
-       + τ · (com(32) + yp(N·32) + (N−1)·SEED_SIZE + INPUT_LEN + msgs + aux + r_j(32))
-       ≈ τ · 2·ySize·4  [dominant term]
-       = 57 · 2 · 73096 · 4  ≈  33 MB  [upper bound; e=0 rounds skip aux]
-```
-
-Larger N reduces τ (fewer rounds) → smaller proof, at the cost of more parties per circuit evaluation and a larger M (more preprocessing instances). The offline section grows by only tens of KB.
 
 ## References
 
