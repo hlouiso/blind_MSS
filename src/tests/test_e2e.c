@@ -117,7 +117,7 @@ int main(void)
 
         const long hdr_end     = 4 + 6*4 + 32 + 32 + 4;      /* magic..ctr */
         const long online_off  = hdr_end + (long)(M_KKW - NUM_ROUNDS) * 64;
-        long offsets[12];
+        long offsets[14];
         int  n_off = 0;
         offsets[n_off++] = 4 + 6*4 + 3;            /* nonce */
         offsets[n_off++] = 4 + 6*4 + 32 + 7;       /* h*    */
@@ -125,6 +125,8 @@ int main(void)
         offsets[n_off++] = hdr_end + 16;           /* offline: inside a seed* */
         offsets[n_off++] = hdr_end + 40;           /* offline: inside h'_j    */
         offsets[n_off++] = online_off + 16;        /* online: com_hidden      */
+        offsets[n_off++] = online_off + 32 + 4;    /* online: inside yp (h_out path) */
+        offsets[n_off++] = online_off + 32 + (long)N_PARTIES*32 + 4; /* inside ke */
         offsets[n_off++] = plen - 16;              /* r_j of the last round   */
         for (int i = 0; i < 5; i++) {              /* random online bytes     */
             uint32_t rnd;
@@ -149,7 +151,7 @@ int main(void)
             buf[offsets[i]] ^= 0x01;               /* restore */
         }
         fclose(tampered);
-        CHECK(all_rejected, "verify rejects every single-byte proof tampering (12 offsets, incl. r_j)");
+        CHECK(all_rejected, "verify rejects every single-byte proof tampering (14 offsets, incl. yp/ke/r_j)");
 
         /* Negative: appending a byte to a valid proof must be rejected (the
          * verifier requires EOF right after the online section). */

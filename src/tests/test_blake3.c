@@ -257,7 +257,9 @@ static void test_domains(void)
 /* ── 2c. incremental Th == one-shot Th ──────────────────────────────────── */
 /* The KKW layer hashes scattered multi-MB preimages through the incremental
  * context; the one-shot is built on the same context, but freeze the
- * equivalence across block-boundary lengths and arbitrary split points. */
+ * equivalence across block-boundary lengths and EVERY split point (including
+ * cut == n, a trailing zero-length update, and a 3-piece split like the real
+ * compute_h_prime consumer). */
 static void test_incremental(void)
 {
     printf("--- Test 2c: incremental Th == one-shot Th ---\n");
@@ -269,7 +271,7 @@ static void test_incremental(void)
         size_t n = lens[li];
         uint8_t ref[32], inc[32];
         blake3_th((const uint8_t *)"inctest", 7, data, n, ref, 32);
-        for (size_t cut = 0; cut <= n; cut += (n > 4 ? n / 4 + 1 : 1)) {
+        for (size_t cut = 0; cut <= n; cut++) {   /* every 2-piece split */
             blake3_th_ctx c;
             blake3_th_init(&c, (const uint8_t *)"inctest", 7);
             blake3_th_update(&c, data, cut);
@@ -277,8 +279,76 @@ static void test_incremental(void)
             blake3_th_final(&c, inc, 32);
             if (memcmp(ref, inc, 32) != 0) all_ok = 0;
         }
+        /* 3-piece split (d ‖ s_all ‖ r_j shape) + byte-at-a-time. */
+        blake3_th_ctx c3;
+        blake3_th_init(&c3, (const uint8_t *)"inctest", 7);
+        blake3_th_update(&c3, data, n / 3);
+        blake3_th_update(&c3, data + n / 3, n - n / 3 - n / 4);
+        blake3_th_update(&c3, data + n - n / 4, n / 4);
+        blake3_th_final(&c3, inc, 32);
+        if (memcmp(ref, inc, 32) != 0) all_ok = 0;
+        blake3_th_init(&c3, (const uint8_t *)"inctest", 7);
+        for (size_t i = 0; i < n; i++) blake3_th_update(&c3, data + i, 1);
+        blake3_th_final(&c3, inc, 32);
+        if (memcmp(ref, inc, 32) != 0) all_ok = 0;
     }
     CHECK(all_ok, "init/update/final matches one-shot at all lengths and splits");
+
+    /* Poisoned path (domain_len > 28): both APIs must output zeros. */
+    uint8_t longdom[29] = {0}, z1[32], z2[32], zeros[32] = {0};
+    blake3_th(longdom, 29, data, 10, z1, 32);
+    blake3_th_ctx cp;
+    blake3_th_init(&cp, longdom, 29);
+    blake3_th_update(&cp, data, 10);
+    blake3_th_final(&cp, z2, 32);
+    CHECK(memcmp(z1, zeros, 32) == 0 && memcmp(z2, zeros, 32) == 0,
+          "domain_len > 28 yields all-zero output on both APIs");
+}
+
+/* ── 2d. frozen KKW-layer KAT ───────────────────────────────────────────── */
+/* Freezes the KKW9 hash format: Th under each KKW domain over the official
+ * test-vector byte pattern (i % 251, 200 bytes = 4 blocks, last partial).
+ * Catches a swapped/edited domain tag or any drift in the multi-block
+ * unaligned Th construction — mutations the prove/verify round-trip cannot
+ * see (both sides would change together).  Vectors generated at migration
+ * time from the audited implementation (equivalent to the pre-KKW9 one-shot,
+ * compression pinned to the official BLAKE3 vectors in test 1). */
+static void test_kkw_kat(void)
+{
+    printf("--- Test 2d: frozen KKW-domain KAT (format freeze) ---\n");
+    static const struct { const char *tag; const char *hex; } KAT[12] = {
+        { "KKWppcom",  "56dd77671c04694ec9719440a35c57820e24e5c07beff7c3753bdea241c29c27" },
+        { "KKWhj",     "73fe6f43408dde3625af4b47d449bd5f68b8e6e8314568f68ca2d7bf7f9e7ca1" },
+        { "KKWhprime", "a7c7180772965c0c8b7f7773cdc115652c5f925d68370042b1fe4f33e28d8a4b" },
+        { "KKWhout",   "e29374e683ab42de51cf08075b780d812e4d76a587f6a0c819bf476ab3c76998" },
+        { "KKWhstar1", "7a49f33d0c0cf33b4fb28604ef7bc54307b9b3e0aef696a9cbe0e9f308be3a36" },
+        { "KKWhstar2", "42c796a146906ab532000d58336e76ab28f4a62d5e5e2a07dc3dd7f83bb5d7d0" },
+        { "KKWhstar3", "3bdc3c3016f2e0cbe07c66d9bcfa714f3a05a7ea4d0fb62321d2042188d125f5" },
+        { "KKWhstar",  "f35e620a7f9c3eb9d9dbf9c0003367a6ae66be2fde9e01886f81861c935738ba" },
+        { "KKWfs",     "6d483d45eeb47ecbb71e1a19b6bab035d3b035a22d4bfca17c8ecbd069adb4f1" },
+        { "KKWgrind",  "01eff4962b3f0b64a47cc24036793bad4f126ae02b55a13374a9b20d8f81a5e6" },
+        { "KKWprg",    "ea2be5d38844c397a9469637ea3c0b58e82df09074ec9490d9a95f7d2314c089" },
+        { "KKWmhat",   "85158b406504e572164d0929093fb0e5667415805fd4689d767cdd9df2eec780" },
+    };
+    /* The macros in shared.h must still spell exactly these tags. */
+    const char *tags_now[12] = {
+        KKW_DOM_PPCOM, KKW_DOM_HJ, KKW_DOM_HPRIME, KKW_DOM_HOUT,
+        KKW_DOM_HSTAR1, KKW_DOM_HSTAR2, KKW_DOM_HSTAR3, KKW_DOM_HSTAR,
+        KKW_DOM_FS, KKW_DOM_GRIND, KKW_DOM_PRG, KKW_DOM_MHAT,
+    };
+    uint8_t data[200];
+    for (size_t i = 0; i < sizeof data; i++) data[i] = (uint8_t)(i % 251);
+    int tags_ok = 1, kat_ok = 1;
+    for (int t = 0; t < 12; t++) {
+        if (strcmp(KAT[t].tag, tags_now[t]) != 0) tags_ok = 0;
+        uint8_t expect[32], got[32];
+        if (!hex2bin(KAT[t].hex, expect, 32)) { kat_ok = 0; continue; }
+        blake3_th((const uint8_t *)tags_now[t], strlen(tags_now[t]),
+                  data, sizeof data, got, 32);
+        if (memcmp(got, expect, 32) != 0) kat_ok = 0;
+    }
+    CHECK(tags_ok, "the 12 KKW_DOM_* tags match the frozen KAT tags");
+    CHECK(kat_ok, "Th(KKW_DOM_*, pattern) matches the frozen vectors");
 }
 
 /* ── 3. MPC gadget vs native ─────────────────────────────────────────────── */
@@ -383,6 +453,7 @@ int main(void)
     test_th();
     test_domains();
     test_incremental();
+    test_kkw_kat();
     test_mpc();
     printf("\n%s (%d failure%s)\n", failures?"FAILURES":"ALL PASS", failures, failures==1?"":"s");
     return failures ? 1 : 0;

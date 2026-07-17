@@ -303,8 +303,8 @@ Audit notes (July 2026, after the masked-values switch)
     accepted (fixed with 9).  h_out_j was never witness-dependent (yp holds
     seed-derived output-mask shares) and no longer travels (see 10).
   * Known accepted limitations: raw-struct serialisation (host endianness);
-    mpc_sha256 returns silently on OOM (and hash helpers zero their output
-    on EVP/alloc failure instead of aborting).
+    the AES tape expander zeroes its output on EVP/alloc failure instead of
+    aborting (the hash layer is Th since 13 and cannot fail).
 
 --------------------------------------------------------------------------------
 Ideas not (yet) implemented
@@ -320,6 +320,6 @@ Ideas not (yet) implemented
     N_PARTIES loops don't shrink by zero-padding) plus a bit-exactness test
     against compute_aux_from_seeds for N in {4,8,16}.
   * GGM/one-tree seed trees (eprint 2024/490 §3): compresses seed openings,
-    which total ~11 KB of a ~58 MB proof here (<0.02%) — not worth it for
+    which total ~11 KB of a ~29 MB proof (KKW7+, <0.04%) — not worth it for
     this circuit size; the same paper's grinding idea (7) was the useful one.
 ================================================================================

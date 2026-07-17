@@ -382,7 +382,7 @@ void expand_xshare(const unsigned char seed[SEED_SIZE], unsigned char *xshare_ou
 /* ── Preprocessing commitment ───────────────────────────────────────────── */
 
 /**
- * Compute com_{j,party} = H("ppcom" || party_byte || seed || [aux if party==0]).
+ * Compute com_{j,party} = Th("KKWppcom", party_byte || seed || [aux if party==0]).
  * Party 0 holds aux in our implementation (gate_msg uses it for p==0).
  */
 void preproc_com_party(int party, const unsigned char seed[SEED_SIZE],

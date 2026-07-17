@@ -11,7 +11,6 @@
 #include "../xmss.h"
 #include "../commitment.h"
 
-#include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <stdbool.h>
 #include <stdint.h>

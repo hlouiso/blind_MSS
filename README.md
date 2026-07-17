@@ -2,7 +2,7 @@
 
 This project implements a **blind signature** over **XMSS** (a stateful Merkle signature scheme) with **target-sum WOTS+** one-time signatures in the leaves, and a zero-knowledge proof in the **KKW / MPC-in-the-head** style (Katz-Kolesnikov-Wang 2018) to prove knowledge of a valid signature **without revealing** the secret material (the commitment opening, the leaf index, or the signature).
 
-The commitment scheme is **Halevi–Micali over GF(2¹²⁸)**, the signature is target-sum WOTS+/XMSS, and the NIZK is KKW (cut-and-choose over MPC preprocessing). All hashing — in-circuit **and** in the KKW layer (commitments, Fiat–Shamir, challenge PRG) — is a **tweakable hash Th built on the raw BLAKE3 compression function** (the construction of [binius64 PR #1620](https://github.com/binius-zk/binius64/pull/1620)), each call site under its own fixed domain (`shared.h`), so the whole scheme rests on a single hash assumption. The only remaining OpenSSL primitives are AES-256-CTR (tape-expansion PRF) and `RAND_bytes`.
+The commitment scheme is **Halevi–Micali over GF(2¹²⁸)**, the signature is target-sum WOTS+/XMSS, and the NIZK is KKW (cut-and-choose over MPC preprocessing). All hashing — in-circuit **and** in the KKW layer (commitments, Fiat–Shamir, challenge PRG) — is a **tweakable hash Th built on the raw BLAKE3 compression function** (the construction of [binius64 PR #1620](https://github.com/binius-zk/binius64/pull/1620)), each call site under its own fixed domain (`shared.h`), so the whole scheme rests on a single hash assumption. The only remaining OpenSSL primitives are AES-256-CTR (the seed-, tape- and WOTS-sk-expansion PRF) and `RAND_bytes`.
 
 > ⚠️ This code is for research/education. Do not use in production.
 
