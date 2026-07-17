@@ -60,8 +60,8 @@ int kkw_prove(const unsigned char *input,
               FILE *out)
 {
     if (kkw_verbose)
-        printf("KKW N=%d  M=%d  τ=%d  W=%d  security 2^{-128}  threads=%d\n\n",
-               N_PARTIES, M_KKW, NUM_ROUNDS, GRIND_W, omp_get_max_threads());
+        printf("KKW N=%d  M=%d  τ=%d  W=%d  SEC=%d  security 2^{-%d}  threads=%d\n\n",
+               N_PARTIES, M_KKW, NUM_ROUNDS, GRIND_W, SEC_TARGET, SEC_TARGET, omp_get_max_threads());
 
     unsigned char (*seed_stars)[SEED_SIZE] = malloc((size_t)M_KKW * SEED_SIZE);
     unsigned char (*r_all)[32]             = malloc((size_t)M_KKW * 32);
