@@ -117,7 +117,18 @@ void xmss_wots_pk_from_sig(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t e
 void xmss_compute_root(const uint8_t sk_seed[32], const uint8_t pk_seed[XMSS_PK_SEED_BYTES], xmss_node root_out);
 
 /* Sign `message` with leaf `leaf_index`.  Grinds the nonce so the codeword hits
- * the target sum.  Returns 1 on success, 0 if grinding exhausts its budget. */
+ * the target sum.  Returns 1 on success, 0 on failure (grinding budget
+ * exhausted, allocation failure, or leaf_index >= 2^XMSS_H).
+ *
+ * SECURITY — STATEFUL SIGNATURE, CALLER-OWNED STATE: this library keeps NO
+ * record of used leaves.  The caller MUST guarantee each leaf_index is used
+ * at most once over the key's whole lifetime, across restarts and replicas
+ * (persist a monotonic counter before releasing a signature).  Reusing a
+ * leaf on two different messages is fatal with W=2: each 0-coordinate
+ * reveals that chain's secret start, two codewords leave only ~36 unbroken
+ * coordinates, and an attacker can then grind a message hash covering them
+ * (~2^36 hashes) — an existential forgery.  Key lifetime is 2^XMSS_H = 1024
+ * signatures; after that the key MUST be retired. */
 int xmss_sign(const uint8_t sk_seed[32], const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t leaf_index,
               const uint8_t *message, size_t message_len, xmss_sig *out);
 

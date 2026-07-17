@@ -63,6 +63,11 @@
 #ifndef GRIND_W
 #define GRIND_W 16
 #endif
+/* The grinding counter is a uint32_t, serialized as 4 bytes in the FS input
+ * and the proof: the design caps grinding at 32 bits.  Expected work is 2^W
+ * tries, so W must stay well below 32 or the honest prover may exhaust the
+ * counter space (at W=32, P[no solution in 2^32] ≈ 37%). */
+_Static_assert(GRIND_W >= 0 && GRIND_W < 30, "GRIND_W must fit the uint32 grinding counter");
 
 #if SEC_TARGET == 128
 

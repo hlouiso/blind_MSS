@@ -297,6 +297,11 @@ static int grind_nonce(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch
 int xmss_sign(const uint8_t sk_seed[32], const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t leaf_index,
               const uint8_t *message, size_t message_len, xmss_sig *out)
 {
+    /* Range guard: the tree has 2^XMSS_H leaves; a larger index would read
+     * past the level-0 array when collecting the authentication path. */
+    if (leaf_index >= (1u << XMSS_H))
+        return 0;
+
     uint8_t coords[XMSS_WOTS_LEN];
     if (!grind_nonce(pk_seed, leaf_index, message, message_len, out->nonce, coords))
         return 0;

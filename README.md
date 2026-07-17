@@ -160,6 +160,27 @@ The three parties never share secrets:
    leaf index, or the signature.
 5. **Verifier** checks the proof against `pk_seed ‖ root` and `m`.
 
+### Security contracts (caller obligations)
+
+- **Leaf state is caller-owned.** XMSS is a *stateful* signature and this
+  library keeps no record of used leaves: the signer MUST use each
+  `leaf_index` at most once over the key's lifetime, across restarts
+  (persist a monotonic counter before releasing a signature).  With W = 2,
+  reusing a leaf on two messages enables a ~2^36 existential forgery (see
+  `xmss.h`).  The key is exhausted after 2^10 = 1024 signatures.
+- **`m_hat = Th("KKWmhat", m)` is a protocol step, not a convention.** The
+  proof binds the 32-byte digest `m_hat`, so the collision resistance of the
+  `m → m_hat` map is what binds the *message*; all parties must derive it
+  with this fixed call (`shared.h`).
+- **Trust anchors travel out of band.** `kkw_verify` takes `pk_seed`,
+  `pubout = root ‖ target_sum` and `m_hat` as arguments and the proof never
+  carries them: they must reach the verifier over an authenticated channel.
+- **Commitment hiding vs. binding.** The HM commitment is statistically
+  *hiding*; its *binding* (what protects the signer) is computational, at the
+  128-bit level of the Th collision/preimage assumptions.  The signer signs
+  `d = Th("HMd", com)` without validating `com`; a malformed `com` is
+  harmless only because the KKW circuit recomputes `com` from the opening.
+
 ## References
 
 - [KKW: Improved Non-Interactive Zero Knowledge with Applications to Post-Quantum Signatures — CCS 2018](https://eprint.iacr.org/2018/475)
