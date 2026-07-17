@@ -17,7 +17,6 @@
 #include "../xmss.h"
 
 #include <openssl/rand.h>
-#include <openssl/sha.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

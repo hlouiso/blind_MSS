@@ -1,8 +1,8 @@
 #ifndef SHARED_H
 #define SHARED_H
 
+#include "blake3.h"
 #include "xmss.h"
-#include <openssl/sha.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -438,14 +438,38 @@ int kkw_fs_seed(const unsigned char h_pre[32], uint32_t ctr,
 void kkw_fs_expand(const unsigned char seed_FS[32],
                    int C_out[NUM_ROUNDS], int p_out[NUM_ROUNDS]);
 
-/* ── SHA-256 / commitment helpers ───────────────────────────────────────── */
+/* ── KKW-layer hashing: BLAKE3 Th domains ────────────────────────────────────
+ * Since the full-BLAKE3 migration (KKW9) every KKW-layer hash is the tweakable
+ * hash Th (blake3.h) under one of the fixed ASCII domains below, so the whole
+ * scheme rests on a single hash assumption (the BLAKE3 compression function).
+ * Domain rules (frozen by test_blake3): pairwise distinct, never 16 bytes long
+ * (the WOTS chain-step domain is a witness-chosen 16-byte node), and distinct
+ * from the XMSS (16/20/21 B) and HM ("HMy"/"HMd", 3 B) call-site families —
+ * all tags here are 5..9 bytes. */
+#define KKW_DOM_PPCOM  "KKWppcom"  /* per-party preproc commitment: party‖seed[‖aux] */
+#define KKW_DOM_HJ     "KKWhj"     /* per-instance commitment h_j = Th(com_0..com_{N-1}) */
+#define KKW_DOM_HPRIME "KKWhprime" /* h'_j = Th(d ‖ s_0..s_{N-1} ‖ r_j)         */
+#define KKW_DOM_HOUT   "KKWhout"   /* h_out_j = Th(yp[0..N-1])                  */
+#define KKW_DOM_HSTAR1 "KKWhstar1" /* Th over the M-entry h_j table             */
+#define KKW_DOM_HSTAR2 "KKWhstar2" /* Th over the M-entry h'_j table            */
+#define KKW_DOM_HSTAR3 "KKWhstar3" /* Th over the M-entry h_out_j table         */
+#define KKW_DOM_HSTAR  "KKWhstar"  /* h* = Th(H1 ‖ H2 ‖ H3)                     */
+#define KKW_DOM_FS     "KKWfs"     /* Fiat–Shamir prefix h_pre                  */
+#define KKW_DOM_GRIND  "KKWgrind"  /* seed_FS = Th(h_pre ‖ ctr), grinding target */
+#define KKW_DOM_PRG    "KKWprg"    /* challenge-expansion PRG fill              */
+#define KKW_DOM_MHAT   "KKWmhat"   /* public message digest m̂ = Th(m)           */
 
-/** Single-shot SHA-256. Returns 1 on success. */
-int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32]);
+/* One-shot / incremental Th under a KKW_DOM_* string literal, 32-byte output.
+ * The "" forces a literal so sizeof gives the tag length. */
+#define KKW_TH(dom, data, len, out32) \
+    blake3_th((const uint8_t *)"" dom, sizeof(dom) - 1, \
+              (const uint8_t *)(data), (len), (out32), 32)
+#define KKW_TH_INIT(ctx, dom) \
+    blake3_th_init((ctx), (const uint8_t *)"" dom, sizeof(dom) - 1)
 
 /* ── KKW online-transcript helpers ─────────────────────────────────────── */
 
-/* h'_j = H(d || s_all || r_j) where d is the masked witness (INPUT_LEN bytes),
+/* h'_j = Th("KKWhprime", d || s_all || r_j) where d is the masked witness (INPUT_LEN bytes),
  * s_all is N×ySize uint32_t (s_all[i*ySize + g] = party i's broadcast s_i[g])
  * and r_j is the 32-byte per-instance commitment randomiser.  r_j MUST be
  * independent randomness — never derived from seed*_j, which is published for

@@ -13,7 +13,6 @@
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
-#include <openssl/sha.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -241,8 +240,8 @@ static void test_preproc_smoke(void)
         /* yp (output-mask shares) must be witness-independent too: this is
          * what lets the verifier recompute h_out_j from seed* alone. */
         unsigned char h_out_ref[32];
-        sha256_once((const unsigned char *)ref_a.yp,
-                    N_PARTIES * 8 * sizeof(uint32_t), h_out_ref);
+        KKW_TH(KKW_DOM_HOUT, ref_a.yp,
+               (size_t)N_PARTIES * 8 * sizeof(uint32_t), h_out_ref);
         CHECK(memcmp(h_out1, h_out_ref, 32) == 0,
               "compute_aux_from_seeds h_out == h_out of a real-witness run");
         for (int p = 0; p < N_PARTIES; p++) { free(lam[p]); free(tp[p]); }

@@ -71,31 +71,62 @@ static void load_words_le(const uint8_t *bytes, size_t len, uint32_t *w, int nwo
     }
 }
 
+void blake3_th_init(blake3_th_ctx *ctx, const uint8_t *domain, size_t domain_len)
+{
+    ctx->buflen = 0;
+    ctx->poisoned = (domain_len > 28);
+    if (ctx->poisoned) { memset(ctx->cv, 0, sizeof ctx->cv); return; }
+    load_words_le(domain, domain_len, ctx->cv, 8);
+    ctx->cv[7] = (uint32_t)domain_len; /* binds the domain length (see blake3.h) */
+}
+
+void blake3_th_update(blake3_th_ctx *ctx, const void *data, size_t len)
+{
+    const uint8_t *p = data;
+    if (ctx->poisoned || !p || len == 0) return;
+    while (len > 0) {
+        /* A full pending block is compressed only once MORE data arrives, so
+         * the final block (which takes the ROOT flag) always sits in buf. */
+        if (ctx->buflen == 64) {
+            uint32_t m[16];
+            load_words_le(ctx->buf, 64, m, 16);
+            blake3_compress(ctx->cv, m, 0, 64, 0, ctx->cv);
+            ctx->buflen = 0;
+        }
+        size_t take = 64 - ctx->buflen;
+        if (take > len) take = len;
+        memcpy(ctx->buf + ctx->buflen, p, take);
+        ctx->buflen += take;
+        p += take;
+        len -= take;
+    }
+}
+
+void blake3_th_final(blake3_th_ctx *ctx, uint8_t *out, size_t out_len)
+{
+    if (ctx->poisoned) { memset(out, 0, out_len); return; }
+    /* Last block = the pending buffer; empty data yields one empty block,
+     * matching the one-shot's "nblocks >= 1" rule. */
+    uint32_t m[16];
+    load_words_le(ctx->buf, ctx->buflen, m, 16);
+    blake3_compress(ctx->cv, m, 0, (uint32_t)ctx->buflen, BLAKE3_ROOT, ctx->cv);
+
+    uint8_t full[32];
+    for (int i = 0; i < 8; i++) {
+        full[i*4+0] = (uint8_t)(ctx->cv[i]);
+        full[i*4+1] = (uint8_t)(ctx->cv[i] >> 8);
+        full[i*4+2] = (uint8_t)(ctx->cv[i] >> 16);
+        full[i*4+3] = (uint8_t)(ctx->cv[i] >> 24);
+    }
+    memcpy(out, full, out_len);
+}
+
 void blake3_th(const uint8_t *domain, size_t domain_len,
                const uint8_t *data, size_t data_len,
                uint8_t *out, size_t out_len)
 {
-    if (domain_len > 28) { memset(out, 0, out_len); return; }
-    uint32_t cv[8];
-    load_words_le(domain, domain_len, cv, 8);
-    cv[7] = (uint32_t)domain_len;   /* binds the domain length (see blake3.h) */
-
-    size_t nblocks = data_len ? (data_len + 63) / 64 : 1;
-    for (size_t b = 0; b < nblocks; b++) {
-        size_t off = b * 64;
-        size_t blen = (data_len - off > 64) ? 64 : data_len - off;
-        uint32_t m[16];
-        load_words_le(data ? data + off : NULL, data ? blen : 0, m, 16);
-        blake3_compress(cv, m, 0, (uint32_t)blen,
-                        (b + 1 == nblocks) ? BLAKE3_ROOT : 0, cv);
-    }
-
-    uint8_t full[32];
-    for (int i = 0; i < 8; i++) {
-        full[i*4+0] = (uint8_t)(cv[i]);
-        full[i*4+1] = (uint8_t)(cv[i] >> 8);
-        full[i*4+2] = (uint8_t)(cv[i] >> 16);
-        full[i*4+3] = (uint8_t)(cv[i] >> 24);
-    }
-    memcpy(out, full, out_len);
+    blake3_th_ctx ctx;
+    blake3_th_init(&ctx, domain, domain_len);
+    blake3_th_update(&ctx, data, data_len);
+    blake3_th_final(&ctx, out, out_len);
 }

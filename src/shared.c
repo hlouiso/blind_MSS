@@ -2,7 +2,6 @@
 #include "circuits.h"
 
 #include <openssl/evp.h>
-#include <openssl/sha.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -68,20 +67,15 @@ void expand_xshare(const unsigned char seed[SEED_SIZE], unsigned char *xshare_ou
 void preproc_com_party(int party, const unsigned char seed[SEED_SIZE],
                         const uint32_t *aux, unsigned char com_out[32])
 {
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) { memset(com_out, 0, 32); return; }
-    unsigned int outl = 0;
+    blake3_th_ctx ctx;
     unsigned char pbyte = (unsigned char)party;
-    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, "ppcom", 5) == 1 &&
-             EVP_DigestUpdate(ctx, &pbyte, 1) == 1 &&
-             EVP_DigestUpdate(ctx, seed, SEED_SIZE) == 1;
+    KKW_TH_INIT(&ctx, KKW_DOM_PPCOM);
+    blake3_th_update(&ctx, &pbyte, 1);
+    blake3_th_update(&ctx, seed, SEED_SIZE);
     /* Party 0 holds aux; including it in the commitment binds aux to this seed. */
     if (party == 0 && aux != NULL)
-        ok = ok && EVP_DigestUpdate(ctx, aux, (size_t)ySize * sizeof(uint32_t)) == 1;
-    ok = ok && EVP_DigestFinal_ex(ctx, com_out, &outl) == 1;
-    EVP_MD_CTX_free(ctx);
-    if (!ok) memset(com_out, 0, 32);
+        blake3_th_update(&ctx, aux, (size_t)ySize * sizeof(uint32_t));
+    blake3_th_final(&ctx, com_out, 32);
 }
 
 void preproc_commit_instance(unsigned char seeds[N_PARTIES][SEED_SIZE],
@@ -90,16 +84,7 @@ void preproc_commit_instance(unsigned char seeds[N_PARTIES][SEED_SIZE],
     unsigned char coms[N_PARTIES][32];
     for (int i = 0; i < N_PARTIES; i++)
         preproc_com_party(i, seeds[i], aux, coms[i]);
-
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) { memset(h_j_out, 0, 32); return; }
-    unsigned int outl = 0;
-    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1;
-    for (int i = 0; i < N_PARTIES && ok; i++)
-        ok = EVP_DigestUpdate(ctx, coms[i], 32) == 1;
-    ok = ok && EVP_DigestFinal_ex(ctx, h_j_out, &outl) == 1;
-    EVP_MD_CTX_free(ctx);
-    if (!ok) memset(h_j_out, 0, 32);
+    KKW_TH(KKW_DOM_HJ, coms, (size_t)N_PARTIES * 32, h_j_out);
 }
 
 void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE],
@@ -137,8 +122,8 @@ void compute_aux_from_seeds(unsigned char seeds[N_PARTIES][SEED_SIZE],
     building_views(&dummy_a, zero_m, zero_pk, d0, lam, tapes, aux_out, NULL,
                    NULL, zh_dummy);
     if (h_out32)
-        sha256_once((const unsigned char *)dummy_a.yp,
-                    N_PARTIES * 8 * sizeof(uint32_t), h_out32);
+        KKW_TH(KKW_DOM_HOUT, dummy_a.yp,
+               (size_t)N_PARTIES * 8 * sizeof(uint32_t), h_out32);
 
     free(d0);
     for (int p = 0; p < N_PARTIES; p++) { free(tapes[p]); free(lam[p]); }
@@ -161,7 +146,7 @@ static void prg_fill(prg_ctx *p)
     in[33] = (unsigned char)(p->ctr >> 16);
     in[34] = (unsigned char)(p->ctr >>  8);
     in[35] = (unsigned char)(p->ctr);
-    sha256_once(in, 36, p->buf);
+    KKW_TH(KKW_DOM_PRG, in, 36, p->buf);
     p->ctr++;
     p->pos = 0;
 }
@@ -211,18 +196,13 @@ void kkw_fs_prefix(const unsigned char msg[32], const uint32_t pubout[8],
         pubout_bytes[i*4+2] = (unsigned char)(pubout[i] >>  8);
         pubout_bytes[i*4+3] = (unsigned char)(pubout[i]);
     }
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) { memset(h_pre, 0, 32); return; }
-    unsigned int outl = 0;
-    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, msg, 32) == 1 &&
-             EVP_DigestUpdate(ctx, pubout_bytes, 32) == 1 &&
-             EVP_DigestUpdate(ctx, pk_seed, XMSS_PK_SEED_BYTES) == 1 &&
-             EVP_DigestUpdate(ctx, nonce, 32) == 1 &&
-             EVP_DigestUpdate(ctx, h_star, 32) == 1 &&
-             EVP_DigestFinal_ex(ctx, h_pre, &outl) == 1;
-    EVP_MD_CTX_free(ctx);
-    if (!ok) memset(h_pre, 0, 32);
+    unsigned char in[32 + 32 + XMSS_PK_SEED_BYTES + 32 + 32];
+    memcpy(in,                              msg,          32);
+    memcpy(in + 32,                         pubout_bytes, 32);
+    memcpy(in + 64,                         pk_seed,      XMSS_PK_SEED_BYTES);
+    memcpy(in + 64 + XMSS_PK_SEED_BYTES,    nonce,        32);
+    memcpy(in + 96 + XMSS_PK_SEED_BYTES,    h_star,       32);
+    KKW_TH(KKW_DOM_FS, in, sizeof in, h_pre);
 }
 
 int kkw_fs_seed(const unsigned char h_pre[32], uint32_t ctr,
@@ -234,7 +214,7 @@ int kkw_fs_seed(const unsigned char h_pre[32], uint32_t ctr,
     in[33] = (unsigned char)(ctr >> 16);
     in[34] = (unsigned char)(ctr >>  8);
     in[35] = (unsigned char)(ctr);
-    if (!sha256_once(in, 36, seed_FS)) { memset(seed_FS, 0, 32); return 0; }
+    KKW_TH(KKW_DOM_GRIND, in, 36, seed_FS);
     /* Grinding predicate: the GRIND_W trailing bits of seed_FS are zero. */
     for (int b = 0; b < GRIND_W; b++)
         if ((seed_FS[31 - b/8] >> (b % 8)) & 1) return 0;
@@ -275,40 +255,21 @@ void kkw_fs_expand(const unsigned char seed_FS[32],
     }
 }
 
-/* ── SHA-256 helpers ────────────────────────────────────────────────────── */
-
-int sha256_once(const unsigned char *in, size_t inlen, unsigned char out32[32])
-{
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) return 0;
-    unsigned int outl = 0;
-    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, in, inlen) == 1 &&
-             EVP_DigestFinal_ex(ctx, out32, &outl) == 1;
-    EVP_MD_CTX_free(ctx);
-    return ok;
-}
-
 /* ── KKW online-transcript helpers ─────────────────────────────────────── */
 
 void compute_h_prime(const unsigned char *d_pub, const uint32_t *s_all,
                      const unsigned char r_j[32],
                      unsigned char h_prime[32])
 {
-    /* h'_j = H(d || s_0 || … || s_{N-1} || r_j): binds the masked witness and
+    /* h'_j = Th(d || s_0 || … || s_{N-1} || r_j): binds the masked witness and
      * every party's broadcast stream (s_all[i*ySize + g] = s_i[g]).  r_j
      * blinds the hash for unopened instances (revealed only for j ∈ C). */
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) { memset(h_prime, 0, 32); return; }
-    unsigned int outl = 0;
-    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, d_pub, (size_t)INPUT_LEN) == 1 &&
-             EVP_DigestUpdate(ctx, s_all,
-                              (size_t)N_PARTIES * ySize * sizeof(uint32_t)) == 1 &&
-             EVP_DigestUpdate(ctx, r_j, 32) == 1 &&
-             EVP_DigestFinal_ex(ctx, h_prime, &outl) == 1;
-    EVP_MD_CTX_free(ctx);
-    if (!ok) memset(h_prime, 0, 32);
+    blake3_th_ctx ctx;
+    KKW_TH_INIT(&ctx, KKW_DOM_HPRIME);
+    blake3_th_update(&ctx, d_pub, (size_t)INPUT_LEN);
+    blake3_th_update(&ctx, s_all, (size_t)N_PARTIES * ySize * sizeof(uint32_t));
+    blake3_th_update(&ctx, r_j, 32);
+    blake3_th_final(&ctx, h_prime, 32);
 }
 
 void compute_msgs_e(int e, const uint32_t *s_all, uint32_t *msgs_e_out)
@@ -324,23 +285,18 @@ void recompute_h_prime_verify(int e, const unsigned char *d_pub,
                                unsigned char h_prime_out[32])
 {
     /* Reconstruct the prover's (d || s streams || r_j) in party order, hash. */
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) { memset(h_prime_out, 0, 32); return; }
-    unsigned int outl = 0;
-    int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-             EVP_DigestUpdate(ctx, d_pub, (size_t)INPUT_LEN) == 1;
-    for (int p = 0; p < N_PARTIES && ok; p++) {
+    blake3_th_ctx ctx;
+    KKW_TH_INIT(&ctx, KKW_DOM_HPRIME);
+    blake3_th_update(&ctx, d_pub, (size_t)INPUT_LEN);
+    for (int p = 0; p < N_PARTIES; p++) {
         if (p == e) {
-            ok = EVP_DigestUpdate(ctx, msgs_e,
-                                  (size_t)ySize * sizeof(uint32_t)) == 1;
+            blake3_th_update(&ctx, msgs_e, (size_t)ySize * sizeof(uint32_t));
         } else {
             int slot = (p < e) ? p : p - 1;
-            ok = EVP_DigestUpdate(ctx, s_slots + (size_t)slot * ySize,
-                                  (size_t)ySize * sizeof(uint32_t)) == 1;
+            blake3_th_update(&ctx, s_slots + (size_t)slot * ySize,
+                             (size_t)ySize * sizeof(uint32_t));
         }
     }
-    ok = ok && EVP_DigestUpdate(ctx, r_j, 32) == 1;
-    ok = ok && EVP_DigestFinal_ex(ctx, h_prime_out, &outl) == 1;
-    EVP_MD_CTX_free(ctx);
-    if (!ok) memset(h_prime_out, 0, 32);
+    blake3_th_update(&ctx, r_j, 32);
+    blake3_th_final(&ctx, h_prime_out, 32);
 }

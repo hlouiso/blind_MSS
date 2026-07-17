@@ -58,4 +58,20 @@ void blake3_th(const uint8_t *domain, size_t domain_len,
                const uint8_t *data, size_t data_len,
                uint8_t *out, size_t out_len);
 
+/* Incremental Th over the same construction: init, update(s), final produces
+ * exactly the bytes of the one-shot blake3_th on the concatenated updates
+ * (blake3_th itself is implemented on top of this context).  Needed by the
+ * KKW layer, whose h'_j preimage (d ‖ s_0..s_{N-1} ‖ r_j) is scattered and
+ * several MB long. */
+typedef struct {
+    uint32_t cv[8];
+    uint8_t buf[64];   /* pending partial block */
+    size_t buflen;     /* bytes pending in buf, 0..64 */
+    int poisoned;      /* domain_len > 28: output zeros, like the one-shot */
+} blake3_th_ctx;
+
+void blake3_th_init(blake3_th_ctx *ctx, const uint8_t *domain, size_t domain_len);
+void blake3_th_update(blake3_th_ctx *ctx, const void *data, size_t len);
+void blake3_th_final(blake3_th_ctx *ctx, uint8_t *out, size_t out_len);
+
 #endif /* BLAKE3_H */

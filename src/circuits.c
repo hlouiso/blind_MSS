@@ -7,7 +7,6 @@
 #include "xmss.h"
 
 #include <omp.h>
-#include <openssl/sha.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>

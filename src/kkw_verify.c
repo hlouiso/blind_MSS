@@ -2,7 +2,6 @@
 #include "circuits.h"
 #include "shared.h"
 
-#include <openssl/evp.h>
 #include <omp.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -21,7 +20,7 @@ int kkw_verify(FILE *proof,
         if (fread(magic, 4, 1, proof) != 1 || fread(hdr, sizeof(hdr), 1, proof) != 1) {
             fprintf(stderr, "kkw_verify: read error (header)\n"); return -1;
         }
-        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='8') {
+        if (magic[0]!='K'||magic[1]!='K'||magic[2]!='W'||magic[3]!='9') {
             fprintf(stderr, "kkw_verify: bad magic\n"); return -1;
         }
         if (hdr[0]!=(uint32_t)N_PARTIES || hdr[1]!=(uint32_t)M_KKW ||
@@ -204,21 +203,13 @@ int kkw_verify(FILE *proof,
             }
         }
 
-        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-        if (ctx) {
-            unsigned int outl = 0;
-            EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-            for (int p = 0; p < N_PARTIES; p++) EVP_DigestUpdate(ctx, coms[p], 32);
-            EVP_DigestFinal_ex(ctx, h_j_all[C_out[k]], &outl);
-            EVP_MD_CTX_free(ctx);
-        } else {
-#pragma omp atomic write
-            online_error = true;
-        }
+        /* h_j = Th over the N reassembled party commitments (same domain as
+         * the prover's preproc_commit_instance). */
+        KKW_TH(KKW_DOM_HJ, coms, (size_t)N_PARTIES * 32, h_j_all[C_out[k]]);
         /* as[k]->h_prime holds the h'_j recomputed by verify() above. */
         memcpy(h_prime_all[C_out[k]], as[k]->h_prime, 32);
-        sha256_once((const unsigned char *)as[k]->yp,
-                    N_PARTIES * 8 * sizeof(uint32_t), h_out_all[C_out[k]]);
+        KKW_TH(KKW_DOM_HOUT, as[k]->yp,
+               (size_t)N_PARTIES * 8 * sizeof(uint32_t), h_out_all[C_out[k]]);
 
 #pragma omp atomic
         round_ctr++;
@@ -246,25 +237,17 @@ int kkw_verify(FILE *proof,
 
     /* ── Final h* check ─────────────────────────────────────────────────── */
     {
+        /* Byte-for-byte mirror of the prover's h* block (kkw_prove.c): the
+         * three M×32 tables are contiguous — one-shot Th each. */
         unsigned char h_check[32], h_prime_check[32], h_out_check[32], h_star_check[32];
-        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-        if (!ctx) { fprintf(stderr, "kkw_verify: OOM\n"); goto free_and_fail; }
-        unsigned int outl = 0;
-        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-        for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_j_all[j], 32);
-        EVP_DigestFinal_ex(ctx, h_check, &outl);
-        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-        for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_prime_all[j], 32);
-        EVP_DigestFinal_ex(ctx, h_prime_check, &outl);
-        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-        for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_out_all[j], 32);
-        EVP_DigestFinal_ex(ctx, h_out_check, &outl);
-        EVP_MD_CTX_free(ctx);
+        KKW_TH(KKW_DOM_HSTAR1, h_j_all,     (size_t)M_KKW * 32, h_check);
+        KKW_TH(KKW_DOM_HSTAR2, h_prime_all, (size_t)M_KKW * 32, h_prime_check);
+        KKW_TH(KKW_DOM_HSTAR3, h_out_all,   (size_t)M_KKW * 32, h_out_check);
         unsigned char in96[96];
         memcpy(in96,      h_check,       32);
         memcpy(in96 + 32, h_prime_check, 32);
         memcpy(in96 + 64, h_out_check,   32);
-        sha256_once(in96, 96, h_star_check);
+        KKW_TH(KKW_DOM_HSTAR, in96, 96, h_star_check);
         if (memcmp(h_star_check, h_star, 32) != 0) {
             fprintf(stderr, "kkw_verify: h* mismatch\n"); goto free_and_fail;
         }

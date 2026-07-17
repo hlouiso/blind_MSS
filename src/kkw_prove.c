@@ -3,7 +3,6 @@
 #include "commitment.h"
 #include "shared.h"
 
-#include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <omp.h>
 #include <stdbool.h>
@@ -143,8 +142,8 @@ int kkw_prove(const unsigned char *input,
             }
             preproc_commit_instance(seeds_j, auxbufs[t], h_j_all[j]);
             memcpy(h_prime_all[j], a_j.h_prime, 32);
-            sha256_once((const unsigned char *)a_j.yp,
-                        N_PARTIES * 8 * sizeof(uint32_t), h_out_all[j]);
+            KKW_TH(KKW_DOM_HOUT, a_j.yp,
+                   (size_t)N_PARTIES * 8 * sizeof(uint32_t), h_out_all[j]);
         }
 
         int ctr;
@@ -164,28 +163,20 @@ int kkw_prove(const unsigned char *input,
     }
 
     /* ── Global commitment h* ─────────────────────────────────────────────── */
-    /* h* = SHA256( H(h_j…) ‖ H(h'_j…) ‖ H(h_out_j…) )
-     * h_out_j = SHA256(yp[0..N-1]) for instance j binds all output shares,
-     * including the hidden party's yp[e], preventing adaptive forgery. */
+    /* h* = Th("KKWhstar", Th₁(h_j…) ‖ Th₂(h'_j…) ‖ Th₃(h_out_j…) )
+     * h_out_j = Th("KKWhout", yp[0..N-1]) for instance j binds all output
+     * shares, including the hidden party's yp[e], preventing adaptive forgery.
+     * The three M×32 tables are contiguous heap blocks — one-shot Th each. */
     unsigned char h_val[32], h_prime_val[32], h_out_val[32], h_star[32];
     {
-        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-        unsigned int outl = 0;
-        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-        for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_j_all[j], 32);
-        EVP_DigestFinal_ex(ctx, h_val, &outl);
-        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-        for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_prime_all[j], 32);
-        EVP_DigestFinal_ex(ctx, h_prime_val, &outl);
-        EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-        for (int j = 0; j < M_KKW; j++) EVP_DigestUpdate(ctx, h_out_all[j], 32);
-        EVP_DigestFinal_ex(ctx, h_out_val, &outl);
-        EVP_MD_CTX_free(ctx);
+        KKW_TH(KKW_DOM_HSTAR1, h_j_all,     (size_t)M_KKW * 32, h_val);
+        KKW_TH(KKW_DOM_HSTAR2, h_prime_all, (size_t)M_KKW * 32, h_prime_val);
+        KKW_TH(KKW_DOM_HSTAR3, h_out_all,   (size_t)M_KKW * 32, h_out_val);
         unsigned char in96[96];
         memcpy(in96,      h_val,       32);
         memcpy(in96 + 32, h_prime_val, 32);
         memcpy(in96 + 64, h_out_val,   32);
-        sha256_once(in96, 96, h_star);
+        KKW_TH(KKW_DOM_HSTAR, in96, 96, h_star);
     }
 
     /* ── Nonce (per-proof random salt) ──────────────────────────────────── */
@@ -200,7 +191,7 @@ int kkw_prove(const unsigned char *input,
 
     /* ── Fiat–Shamir challenge with grinding ─────────────────────────────── */
     /* Find ctr such that the challenge hash ends in GRIND_W zero bits
-     * (~2^GRIND_W single-compression hashes; ~15 ms at W=16). */
+     * (~2^GRIND_W single-compression Th hashes). */
     unsigned char h_pre[32], seed_FS[32];
     kkw_fs_prefix(m_hat, pubout, pk_seed, nonce, h_star, h_pre);
     uint32_t ctr = 0;
@@ -285,9 +276,11 @@ int kkw_prove(const unsigned char *input,
     {
         bool write_ok = true;
 
-        /* Header: magic "KKW8" + N + M + tau + ySize + GRIND_W + SEC_TARGET
-         * (uint32_t LE), then nonce, h*, and the grinding counter ctr. */
-        const unsigned char magic[4] = {'K','K','W','8'};
+        /* Header: magic "KKW9" + N + M + tau + ySize + GRIND_W + SEC_TARGET
+         * (uint32_t, native byte order), then nonce, h*, and the grinding
+         * counter ctr.  KKW9 = the full-BLAKE3 KKW layer (proofs are not
+         * compatible with the SHA-256 KKW8 format). */
+        const unsigned char magic[4] = {'K','K','W','9'};
         uint32_t hdr[6] = { (uint32_t)N_PARTIES, (uint32_t)M_KKW,
                              (uint32_t)NUM_ROUNDS, (uint32_t)ySize,
                              (uint32_t)GRIND_W, (uint32_t)SEC_TARGET };

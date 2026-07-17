@@ -177,7 +177,7 @@ static void test_domains(void)
     RAND_bytes(node, sizeof node);
     const uint32_t epoch = 0x000002A5, level = 3, idx = 0x0042;
 
-    enum { NDOM = 6 };
+    enum { NXMSS = 6, NKKW = 12, NDOM = NXMSS + NKKW };
     uint8_t dom[NDOM][32], cv[NDOM][32];
     size_t len[NDOM];
     const char *name[NDOM] = { "chain", "tree", "leaf", "message", "HMy", "HMd" };
@@ -204,6 +204,26 @@ static void test_domains(void)
     memcpy(dom[4], "HMy", 3); len[4] = 3;
     memcpy(dom[5], "HMd", 3); len[5] = 3;
 
+    /* KKW-layer tags (fixed ASCII constants, shared.h) — part of the frozen
+     * call-site rule since the full-BLAKE3 migration (KKW9). */
+    const char *kkw_tags[NKKW] = {
+        KKW_DOM_PPCOM, KKW_DOM_HJ, KKW_DOM_HPRIME, KKW_DOM_HOUT,
+        KKW_DOM_HSTAR1, KKW_DOM_HSTAR2, KKW_DOM_HSTAR3, KKW_DOM_HSTAR,
+        KKW_DOM_FS, KKW_DOM_GRIND, KKW_DOM_PRG, KKW_DOM_MHAT,
+    };
+    int kkw_len_ok = 1;
+    for (int t = 0; t < NKKW; t++) {
+        size_t l = strlen(kkw_tags[t]);
+        /* Frozen rule: never 16 bytes (the chain family's witness-chosen
+         * domain length), and within Th's 28-byte domain bound. */
+        if (l == 16 || l > 28) kkw_len_ok = 0;
+        memset(dom[NXMSS + t], 0, 32);
+        memcpy(dom[NXMSS + t], kkw_tags[t], l);
+        len[NXMSS + t] = l;
+        name[NXMSS + t] = kkw_tags[t];
+    }
+    CHECK(kkw_len_ok, "no KKW-layer tag is 16 bytes (chain family) or over 28");
+
     for (int i = 0; i < NDOM; i++) build_cv(dom[i], len[i], cv[i]);
 
     int distinct = 1;
@@ -213,7 +233,7 @@ static void test_domains(void)
                 printf("  cv collision: %s vs %s\n", name[i], name[j]);
                 distinct = 0;
             }
-    CHECK(distinct, "all six call-site cvs pairwise distinct");
+    CHECK(distinct, "all call-site cvs pairwise distinct (XMSS + HM + KKW layer)");
 
     /* Worst case for the chain family: its domain is the previous node,
      * which the WITNESS chooses (chain starts are witness bytes).  Even a
@@ -232,6 +252,33 @@ static void test_domains(void)
         }
     }
     CHECK(adv_ok, "witness-chosen chain node cannot reach another family's cv");
+}
+
+/* ── 2c. incremental Th == one-shot Th ──────────────────────────────────── */
+/* The KKW layer hashes scattered multi-MB preimages through the incremental
+ * context; the one-shot is built on the same context, but freeze the
+ * equivalence across block-boundary lengths and arbitrary split points. */
+static void test_incremental(void)
+{
+    printf("--- Test 2c: incremental Th == one-shot Th ---\n");
+    uint8_t data[300];
+    for (size_t i = 0; i < sizeof data; i++) data[i] = (uint8_t)(i % 251);
+    const size_t lens[] = { 0, 1, 63, 64, 65, 127, 128, 130, 192, 300 };
+    int all_ok = 1;
+    for (size_t li = 0; li < sizeof lens / sizeof lens[0]; li++) {
+        size_t n = lens[li];
+        uint8_t ref[32], inc[32];
+        blake3_th((const uint8_t *)"inctest", 7, data, n, ref, 32);
+        for (size_t cut = 0; cut <= n; cut += (n > 4 ? n / 4 + 1 : 1)) {
+            blake3_th_ctx c;
+            blake3_th_init(&c, (const uint8_t *)"inctest", 7);
+            blake3_th_update(&c, data, cut);
+            blake3_th_update(&c, data + cut, n - cut);
+            blake3_th_final(&c, inc, 32);
+            if (memcmp(ref, inc, 32) != 0) all_ok = 0;
+        }
+    }
+    CHECK(all_ok, "init/update/final matches one-shot at all lengths and splits");
 }
 
 /* ── 3. MPC gadget vs native ─────────────────────────────────────────────── */
@@ -335,6 +382,7 @@ int main(void)
     test_vectors();
     test_th();
     test_domains();
+    test_incremental();
     test_mpc();
     printf("\n%s (%d failure%s)\n", failures?"FAILURES":"ALL PASS", failures, failures==1?"":"s");
     return failures ? 1 : 0;

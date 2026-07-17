@@ -14,7 +14,7 @@
  * Build:  make N=<N> bench-pipeline           (or PIPELINE_ITERS=<k> to shorten)
  *
  * Note on messages: the message length is irrelevant to every measured phase.
- * The message only feeds m_hat = SHA256(m), computed once and outside the timed
+ * The message only feeds m_hat = Th("KKWmhat", m), computed once and outside the timed
  * region; the commitment, signature, proof and verification all operate on the
  * 32-byte m_hat. We still draw a fresh random PIPELINE_MSG_LEN-byte message per
  * iteration so nothing is cached, but its size does not affect the numbers.
@@ -27,7 +27,6 @@
 #include "xmss.h"
 
 #include <openssl/rand.h>
-#include <openssl/sha.h>
 #include <omp.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -150,7 +149,7 @@ int main(void)
         /* Fresh random message (size is immaterial — see file header). */
         unsigned char msg[PIPELINE_MSG_LEN], m_hat[32];
         RAND_bytes(msg, PIPELINE_MSG_LEN);
-        SHA256(msg, PIPELINE_MSG_LEN, m_hat);
+        KKW_TH(KKW_DOM_MHAT, msg, PIPELINE_MSG_LEN, m_hat);
 
         /* Fresh secret opening (r, a) for the Halevi–Micali commitment. */
         unsigned char r[HM_R_BYTES], a_mat[HM_A_BYTES];

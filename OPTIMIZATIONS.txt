@@ -241,6 +241,29 @@ Attempted and reverted
   Gain : none (hardening); guard tests for (a)/(b) in test_blake3.
 
 --------------------------------------------------------------------------------
+13. Full-BLAKE3 KKW layer                                        (KKW9)
+--------------------------------------------------------------------------------
+  What : every remaining SHA-256 (the KKW layer: per-party/instance preproc
+         commitments, h'_j, h_out_j, h*, Fiat-Shamir prefix + grinding,
+         challenge-expansion PRG, and the public m_hat) replaced by the same
+         Th, one fixed ASCII domain per call site (KKW_DOM_* in shared.h;
+         5..9 bytes, never 16 = the witness-chosen chain-domain length).
+         The whole scheme now rests on a single hash assumption (ideal
+         BLAKE3 compression); OpenSSL keeps only AES-256-CTR (tape PRF) and
+         RAND_bytes.  Added an incremental Th context (blake3_th_init/
+         update/final) for the scattered multi-MB h'_j preimage; the
+         one-shot Th is reimplemented on top of it, so the two cannot
+         diverge.  Preimage layouts unchanged from the SHA-256 versions
+         (the old "ppcom" prefix moved into the Th domain).
+         Proof format KKW8 -> KKW9 (not compatible).
+  Safety: test_blake3 domain table extended to the 12 KKW tags (pairwise-
+         distinct cvs + adversarial chain-node check + length rule) and an
+         incremental==one-shot equivalence test; full suite re-run.
+  Gain : none targeted (uniform security story); hashing throughput moves
+         from hardware SHA-256 (SHA-NI) to scalar BLAKE3 — re-benchmark
+         before quoting numbers.
+
+--------------------------------------------------------------------------------
 Summary (N=4, i5-9300H, 8 threads)
 --------------------------------------------------------------------------------
                        baseline 875e176      after 20cf642      after 11 (BLAKE3)

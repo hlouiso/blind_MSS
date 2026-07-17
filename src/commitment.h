@@ -16,8 +16,8 @@
  *   d   = Th("HMd", com)                     (the digest the signer certifies)
  *
  * The opening is (r, a); b, y, com, d are all derived.  The 256-bit message
- * digest m̂ = SHA256(m) is public and is bound, word-for-word over its two
- * 16-byte halves, by the two affine lines.
+ * digest m̂ = Th("KKWmhat", m) (see shared.h) is public and is bound,
+ * word-for-word over its two 16-byte halves, by the two affine lines.
  */
 
 #define HM_NONCES 6                              /* n */
