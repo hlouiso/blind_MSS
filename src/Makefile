@@ -3,6 +3,7 @@
 # Override any of these on the command line, e.g. `make CC=clang-18 OPT=-O0`.
 # ---------------------------------------------------------------------------
 UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
 PKG_CONFIG ?= pkg-config
 
 # Default compiler: clang on macOS, gcc on Linux. (`?=` won't override make's
@@ -34,16 +35,17 @@ else
   OMP_LIBS = -fopenmp
 endif
 
-# OpenSSL: prefer pkg-config; fall back to Homebrew on macOS or default paths on Linux.
-OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags openssl 2>/dev/null)
-OPENSSL_LIBS   := $(shell $(PKG_CONFIG) --libs openssl 2>/dev/null)
+# OpenSSL libcrypto (RAND_bytes only): prefer pkg-config; fall back to
+# Homebrew on macOS or default paths on Linux.
+OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags libcrypto 2>/dev/null)
+OPENSSL_LIBS   := $(shell $(PKG_CONFIG) --libs libcrypto 2>/dev/null)
 ifeq ($(strip $(OPENSSL_LIBS)),)
   ifeq ($(UNAME_S),Darwin)
     OPENSSL_PREFIX := $(shell brew --prefix openssl 2>/dev/null)
     OPENSSL_CFLAGS := -I$(OPENSSL_PREFIX)/include
-    OPENSSL_LIBS   := -L$(OPENSSL_PREFIX)/lib -lssl -lcrypto
+    OPENSSL_LIBS   := -L$(OPENSSL_PREFIX)/lib -lcrypto
   else
-    OPENSSL_LIBS   := -lssl -lcrypto
+    OPENSSL_LIBS   := -lcrypto
   endif
 endif
 
@@ -77,7 +79,24 @@ LDLIBS = $(OMP_LIBS) $(OPENSSL_LIBS) -lm
 # library, `make test` builds and runs the test suite, `make bench` benchmarks.
 # ---------------------------------------------------------------------------
 LIB     = libblindmss.a
-LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o gf128.o commitment.o blake3.o kkw_prove.o kkw_verify.o
+BLAKE3_DIR = third_party/blake3
+BLAKE3_COMMON_OBJS = official_blake3.o official_blake3_dispatch.o official_blake3_portable.o
+BLAKE3_X86_OBJS = official_blake3_sse2.o official_blake3_sse41.o \
+                  official_blake3_avx2.o official_blake3_avx512.o
+BLAKE3_ARM_OBJS = official_blake3_neon.o
+BLAKE3_ALL_OBJS = $(BLAKE3_COMMON_OBJS) $(BLAKE3_X86_OBJS) $(BLAKE3_ARM_OBJS)
+BLAKE3_OBJS = $(BLAKE3_COMMON_OBJS)
+ifneq ($(filter x86_64 amd64 AMD64,$(UNAME_M)),)
+  BLAKE3_OBJS += $(BLAKE3_X86_OBJS)
+else ifneq ($(filter arm64 aarch64 AArch64,$(UNAME_M)),)
+  BLAKE3_DEFS = -DBLAKE3_USE_NEON=1
+  BLAKE3_OBJS += $(BLAKE3_ARM_OBJS)
+else
+  BLAKE3_DEFS = -DBLAKE3_USE_NEON=0 -DBLAKE3_NO_SSE2 -DBLAKE3_NO_SSE41 \
+                -DBLAKE3_NO_AVX2 -DBLAKE3_NO_AVX512
+endif
+
+LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.o gf128.o commitment.o blake3.o blake3_keyed_xof.o $(BLAKE3_OBJS) kkw_prove.o kkw_verify.o
 
 # `make` with no target builds the library (rule order below would otherwise
 # make the first object file the default goal).
@@ -89,12 +108,12 @@ LIBOBJS = xmss.o shared.o circuits.o MPC_prove_functions.o MPC_verify_functions.
 N_ACTUAL := $(if $(N),$(N),default)_w$(if $(W),$(W),default)_s$(if $(SEC),$(SEC),default)
 N_STAMP  := .n_stamp_$(N_ACTUAL)
 $(N_STAMP):
-	@rm -f .n_stamp_* $(LIBOBJS) $(LIB) bench_bin bench_pipeline_bin && touch $@
+	@rm -f .n_stamp_* $(LIBOBJS) $(BLAKE3_ALL_OBJS) $(LIB) bench_bin bench_pipeline_bin && touch $@
 $(LIBOBJS): $(N_STAMP)
 
 # Tests in tests/ (built and run by `make test`).  test_e2e exercises the full
 # keygen→blind→sign→prove→verify protocol in memory.
-TESTS = test_blake3 test_xmss test_circuit test_roundtrip test_leaf test_e2e
+TESTS = test_blake3 test_blake3_keyed_xof test_xmss test_circuit test_roundtrip test_leaf test_e2e
 
 BENCH_NS := 4 8 16 32 64
 PIPELINE_ITERS ?= 100
@@ -109,6 +128,21 @@ $(LIB): $(LIBOBJS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $<
+
+blake3_keyed_xof.o: blake3_keyed_xof.h $(BLAKE3_DIR)/blake3.h
+shared.o xmss.o: blake3_keyed_xof.h
+
+# Vendored official BLAKE3 v1.8.5. Keep its object names distinct from the
+# custom raw-compression blake3.o used by the proof circuit.
+official_%.o: $(BLAKE3_DIR)/%.c
+	$(CC) $(CFLAGS) $(BLAKE3_DEFS) $(BLAKE3_SIMD_CFLAGS) -c $< -o $@
+
+$(BLAKE3_OBJS): $(BLAKE3_DIR)/blake3.h $(BLAKE3_DIR)/blake3_impl.h
+
+official_blake3_sse2.o: BLAKE3_SIMD_CFLAGS = -msse2
+official_blake3_sse41.o: BLAKE3_SIMD_CFLAGS = -msse4.1
+official_blake3_avx2.o: BLAKE3_SIMD_CFLAGS = -mavx2
+official_blake3_avx512.o: BLAKE3_SIMD_CFLAGS = -mavx512f -mavx512vl
 
 # Build each test against the library (-I. so tests/ finds the headers) and run it.
 test: $(LIB)
@@ -143,4 +177,4 @@ bench-pipeline: bench_pipeline_bin
 # Only named build artifacts — no *.txt / *.bin globs, which would delete
 # tracked files if any lived here (see root Makefile).
 clean:
-	rm -f $(LIB) bench_bin bench_pipeline_bin *.o .n_stamp_* $(addprefix tests/,$(TESTS))
+	rm -f $(LIB) bench_bin bench_pipeline_bin $(LIBOBJS) $(BLAKE3_ALL_OBJS) .n_stamp_* $(addprefix tests/,$(TESTS))

@@ -51,7 +51,7 @@ Baseline numbers at 875e176 (before this log's changes)
          via h_j (seeds+aux), h' (all broadcasts, hence x-shares) and h_out
          (all yp shares) — exactly the KKW binding set.
   Also : error-path memory-leak fixes in kkw_prove; kkw_verify M x 32 tables
-         moved from stack to heap; proof magic bumped KKW1 -> KKW2.
+         moved from stack to heap.
   Gain : -N*32 B/round (tiny); strictly less data revealed; correctness.
 
 --------------------------------------------------------------------------------
@@ -132,7 +132,7 @@ Attempted and reverted
          params.py (tables for W in {0,16,24}; build with make W=<W>).
   Gain : N=4, W=16 (default): tau 65->57, M 218->189.
          Proof 108.8 -> 94.7 MB, prove 1.77 -> 1.61 s, PoW ~15 ms.
-         Proof format KKW3 (header carries W; ctr after h*).
+         The proof header carries W, with ctr serialized after h*.
 
 --------------------------------------------------------------------------------
 8. Masked-values online phase (original KKW formulation)      [commit 20cf642]
@@ -151,7 +151,6 @@ Attempted and reverted
          publics (masks are witness/public-independent).
   Safety: full suite at N=4 and N=8, ASan+UBSan clean; gate count unchanged;
          round-trip test checks prover/verifier masked-output agreement.
-         Proof format KKW4.
   Gain : proof 94.7 -> 57.5 MB; prove 1.61 -> 1.38 s; e2e 7.8 -> 5.5 s.
 
 --------------------------------------------------------------------------------
@@ -170,10 +169,10 @@ Attempted and reverted
          clear; seed extraction goes through the com_hidden RO queries).
   Note : r_j MUST NOT be seed-derived (seed*_j is published for opened
          instances — that would reproduce the bug).
-  Cost : +tau*32 B (~1.8 KB).  Proof format KKW4 -> KKW5.
+  Cost : +tau*32 B (~1.8 KB).
 
 --------------------------------------------------------------------------------
-10. Size-neutral cleanup: drop recomputable hashes from the wire  (KKW6)
+10. Size-neutral cleanup: drop recomputable hashes from the wire
 --------------------------------------------------------------------------------
   What : (a) online h'_j no longer travels — the verifier recomputes it from
          d, s_slots, msgs_e and r_j, and folds the recomputation into the h*
@@ -186,12 +185,12 @@ Attempted and reverted
          canonical proof encoding, no trailing-byte malleability.
          Also: make SEC=256 selects the rho=256 (post-quantum) parameter
          tables; the default rho=128 tables are a classical bound (README).
-  Gain : net -32*(M-tau) B (~4.2 KB at N=4) vs. KKW4; guard tests added
+  Gain : net -32*(M-tau) B (~4.2 KB at N=4); guard tests added
          (h_out witness-independence, prover/verifier h'_j agreement, r_j
          byte-flip rejection).
 
 --------------------------------------------------------------------------------
-11. BLAKE3 tweakable-hash migration (binius64 PR #1620)          (KKW7)
+11. BLAKE3 tweakable-hash migration (binius64 PR #1620)
 --------------------------------------------------------------------------------
   What : every in-circuit SHA-256 replaced by Th built on the raw BLAKE3
          compression function (plan: BLAKE3_MIGRATION.txt, deleted after
@@ -220,12 +219,12 @@ Attempted and reverted
             decide separately.
   Safety: test_blake3 (official vectors + Th structure + mpc gadget vs
          native for all hidden parties), full suite at N=4/N=8/SEC=256,
-         ASan+UBSan clean e2e.  Proof format KKW6 -> KKW7.
+         ASan+UBSan clean e2e.
   Gain : ySize 152504 -> 73096 (-52%).  Measured (bench_pipeline, N=4):
          proof 57.5 -> 28.8 MB, prove 1.38 -> 0.47 s, verify 0.90 -> 0.26 s.
 
 --------------------------------------------------------------------------------
-12. Th hardening + self-describing header                        (KKW8)
+12. Th hardening + self-describing header
 --------------------------------------------------------------------------------
   What : post-migration review fixes, all zero gate cost:
          (a) cv[7] = domain_len in Th — without it Th(D,l) == Th(D||0^k,l+k)
@@ -236,12 +235,12 @@ Attempted and reverted
              exploitable in-protocol but bad for RO modeling of d;
          Both diverge from PR #1620 as strict strengthenings (documented in
          blake3.h and README).  (c) SEC_TARGET added to the proof header
-         (hdr 20 -> 24 B, KKW7 -> KKW8): a SEC mismatch was already caught
-         via (M, tau) but misreported.  (d) dead mpc_ADDK/_verify removed.
+         (hdr 20 -> 24 B): a SEC mismatch was already caught via (M, tau) but
+         misreported.  (d) dead mpc_ADDK/_verify removed.
   Gain : none (hardening); guard tests for (a)/(b) in test_blake3.
 
 --------------------------------------------------------------------------------
-13. Full-BLAKE3 KKW layer                                        (KKW9)
+13. Full-BLAKE3 KKW layer
 --------------------------------------------------------------------------------
   What : every remaining SHA-256 (the KKW layer: per-party/instance preproc
          commitments, h'_j, h_out_j, h*, Fiat-Shamir prefix + grinding,
@@ -254,14 +253,34 @@ Attempted and reverted
          update/final) for the scattered multi-MB h'_j preimage; the
          one-shot Th is reimplemented on top of it, so the two cannot
          diverge.  Preimage layouts unchanged from the SHA-256 versions
-         (the old "ppcom" prefix moved into the Th domain).
-         Proof format KKW8 -> KKW9 (not compatible).
+         (the old "ppcom" prefix moved into the Th domain).  Proofs using the
+         SHA-256 KKW layer are not compatible.
   Safety: test_blake3 domain table extended to the 12 KKW tags (pairwise-
          distinct cvs + adversarial chain-node check + length rule) and an
          incremental==one-shot equivalence test; full suite re-run.
   Gain : none targeted (uniform security story); hashing throughput moves
          from hardware SHA-256 (SHA-NI) to scalar BLAKE3 — re-benchmark
          before quoting numbers.
+
+--------------------------------------------------------------------------------
+14. Official BLAKE3 keyed-XOF expansion
+--------------------------------------------------------------------------------
+  What : AES-256-CTR was removed from party-seed, MPC-tape,
+         witness-mask-share, and WOTS-secret-key expansion.  Each is now an
+         independently domain-separated keyed XOF stream from the official
+         BLAKE3 v1.8.5 C implementation.  WOTS derives all 144 chain starts
+         in one XOF call per leaf rather than constructing one cipher context
+         per chain.  The vendored build enables NEON on ARM64 and runtime-
+         dispatched SSE2/SSE4.1/AVX2/AVX-512 on x86-64; other architectures
+         retain the official portable path.  OpenSSL remains only for
+         RAND_bytes.  The layout is unchanged, but the new seed streams are
+         incompatible with AES-derived proofs.
+  Safety: official 131-byte keyed-XOF KAT, frozen protocol-stream KATs,
+         domain/input-separation tests, WOTS leaf-separation test, and the
+         full circuit/prove/verify/e2e suite.  The four domains and framing
+         are fixed in blake3_keyed_xof.h/c.
+  Gain : removes the AES assumption and cipher setup/failure paths; proof and
+         circuit sizes are unchanged.  Runtime impact is platform-dependent.
 
 --------------------------------------------------------------------------------
 Summary (N=4, i5-9300H, 8 threads)
@@ -272,7 +291,7 @@ Summary (N=4, i5-9300H, 8 threads)
   verify               ~2 s                  0.90 s    (2.2x)    0.26 s   (7.7x)
   e2e harness*         22.4 s                5.5 s     (4.1x)
   * both measured with the double-running CHECK harness (see note above)
-  After 9+10 (KKW6): security fix, size-neutral (net -4 KB); timings unchanged.
+  After 9+10: security fix, size-neutral (net -4 KB); timings unchanged.
 
   N trade-off (W=16, BLAKE3, BENCH_ITERS=3 medians):
     N |  M  | tau | prove (s) | verify (s) | proof (MB)
@@ -302,9 +321,7 @@ Audit notes (July 2026, after the masked-values switch)
     deterministic h'_j broke ZK (see 9), and trailing proof bytes were
     accepted (fixed with 9).  h_out_j was never witness-dependent (yp holds
     seed-derived output-mask shares) and no longer travels (see 10).
-  * Known accepted limitations: raw-struct serialisation (host endianness);
-    the AES tape expander zeroes its output on EVP/alloc failure instead of
-    aborting (the hash layer is Th since 13 and cannot fail).
+  * Known accepted limitation: raw-struct serialisation (host endianness).
 
 --------------------------------------------------------------------------------
 Ideas not (yet) implemented
@@ -320,6 +337,6 @@ Ideas not (yet) implemented
     N_PARTIES loops don't shrink by zero-padding) plus a bit-exactness test
     against compute_aux_from_seeds for N in {4,8,16}.
   * GGM/one-tree seed trees (eprint 2024/490 §3): compresses seed openings,
-    which total ~11 KB of a ~29 MB proof (KKW7+, <0.04%) — not worth it for
+    which total ~11 KB of a ~29 MB proof (<0.04%) — not worth it for
     this circuit size; the same paper's grinding idea (7) was the useful one.
 ================================================================================

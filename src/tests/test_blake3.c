@@ -205,7 +205,7 @@ static void test_domains(void)
     memcpy(dom[5], "HMd", 3); len[5] = 3;
 
     /* KKW-layer tags (fixed ASCII constants, shared.h) — part of the frozen
-     * call-site rule since the full-BLAKE3 migration (KKW9). */
+     * call-site rule since the full-BLAKE3 migration. */
     const char *kkw_tags[NKKW] = {
         KKW_DOM_PPCOM, KKW_DOM_HJ, KKW_DOM_HPRIME, KKW_DOM_HOUT,
         KKW_DOM_HSTAR1, KKW_DOM_HSTAR2, KKW_DOM_HSTAR3, KKW_DOM_HSTAR,
@@ -306,12 +306,12 @@ static void test_incremental(void)
 }
 
 /* ── 2d. frozen KKW-layer KAT ───────────────────────────────────────────── */
-/* Freezes the KKW9 hash format: Th under each KKW domain over the official
+/* Freezes the KKW hash format: Th under each KKW domain over the official
  * test-vector byte pattern (i % 251, 200 bytes = 4 blocks, last partial).
  * Catches a swapped/edited domain tag or any drift in the multi-block
  * unaligned Th construction — mutations the prove/verify round-trip cannot
  * see (both sides would change together).  Vectors generated at migration
- * time from the audited implementation (equivalent to the pre-KKW9 one-shot,
+ * time from the audited implementation (equivalent to the earlier one-shot,
  * compression pinned to the official BLAKE3 vectors in test 1). */
 static void test_kkw_kat(void)
 {

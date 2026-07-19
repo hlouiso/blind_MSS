@@ -94,7 +94,7 @@ void xmss_extract_coords(const uint8_t *hash, int dimension, int res_bits, uint8
 /* ── WOTS+ chain computations ─────────────────────────────────────────────── */
 
 /* Derive the WOTS+ secret key (LEN chain starts) for one leaf, deterministically
- * from sk_seed via AES-256-CTR PRF. */
+ * from sk_seed via the BLAKE3 keyed XOF. */
 void xmss_wots_gen_sk(const uint8_t sk_seed[32], uint32_t leaf_index, xmss_node sk_out[XMSS_WOTS_LEN]);
 
 /* pk[i] = chain start hashed MAX_STEPS times (chain endpoint at position W-1).

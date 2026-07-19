@@ -1,7 +1,7 @@
 #include "shared.h"
+#include "blake3_keyed_xof.h"
 #include "circuits.h"
 
-#include <openssl/evp.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -24,42 +24,27 @@ const int TAPE_SIZE = 2 * YSIZE_GATES * 4; /* = 584 768 bytes */
 
 /* ── Tape / seed expansion ───────────────────────────────────────────────── */
 
-static void aes_ctr_expand(const unsigned char seed[SEED_SIZE],
-                            unsigned char iv_domain,
-                            unsigned char *out, size_t outlen)
-{
-    unsigned char iv[16] = {0};
-    iv[0] = iv[1] = iv[2] = iv[3] = iv_domain;
-
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) { memset(out, 0, outlen); return; }
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, seed, iv) != 1) {
-        EVP_CIPHER_CTX_free(ctx); memset(out, 0, outlen); return;
-    }
-    /* CTR keystream = encryption of zeros; one in-place update over the whole
-     * buffer keeps OpenSSL on its fast path (the previous 64-byte loop paid
-     * per-call overhead ~28k times per tape). */
-    memset(out, 0, outlen);
-    int outl = 0;
-    EVP_EncryptUpdate(ctx, out, &outl, out, (int)outlen);
-    EVP_CIPHER_CTX_free(ctx);
-}
+_Static_assert(SEED_SIZE == BLIND_MSS_BLAKE3_KEY_LEN,
+               "KKW seeds must be 256-bit BLAKE3 keys");
 
 void expand_tape(const unsigned char seed[SEED_SIZE], unsigned char *tape)
 {
-    aes_ctr_expand(seed, 0xA5, tape, (size_t)TAPE_SIZE);
+    blake3_keyed_xof(seed, BLAKE3_XOF_DOM_KKW_TAPE,
+                     NULL, 0, tape, (size_t)TAPE_SIZE);
 }
 
 void expand_seed_star(const unsigned char seed_star[SEED_SIZE],
                       unsigned char seeds_out[N_PARTIES][SEED_SIZE])
 {
-    aes_ctr_expand(seed_star, 0xB7, (unsigned char *)seeds_out,
-                   (size_t)N_PARTIES * SEED_SIZE);
+    blake3_keyed_xof(seed_star, BLAKE3_XOF_DOM_KKW_SEEDS,
+                     NULL, 0, (unsigned char *)seeds_out,
+                     (size_t)N_PARTIES * SEED_SIZE);
 }
 
 void expand_xshare(const unsigned char seed[SEED_SIZE], unsigned char *xshare_out)
 {
-    aes_ctr_expand(seed, 0xC3, xshare_out, (size_t)INPUT_LEN);
+    blake3_keyed_xof(seed, BLAKE3_XOF_DOM_KKW_XSHARE,
+                     NULL, 0, xshare_out, (size_t)INPUT_LEN);
 }
 
 /* ── Preprocessing commitment ────────────────────────────────────────────── */

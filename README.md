@@ -2,7 +2,7 @@
 
 This project implements a **blind signature** over **XMSS** (a stateful Merkle signature scheme) with **target-sum WOTS+** one-time signatures in the leaves, and a zero-knowledge proof in the **KKW / MPC-in-the-head** style (Katz-Kolesnikov-Wang 2018) to prove knowledge of a valid signature **without revealing** the secret material (the commitment opening, the leaf index, or the signature).
 
-The commitment scheme is **Halevi–Micali over GF(2¹²⁸)**, the signature is target-sum WOTS+/XMSS, and the NIZK is KKW (cut-and-choose over MPC preprocessing). All hashing — in-circuit **and** in the KKW layer (commitments, Fiat–Shamir, challenge PRG) — is a **tweakable hash Th built on the raw BLAKE3 compression function** (the construction of [binius64 PR #1620](https://github.com/binius-zk/binius64/pull/1620)), each call site under its own fixed domain (`shared.h`), so the whole scheme rests on a single hash assumption. The only remaining OpenSSL primitives are AES-256-CTR (the seed-, tape- and WOTS-sk-expansion PRF) and `RAND_bytes`.
+The commitment scheme is **Halevi–Micali over GF(2¹²⁸)**, the signature is target-sum WOTS+/XMSS, and the NIZK is KKW (cut-and-choose over MPC preprocessing). All hashing — in-circuit **and** in the KKW layer (commitments, Fiat–Shamir, challenge PRG) — is a **tweakable hash Th built on the raw BLAKE3 compression function** (the construction of [binius64 PR #1620](https://github.com/binius-zk/binius64/pull/1620)), each call site under its own fixed domain (`shared.h`). Party seeds, MPC tapes, witness-mask shares, and WOTS secret keys are expanded with the official optimized **BLAKE3 keyed XOF**, under separate protocol domains (`blake3_keyed_xof.h`). Thus the whole scheme rests on BLAKE3 rather than a separate AES assumption; the only remaining OpenSSL primitive is `RAND_bytes`.
 
 > ⚠️ This code is for research/education. Do not use in production.
 
@@ -48,6 +48,9 @@ Signature scheme (`xmss.h`), following the Binius64 BLAKE3 instantiation:
   PR: `domain_len` is bound into the chaining value (structural domain
   separation across lengths) and the final compression carries the `ROOT`
   flag (`Th` is not length-extendable).
+- WOTS secret chain starts are generated in one official BLAKE3 keyed-XOF
+  expansion per leaf, keyed by `sk_seed` and domain-separated from every KKW
+  expansion. This is full BLAKE3 tree/XOF mode, distinct from `Th` above.
 
 Halevi–Micali commitment (`commitment.h`):
 - `HM_NONCES = 6`, `HM_LINES = 2`, field `GF(2¹²⁸)` — structure as in the Longfellow-based instantiation, hashes moved to `Th("HMy", ·)` / `Th("HMd", ·)`.
@@ -136,7 +139,7 @@ are the API. The full flow is shown in [`src/tests/test_e2e.c`](src/tests/test_e
 
 The proof is a byte stream (a `FILE *`, e.g. an on-disk file or `tmpfile()`), so
 it can be stored or sent over a wire between the client and the verifier. Its
-format is `"KKW9"` magic (4 B) + header (N, M, τ, ySize, W, SEC as uint32_t, 24 B) +
+format is `"KKWP"` magic (4 B) + header (N, M, τ, ySize, W, SEC as uint32_t, 24 B) +
 nonce (32 B) + h\* (32 B) + grinding counter `ctr` (4 B) +
 offline section ((M−τ) × 64 B: seed\*_j + h'_j) + online section (τ rounds:
 com_hidden, the `yp` output-mask shares, N−1 seeds, the masked witness `d`,
@@ -187,4 +190,4 @@ The three parties never share secrets:
 - [Picnic: Post-Quantum Zero-Knowledge and Signatures from Symmetric-Key Primitives — CCS 2017](https://eprint.iacr.org/2017/279)
 - [XMSS — RFC 8391](https://datatracker.ietf.org/doc/html/rfc8391) (this target-sum BLAKE3 variant is not RFC 8391)
 - [binius64 PR #1620 — BLAKE3 tweakable-hash XMSS verifier](https://github.com/binius-zk/binius64/pull/1620) (the Th construction followed here)
-- [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) (only the raw compression function is used)
+- [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) (raw compression for `Th`; official keyed XOF for pseudorandom expansion)

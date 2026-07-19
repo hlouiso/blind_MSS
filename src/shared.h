@@ -374,14 +374,14 @@ typedef struct
 
 /* ── Tape / seed expansion ──────────────────────────────────────────────── */
 
-/** AES-256-CTR: seed → TAPE_SIZE bytes of Beaver triple data (IV domain 0xA5). */
+/** BLAKE3 keyed XOF: seed → TAPE_SIZE bytes of Beaver triple data. */
 void expand_tape(const unsigned char seed[SEED_SIZE], unsigned char *tape);
 
-/** AES-256-CTR: master seed seed* → N_PARTIES party seeds (IV domain 0xB7). */
+/** BLAKE3 keyed XOF: master seed seed* → N_PARTIES party seeds. */
 void expand_seed_star(const unsigned char seed_star[SEED_SIZE],
                       unsigned char seeds_out[N_PARTIES][SEED_SIZE]);
 
-/** AES-256-CTR: party seed → INPUT_LEN bytes of x_share (IV domain 0xC3). */
+/** BLAKE3 keyed XOF: party seed → INPUT_LEN bytes of x_share. */
 void expand_xshare(const unsigned char seed[SEED_SIZE], unsigned char *xshare_out);
 
 /* ── Preprocessing commitment ───────────────────────────────────────────── */
@@ -444,7 +444,7 @@ void kkw_fs_expand(const unsigned char seed_FS[32],
                    int C_out[NUM_ROUNDS], int p_out[NUM_ROUNDS]);
 
 /* ── KKW-layer hashing: BLAKE3 Th domains ────────────────────────────────────
- * Since the full-BLAKE3 migration (KKW9) every KKW-layer hash is the tweakable
+ * Since the full-BLAKE3 migration every KKW-layer hash is the tweakable
  * hash Th (blake3.h) under one of the fixed ASCII domains below, so the whole
  * scheme rests on a single hash assumption (the BLAKE3 compression function).
  * Domain rules (frozen by test_blake3): pairwise distinct, never 16 bytes long

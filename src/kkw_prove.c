@@ -276,11 +276,10 @@ int kkw_prove(const unsigned char *input,
     {
         bool write_ok = true;
 
-        /* Header: magic "KKW9" + N + M + tau + ySize + GRIND_W + SEC_TARGET
-         * (uint32_t, native byte order), then nonce, h*, and the grinding
-         * counter ctr.  KKW9 = the full-BLAKE3 KKW layer (proofs are not
-         * compatible with the SHA-256 KKW8 format). */
-        const unsigned char magic[4] = {'K','K','W','9'};
+        /* Header: non-versioned magic "KKWP" + N + M + tau + ySize +
+         * GRIND_W + SEC_TARGET (uint32_t, native byte order), then nonce,
+         * h*, and the grinding counter ctr. */
+        const unsigned char magic[4] = {'K','K','W','P'};
         uint32_t hdr[6] = { (uint32_t)N_PARTIES, (uint32_t)M_KKW,
                              (uint32_t)NUM_ROUNDS, (uint32_t)ySize,
                              (uint32_t)GRIND_W, (uint32_t)SEC_TARGET };

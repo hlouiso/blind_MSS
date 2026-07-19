@@ -1,7 +1,4 @@
-/* Standalone self-test for the native target-sum WOTS+/XMSS module.
- * Build:  clang -O2 -Wall -Wextra -I/opt/homebrew/opt/openssl/include \
- *            xmss.c test_xmss.c -L/opt/homebrew/opt/openssl/lib -lcrypto -o test_xmss
- */
+/* Self-test for the native target-sum WOTS+/XMSS module (`make test`). */
 #include "xmss.h"
 
 #include <openssl/rand.h>
@@ -38,6 +35,18 @@ int main(void)
     for (int i = 0; i < XMSS_NODE_BYTES; i++)
         nonzero |= root1[i];
     CHECK(nonzero != 0, "root is non-zero");
+
+    /* --- deterministic, leaf-separated WOTS secret-key expansion --- */
+    {
+        xmss_node sk_a[XMSS_WOTS_LEN], sk_b[XMSS_WOTS_LEN], sk_c[XMSS_WOTS_LEN];
+        xmss_wots_gen_sk(sk_seed, 7, sk_a);
+        xmss_wots_gen_sk(sk_seed, 7, sk_b);
+        xmss_wots_gen_sk(sk_seed, 8, sk_c);
+        CHECK(memcmp(sk_a, sk_b, sizeof sk_a) == 0,
+              "WOTS secret-key expansion is deterministic");
+        CHECK(memcmp(sk_a, sk_c, sizeof sk_a) != 0,
+              "WOTS secret-key expansion separates leaf indices");
+    }
 
     /* --- WOTS+ chain consistency: pk_from_sig(sign(sk,c),c) == pk_from_sk(sk) --- */
     {
