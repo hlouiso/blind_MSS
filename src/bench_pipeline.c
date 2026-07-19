@@ -23,10 +23,11 @@
 #include "commitment.h"
 #include "kkw_prove.h"
 #include "kkw_verify.h"
+#include "randombytes.h"
 #include "shared.h"
 #include "xmss.h"
 
-#include <openssl/rand.h>
+#include <errno.h>
 #include <omp.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -43,6 +44,14 @@
 #ifndef PIPELINE_MSG_LEN
 #define PIPELINE_MSG_LEN 10000   /* 10 kB; size is immaterial to the measured phases */
 #endif
+
+static void random_or_die(void *buffer, size_t length)
+{
+    if (!randombytes_fill(buffer, length)) {
+        fprintf(stderr, "OS random generator failed: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+}
 
 /* ── timing helpers ─────────────────────────────────────────────────────── */
 
@@ -130,8 +139,8 @@ int main(void)
 
     /* One key pair for the whole run (key generation is setup, not measured). */
     unsigned char sk_seed[32], pk_seed[XMSS_PK_SEED_BYTES];
-    RAND_bytes(sk_seed, 32);
-    RAND_bytes(pk_seed, XMSS_PK_SEED_BYTES);
+    random_or_die(sk_seed, 32);
+    random_or_die(pk_seed, XMSS_PK_SEED_BYTES);
     xmss_node root;
     xmss_compute_root(sk_seed, pk_seed, root);
 
@@ -148,13 +157,13 @@ int main(void)
 
         /* Fresh random message (size is immaterial — see file header). */
         unsigned char msg[PIPELINE_MSG_LEN], m_hat[32];
-        RAND_bytes(msg, PIPELINE_MSG_LEN);
+        random_or_die(msg, PIPELINE_MSG_LEN);
         KKW_TH(KKW_DOM_MHAT, msg, PIPELINE_MSG_LEN, m_hat);
 
         /* Fresh secret opening (r, a) for the Halevi–Micali commitment. */
         unsigned char r[HM_R_BYTES], a_mat[HM_A_BYTES];
-        RAND_bytes(r, sizeof r);
-        RAND_bytes(a_mat, sizeof a_mat);
+        random_or_die(r, sizeof r);
+        random_or_die(a_mat, sizeof a_mat);
 
         /* ── Phase 1: commitment building ── */
         unsigned char com[HM_COM_BYTES], d[32];

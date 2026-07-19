@@ -8,7 +8,7 @@
 #include "../xmss.h"
 #include "../commitment.h"
 
-#include <openssl/rand.h>
+#include "test_rng.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -22,13 +22,13 @@ static void run_leaf(uint32_t leaf)
 {
     printf("--- leaf_index = %u (0x%X) ---\n", leaf, leaf);
     unsigned char sk_seed[32], pk_seed[XMSS_PK_SEED_BYTES];
-    RAND_bytes(sk_seed, 32);
-    RAND_bytes(pk_seed, XMSS_PK_SEED_BYTES);
+    test_random_bytes(sk_seed, 32);
+    test_random_bytes(pk_seed, XMSS_PK_SEED_BYTES);
     xmss_node root;
     xmss_compute_root(sk_seed, pk_seed, root);
 
     unsigned char m_hat[32], r[HM_R_BYTES], a_mat[HM_A_BYTES];
-    RAND_bytes(m_hat, 32); RAND_bytes(r, sizeof r); RAND_bytes(a_mat, sizeof a_mat);
+    test_random_bytes(m_hat, 32); test_random_bytes(r, sizeof r); test_random_bytes(a_mat, sizeof a_mat);
     unsigned char com[HM_COM_BYTES], d[32];
     hm_commit(m_hat, r, a_mat, com, d);
 
@@ -57,7 +57,7 @@ static void run_leaf(uint32_t leaf)
     pubout[YP_SUM_WORD] = XMSS_TARGET_SUM;
 
     /* One masked-values instance. */
-    unsigned char seed_star[SEED_SIZE]; RAND_bytes(seed_star, SEED_SIZE);
+    unsigned char seed_star[SEED_SIZE]; test_random_bytes(seed_star, SEED_SIZE);
     unsigned char seeds[N_PARTIES][SEED_SIZE];
     expand_seed_star(seed_star, seeds);
     unsigned char *lam[N_PARTIES], *tapes[N_PARTIES];
@@ -72,7 +72,7 @@ static void run_leaf(uint32_t leaf)
 
     uint32_t *aux = malloc((size_t)ySize*sizeof(uint32_t));
     uint32_t *s_all = malloc((size_t)N_PARTIES*ySize*sizeof(uint32_t));
-    unsigned char r_j[32]; RAND_bytes(r_j, 32);
+    unsigned char r_j[32]; test_random_bytes(r_j, 32);
     a A; uint32_t zh[8];
     building_views(&A, m_hat, pk_seed, d_pub, lam, tapes, aux, s_all, r_j, zh);
 

@@ -1,5 +1,5 @@
 #include "MPC_verify_functions.h"
-#include "blake3.h"
+#include "blake3_th.h"
 #include "shared.h"
 
 #include <stdint.h>
@@ -202,4 +202,3 @@ void mpc_blake3_th_verify(const unsigned char *dom_pub,
             out_lam[j][i] = (unsigned char)(cv[i / 4].l[j] >> (8 * (i % 4)));
     }
 }
-

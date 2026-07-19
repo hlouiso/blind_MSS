@@ -3,18 +3,14 @@
  * witness, and confirms the reconstructed output (root | codeword sum)
  * matches the native values.  Also prints the gate count for sizing ySize.
  *
- * Build from src/:
- *   gcc -O2 -Wall -Wextra -Wno-array-parameter \
- *     circuits.c MPC_prove_functions.c MPC_verify_functions.c \
- *     shared.c xmss.c commitment.c gf128.c tests/test_circuit.c \
- *     -lssl -lcrypto -o test_circuit
+ * Build from the repository root with `make test` or CMake's `check` target.
  */
 #include "../circuits.h"
 #include "../shared.h"
 #include "../xmss.h"
 #include "../commitment.h"
 
-#include <openssl/rand.h>
+#include "test_rng.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,16 +20,16 @@ int main(void)
 {
     ASSERT_LIB_PARAMS();
     unsigned char sk_seed[32], pk_seed[XMSS_PK_SEED_BYTES];
-    RAND_bytes(sk_seed, sizeof sk_seed);
-    RAND_bytes(pk_seed, sizeof pk_seed);
+    test_random_bytes(sk_seed, sizeof sk_seed);
+    test_random_bytes(pk_seed, sizeof pk_seed);
 
     xmss_node root;
     xmss_compute_root(sk_seed, pk_seed, root);
 
     unsigned char m_hat[32], r[HM_R_BYTES], a_mat[HM_A_BYTES];
-    RAND_bytes(m_hat, sizeof m_hat);
-    RAND_bytes(r, sizeof r);
-    RAND_bytes(a_mat, sizeof a_mat);
+    test_random_bytes(m_hat, sizeof m_hat);
+    test_random_bytes(r, sizeof r);
+    test_random_bytes(a_mat, sizeof a_mat);
 
     unsigned char com[HM_COM_BYTES], d[32];
     hm_commit(m_hat, r, a_mat, com, d);
@@ -59,7 +55,7 @@ int main(void)
 
     /* Masked-values instance: seed-derived mask shares + public masked witness. */
     unsigned char seeds[N_PARTIES][SEED_SIZE];
-    RAND_bytes(seeds[0], N_PARTIES * SEED_SIZE);
+    test_random_bytes(seeds[0], N_PARTIES * SEED_SIZE);
     unsigned char *lam[N_PARTIES], *tapes[N_PARTIES];
     for (int p = 0; p < N_PARTIES; p++) {
         lam[p]   = malloc(INPUT_LEN);
@@ -81,7 +77,7 @@ int main(void)
     if (!aux || !s_all) { printf("FAIL: OOM\n"); return 1; }
 
     unsigned char r_j[32];
-    RAND_bytes(r_j, 32);
+    test_random_bytes(r_j, 32);
     a A;
     uint32_t zh[8];
     building_views(&A, m_hat, pk_seed, d_pub, lam, tapes, aux, s_all, r_j, zh);

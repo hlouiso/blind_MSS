@@ -1,7 +1,7 @@
 #ifndef SHARED_H
 #define SHARED_H
 
-#include "blake3.h"
+#include "blake3_th.h"
 #include "xmss.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -445,7 +445,7 @@ void kkw_fs_expand(const unsigned char seed_FS[32],
 
 /* ── KKW-layer hashing: BLAKE3 Th domains ────────────────────────────────────
  * Since the full-BLAKE3 migration every KKW-layer hash is the tweakable
- * hash Th (blake3.h) under one of the fixed ASCII domains below, so the whole
+ * hash Th (blake3_th.h) under one of the fixed ASCII domains below, so the whole
  * scheme rests on a single hash assumption (the BLAKE3 compression function).
  * Domain rules (frozen by test_blake3): pairwise distinct, never 16 bytes long
  * (the WOTS chain-step domain is a witness-chosen 16-byte node), and distinct

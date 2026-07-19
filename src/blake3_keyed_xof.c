@@ -1,5 +1,5 @@
 #include "blake3_keyed_xof.h"
-#include "third_party/blake3/blake3.h"
+#include <blake3.h>
 
 #include <assert.h>
 #include <string.h>

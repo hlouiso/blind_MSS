@@ -9,13 +9,13 @@
  * 3. mpc_blake3_th (prove path) against the native blake3_th on random
  *    masked inputs, and the verify path for every hidden party e.
  */
-#include "../blake3.h"
+#include "../blake3_th.h"
 #include "../shared.h"
 #include "../xmss.h"
 #include "../MPC_prove_functions.h"
 #include "../MPC_verify_functions.h"
 
-#include <openssl/rand.h>
+#include "test_rng.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,7 +82,7 @@ static void test_th(void)
 {
     printf("--- Test 2: blake3_th structure ---\n");
     uint8_t a[32], b[32], data[130];
-    RAND_bytes(data, sizeof data);
+    test_random_bytes(data, sizeof data);
 
     blake3_th((const uint8_t *)"dom1", 4, data, 100, a, 32);
     blake3_th((const uint8_t *)"dom1", 4, data, 100, b, 32);
@@ -108,7 +108,7 @@ static void test_th(void)
      * chaining state, so Th(dom, data||E) cannot be computed from Th(dom,
      * data) — recompressing the output must not match. */
     uint8_t ext[64];
-    RAND_bytes(ext, 64);
+    test_random_bytes(ext, 64);
     blake3_th((const uint8_t *)"dom1", 4, data, 64, a, 32);      /* aligned */
     uint8_t cat[128];
     memcpy(cat, data, 64); memcpy(cat + 64, ext, 64);
@@ -133,7 +133,7 @@ static void test_th(void)
     /* Chain step = Th(domain=prev, data=23-byte tweak): one compression
      * with cv = prev || 0-pad, cv[7] = 16, ROOT flag (single block). */
     uint8_t prev[16], tweak[23], cv_bytes[32];
-    RAND_bytes(prev, 16); RAND_bytes(tweak, 23);
+    test_random_bytes(prev, 16); test_random_bytes(tweak, 23);
     blake3_th(prev, 16, tweak, 23, a, 16);
     uint32_t cv[8], m[16] = {0};
     memset(cv_bytes, 0, 32); memcpy(cv_bytes, prev, 16);
@@ -173,8 +173,8 @@ static void test_domains(void)
 
     /* One fixed parameter set; family separation must not depend on values. */
     uint8_t pk_seed[XMSS_PK_SEED_BYTES], node[16];
-    RAND_bytes(pk_seed, sizeof pk_seed);
-    RAND_bytes(node, sizeof node);
+    test_random_bytes(pk_seed, sizeof pk_seed);
+    test_random_bytes(node, sizeof node);
     const uint32_t epoch = 0x000002A5, level = 3, idx = 0x0042;
 
     enum { NXMSS = 6, NKKW = 12, NDOM = NXMSS + NKKW };
@@ -360,11 +360,11 @@ static void test_mpc(void)
     /* Random masked instance: secret data, mixed public/secret domain. */
     const int dom_len = 21, data_len = 100;
     uint8_t dom[21], data[100], want[32];
-    RAND_bytes(dom, dom_len); RAND_bytes(data, data_len);
+    test_random_bytes(dom, dom_len); test_random_bytes(data, data_len);
     blake3_th(dom, dom_len, data, data_len, want, 32);
 
     unsigned char seed_star[SEED_SIZE];
-    RAND_bytes(seed_star, SEED_SIZE);
+    test_random_bytes(seed_star, SEED_SIZE);
     unsigned char seeds[N_PARTIES][SEED_SIZE];
     expand_seed_star(seed_star, seeds);
     unsigned char *tapes[N_PARTIES], *lamb[N_PARTIES];

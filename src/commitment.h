@@ -6,7 +6,7 @@
 /*
  * Halevi–Micali statistically-hiding commitment over GF(2^128).  Structure as
  * in https://github.com/diegode/blind-longfellow; since the BLAKE3 migration
- * the two hashes are the BLAKE3 tweakable hash Th (blake3.h) with fixed
+ * the two hashes are the BLAKE3 tweakable hash Th (blake3_th.h) with fixed
  * domains "HMy"/"HMd", so the byte formats are no longer identical.
  *
  *   y   = Th("HMy", r_1 || ... || r_6)       (hashes the n=6 nonces ONLY)

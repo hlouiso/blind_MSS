@@ -1,7 +1,7 @@
 /* Self-test for the native target-sum WOTS+/XMSS module (`make test`). */
 #include "xmss.h"
 
-#include <openssl/rand.h>
+#include "test_rng.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -22,8 +22,8 @@ int main(void)
 {
     uint8_t sk_seed[32];
     uint8_t pk_seed[XMSS_PK_SEED_BYTES];
-    RAND_bytes(sk_seed, sizeof sk_seed);
-    RAND_bytes(pk_seed, sizeof pk_seed);
+    test_random_bytes(sk_seed, sizeof sk_seed);
+    test_random_bytes(pk_seed, sizeof pk_seed);
 
     /* --- determinism of keygen --- */
     xmss_node root1, root2;
@@ -57,7 +57,7 @@ int main(void)
         for (int i = 0; i < XMSS_WOTS_LEN; i++)
         {
             uint8_t r;
-            RAND_bytes(&r, 1);
+            test_random_bytes(&r, 1);
             coords[i] = r & (uint8_t)(XMSS_WOTS_W - 1);
         }
         xmss_wots_sign(pk_seed, epoch, sk, coords, sig);
@@ -72,7 +72,7 @@ int main(void)
     for (size_t t = 0; t < sizeof leaves / sizeof leaves[0]; t++)
     {
         uint8_t msg[32];
-        RAND_bytes(msg, sizeof msg);
+        test_random_bytes(msg, sizeof msg);
         xmss_sig sig;
         int ok = xmss_sign(sk_seed, pk_seed, leaves[t], msg, sizeof msg, &sig);
         if (!ok)
@@ -99,7 +99,7 @@ int main(void)
     /* --- negative tests --- */
     {
         uint8_t msg[32];
-        RAND_bytes(msg, sizeof msg);
+        test_random_bytes(msg, sizeof msg);
         xmss_sig sig;
         if (!xmss_sign(sk_seed, pk_seed, 42, msg, sizeof msg, &sig))
         {

@@ -1,5 +1,5 @@
-#ifndef BLAKE3_H
-#define BLAKE3_H
+#ifndef BLIND_MSS_BLAKE3_TH_H
+#define BLIND_MSS_BLAKE3_TH_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -74,4 +74,4 @@ void blake3_th_init(blake3_th_ctx *ctx, const uint8_t *domain, size_t domain_len
 void blake3_th_update(blake3_th_ctx *ctx, const void *data, size_t len);
 void blake3_th_final(blake3_th_ctx *ctx, uint8_t *out, size_t out_len);
 
-#endif /* BLAKE3_H */
+#endif /* BLIND_MSS_BLAKE3_TH_H */

@@ -67,14 +67,14 @@ void mpc_ADD(const mw *x, const mw *y, mw *z,
 
 /* N-party BLAKE3 compression: out = first half of the output state.
  * cv/m are masked words; counter=0; block_len and flags are public
- * constants (Th usage, see blake3.h).  336 nonlinear gates
+ * constants (Th usage, see blake3_th.h).  336 nonlinear gates
  * (7 rounds x 8 G x 6 ADD). */
 void mpc_blake3_compress(const mw cv[8], const mw m[16], uint32_t block_len,
                          uint32_t flags, mw out[8],
                          unsigned char *tapes[N_PARTIES], uint32_t *aux,
                          uint32_t *s_all, int *gateCount);
 
-/* N-party tweakable hash Th(domain, data) — see blake3.h for the mode
+/* N-party tweakable hash Th(domain, data) — see blake3_th.h for the mode
  * (cv[7] = dom_len, ROOT flag on the final compression).
  * dom/data are masked byte buffers (little-endian word packing); a NULL
  * lam array means all-zero mask shares (fully public bytes).

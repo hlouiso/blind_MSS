@@ -1,8 +1,8 @@
 #include "xmss.h"
-#include "blake3.h"
+#include "blake3_th.h"
 #include "blake3_keyed_xof.h"
+#include "randombytes.h"
 
-#include <openssl/rand.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -251,7 +251,7 @@ static int grind_nonce(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch
     for (uint32_t attempt = 0; attempt < (1u << 20); attempt++)
     {
         uint8_t nonce[XMSS_NONCE_LEN];
-        if (RAND_bytes(nonce, XMSS_NONCE_LEN) != 1)
+        if (!randombytes_fill(nonce, sizeof nonce))
             return 0;
         uint8_t mh[32];
         xmss_hash_message(pk_seed, epoch, nonce, XMSS_NONCE_LEN, message, message_len, mh);

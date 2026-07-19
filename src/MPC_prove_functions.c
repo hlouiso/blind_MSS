@@ -1,5 +1,5 @@
 #include "MPC_prove_functions.h"
-#include "blake3.h"
+#include "blake3_th.h"
 #include "shared.h"
 
 #include <stdint.h>
@@ -168,7 +168,7 @@ void mpc_blake3_th(const unsigned char *dom_pub, unsigned char *dom_lam[N_PARTIE
                    uint32_t *s_all, int *gateCount)
 {
     /* cv <- domain, zero-padded to 32 bytes; cv[7] binds dom_len (<= 28,
-     * so word 7 of the loaded domain is always zero — see blake3.h). */
+     * so word 7 of the loaded domain is always zero — see blake3_th.h). */
     mw cv[8];
     for (int w = 0; w < 8; w++) {
         cv[w].h = b3_le_word(dom_pub, dom_len, w * 4);
@@ -199,4 +199,3 @@ void mpc_blake3_th(const unsigned char *dom_pub, unsigned char *dom_lam[N_PARTIE
             out_lam[p][i] = (unsigned char)(cv[i / 4].l[p] >> (8 * (i % 4)));
     }
 }
-

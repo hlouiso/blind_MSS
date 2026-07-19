@@ -1,5 +1,5 @@
 #include "commitment.h"
-#include "blake3.h"
+#include "blake3_th.h"
 #include "gf128.h"
 
 #include <string.h>

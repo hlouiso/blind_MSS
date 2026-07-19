@@ -1,5 +1,5 @@
 #include "blake3_keyed_xof.h"
-#include "third_party/blake3/blake3.h"
+#include <blake3.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -43,7 +43,7 @@ static void test_official_keyed_xof_vector(void)
     CHECK(memcmp(got, expected, sizeof got) == 0,
           "official BLAKE3 keyed-XOF vector (empty input, 131 bytes)");
     CHECK(strcmp(blake3_version(), "1.8.5") == 0,
-          "vendored BLAKE3 version is pinned to 1.8.5");
+          "upstream BLAKE3 version is pinned to 1.8.5");
 }
 
 static void test_protocol_framing(void)

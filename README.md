@@ -2,16 +2,17 @@
 
 This project implements a **blind signature** over **XMSS** (a stateful Merkle signature scheme) with **target-sum WOTS+** one-time signatures in the leaves, and a zero-knowledge proof in the **KKW / MPC-in-the-head** style (Katz-Kolesnikov-Wang 2018) to prove knowledge of a valid signature **without revealing** the secret material (the commitment opening, the leaf index, or the signature).
 
-The commitment scheme is **Halevi–Micali over GF(2¹²⁸)**, the signature is target-sum WOTS+/XMSS, and the NIZK is KKW (cut-and-choose over MPC preprocessing). All hashing — in-circuit **and** in the KKW layer (commitments, Fiat–Shamir, challenge PRG) — is a **tweakable hash Th built on the raw BLAKE3 compression function** (the construction of [binius64 PR #1620](https://github.com/binius-zk/binius64/pull/1620)), each call site under its own fixed domain (`shared.h`). Party seeds, MPC tapes, witness-mask shares, and WOTS secret keys are expanded with the official optimized **BLAKE3 keyed XOF**, under separate protocol domains (`blake3_keyed_xof.h`). Thus the whole scheme rests on BLAKE3 rather than a separate AES assumption; the only remaining OpenSSL primitive is `RAND_bytes`.
+The commitment scheme is **Halevi–Micali over GF(2¹²⁸)**, the signature is target-sum WOTS+/XMSS, and the NIZK is KKW (cut-and-choose over MPC preprocessing). All hashing — in-circuit **and** in the KKW layer (commitments, Fiat–Shamir, challenge PRG) — is a **tweakable hash Th built on the raw BLAKE3 compression function** (the construction of [binius64 PR #1620](https://github.com/binius-zk/binius64/pull/1620)), each call site under its own fixed domain (`shared.h`). Party seeds, MPC tapes, witness-mask shares, and WOTS secret keys are expanded with the official optimized **BLAKE3 keyed XOF**, under separate protocol domains (`blake3_keyed_xof.h`).
 
 > ⚠️ This code is for research/education. Do not use in production.
 
 ## Build & test
 
 Requirements:
-- A C compiler (GCC/Clang) with OpenMP support
-- OpenSSL **libcrypto**
-- `make`
+- CMake ≥ 3.18 and a C/C++ compiler toolchain (GCC/Clang, including an assembler)
+- OpenMP (`libomp` on macOS)
+- macOS 10.12+, or Linux kernel 3.17+ with glibc 2.25+
+- Git/network access for the first BLAKE3 fetch
 
 ```bash
 make          # build the static library libblindmss.a (default N=4)
@@ -21,6 +22,21 @@ make test     # build and run the test suite
 make bench    # benchmark all N values
 make clean    # remove build products
 ```
+
+The Makefile is a compatibility wrapper around CMake. The equivalent direct
+configuration is:
+
+```bash
+cmake -S . -B build/default \
+  -DBLIND_MSS_N=4 -DBLIND_MSS_GRIND_W=16 -DBLIND_MSS_SEC=128
+cmake --build build/default --target check --parallel
+```
+
+CMake fetches the official BLAKE3 1.8.5 C implementation at the pinned commit
+`93a431c78a52d7ccf0f366f106467f5070e6075e`. For an offline build, provide an
+existing checkout with
+`-DFETCHCONTENT_SOURCE_DIR_BLAKE3=/path/to/BLAKE3`. Production randomness comes
+from the operating system through `getentropy`; OpenSSL is not required.
 
 The project builds a single static library, `libblindmss.a`. The programs in
 `src/tests/` link against it; [`test_e2e`](src/tests/test_e2e.c) runs the whole
@@ -36,7 +52,7 @@ Signature scheme (`xmss.h`), following the Binius64 BLAKE3 instantiation:
 - `XMSS_NODE_BYTES = 16` — every internal node is a Th output truncated to 128 bits
 - `XMSS_PK_SEED_BYTES = 16`, `XMSS_NONCE_LEN = 6`
 - All hashing is the BLAKE3-compression tweakable hash `Th(domain, data)`
-  (`blake3.h`), SPHINCS+-style keyed/tweaked: domain separators `0x00` chain,
+  (`blake3_th.h`), SPHINCS+-style keyed/tweaked: domain separators `0x00` chain,
   `0x01` tree, `0x02` message, `0x03` leaf/pk. This is **not** BLAKE3-the-hash:
   no tree mode, so outputs do not match BLAKE3 digests, and the byte formats
   are no longer compatible with the SHA-256 blind-longfellow instantiation.

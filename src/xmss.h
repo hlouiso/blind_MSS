@@ -3,7 +3,7 @@
 
 /*
  * Native (host-side) target-sum WOTS+ / XMSS.  All hashing is the BLAKE3
- * tweakable hash Th (blake3.h) — the construction of binius-zk/binius64
+ * tweakable hash Th (blake3_th.h) — the construction of binius-zk/binius64
  * PR #1620 — with SPHINCS+-style domain separation; every internal node is a
  * Th output truncated to 16 bytes (128-bit).  This is NOT byte-compatible
  * with the SHA-256 blind-longfellow instantiation any more: the security
@@ -11,12 +11,12 @@
  * (+ eprint 2025/055 framework)", under the assumption that the BLAKE3
  * compression function is ideal.
  *
- * Th call layouts (Th(domain -> cv, data -> 64-byte blocks), blake3.h):
+ * Th call layouts (Th(domain -> cv, data -> 64-byte blocks), blake3_th.h):
  *   message    : dom = pk_seed(16)||0x02||epoch(4 BE)   data = nonce(6)||msg
  *   chain step : dom = in(16)                           data = pk_seed(16)||0x00||epoch(4 BE)||chain_idx(1)||pos(1)
  *   tree node  : dom = pk_seed(16)||0x01||level(1)||index(2 LE)   data = left(16)||right(16)
  *   leaf (pk)  : dom = pk_seed(16)||0x03||epoch(4 BE)   data = pk_hash[0..LEN-1]
- * Domain separation is two-layered (see blake3.h): Th binds domain_len into
+ * Domain separation is two-layered (see blake3_th.h): Th binds domain_len into
  * cv[7], separating families of different lengths (chain 16 B, tree 20 B,
  * message/leaf 21 B, HM 3 B) even where domain bytes are zero; the separator
  * byte at offset 16 separates equal-length families — 0x03 vs 0x02 is what
