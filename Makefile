@@ -18,7 +18,8 @@ CMAKE_CONFIGURE = $(CMAKE) -S . -B $(BUILD_DIR) \
 	-DBLIND_MSS_PIPELINE_ITERS=$(PIPELINE_ITERS) \
 	$(CMAKE_ARGS)
 
-.PHONY: all lib test bench bench-bin bench-pipeline configure clean help _bench-build
+.PHONY: all lib test bench bench-bin bench_bin bench-pipeline \
+	bench-pipeline-bin bench_pipeline_bin configure clean help _bench-build
 
 all: lib
 
@@ -34,7 +35,7 @@ test: configure
 _bench-build: configure
 	$(CMAKE) --build $(BUILD_DIR) --target bench_bin --parallel
 
-bench-bin: _bench-build
+bench-bin bench_bin: _bench-build
 
 # Run the full benchmark for the historical N = 4,8,16,32,64 matrix.
 bench:
@@ -45,8 +46,10 @@ bench:
 		build/n$$n-w$(W)-sec$(SEC)/bench_bin; \
 	done
 
-bench-pipeline: configure
+bench-pipeline-bin bench_pipeline_bin: configure
 	$(CMAKE) --build $(BUILD_DIR) --target bench_pipeline_bin --parallel
+
+bench-pipeline: bench-pipeline-bin
 	$(BUILD_DIR)/bench_pipeline_bin
 
 clean:
@@ -60,6 +63,7 @@ help:
 	@echo "  test            Build and run the regression suite"
 	@echo "  bench           Benchmark N = 4,8,16,32,64"
 	@echo "  bench-bin       Build one benchmark executable"
+	@echo "  bench-pipeline-bin  Build the pipeline benchmark executable"
 	@echo "  bench-pipeline  Run the full-pipeline benchmark"
 	@echo "  clean           Remove the CMake build tree"
 	@echo

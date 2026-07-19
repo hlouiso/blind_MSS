@@ -23,20 +23,7 @@ make bench    # benchmark all N values
 make clean    # remove build products
 ```
 
-The Makefile is a compatibility wrapper around CMake. The equivalent direct
-configuration is:
-
-```bash
-cmake -S . -B build/default \
-  -DBLIND_MSS_N=4 -DBLIND_MSS_GRIND_W=16 -DBLIND_MSS_SEC=128
-cmake --build build/default --target check --parallel
-```
-
-CMake fetches the official BLAKE3 1.8.5 C implementation at the pinned commit
-`93a431c78a52d7ccf0f366f106467f5070e6075e`. For an offline build, provide an
-existing checkout with
-`-DFETCHCONTENT_SOURCE_DIR_BLAKE3=/path/to/BLAKE3`. Production randomness comes
-from the operating system through `getentropy`; OpenSSL is not required.
+The Makefile is a compatibility wrapper around CMake.
 
 The project builds a single static library, `libblindmss.a`. The programs in
 `src/tests/` link against it; [`test_e2e`](src/tests/test_e2e.c) runs the whole
