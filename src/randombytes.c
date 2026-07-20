@@ -10,8 +10,9 @@
 #error "blind-mss randombytes supports macOS and Linux"
 #endif
 
-/* POSIX getentropy() accepts at most 256 bytes per call. Keeping that limit
- * here also gives Linux getrandom()'s small-request, all-bytes semantics. */
+/* getentropy() (a BSD/glibc extension, not POSIX) accepts at most 256 bytes
+ * per call. Keeping that limit here also gives Linux getrandom()'s
+ * small-request, all-bytes semantics. */
 #define BLIND_MSS_GETENTROPY_MAX 256u
 
 int randombytes_fill(void *buffer, size_t length)

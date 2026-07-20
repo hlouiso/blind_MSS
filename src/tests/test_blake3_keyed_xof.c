@@ -49,7 +49,7 @@ static void test_official_keyed_xof_vector(void)
 static void test_protocol_framing(void)
 {
     uint8_t key[32], a[256], b[256], c[256], d[256], e[256];
-    uint8_t expected_a[32], expected_d[32];
+    uint8_t expected_a[32], expected_c[32], expected_d[32], expected_e[32];
     const uint8_t input_a[4] = {0, 0, 0, 7};
     const uint8_t input_b[4] = {0, 0, 0, 8};
     for (size_t i = 0; i < sizeof key; i++) key[i] = (uint8_t)i;
@@ -75,6 +75,16 @@ static void test_protocol_framing(void)
                   expected_d, sizeof expected_d) &&
           memcmp(d, expected_d, sizeof expected_d) == 0,
           "XMSS WOTS expansion matches the frozen protocol vector");
+    CHECK(hex2bin("ff41afeb9f91916ce4e17c1443cb343e"
+                  "9c2f63f2e39e61f2f3844a45dedf44d0",
+                  expected_c, sizeof expected_c) &&
+          memcmp(c, expected_c, sizeof expected_c) == 0,
+          "KKW witness-mask expansion matches the frozen protocol vector");
+    CHECK(hex2bin("2dee42a38feac242bd503d30ba3e632a"
+                  "b4415bcd0ef84504b932de9da5727f9d",
+                  expected_e, sizeof expected_e) &&
+          memcmp(e, expected_e, sizeof expected_e) == 0,
+          "KKW party-seed expansion matches the frozen protocol vector");
 
     CHECK(memcmp(a, b, sizeof a) == 0, "protocol XOF is deterministic");
     CHECK(memcmp(a, c, sizeof a) != 0, "KKW expansion domains are separated");

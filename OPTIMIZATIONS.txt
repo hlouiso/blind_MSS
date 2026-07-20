@@ -1,0 +1,224 @@
+================================================================================
+ blind_MSS — Optimization log
+ Baseline: commit 875e176 (July 2026), N=4 unless stated.
+ NO PERFORMANCE FIGURES HERE.  All timings, proof sizes and speedups are
+ reported in the paper only — never in this repo.  This log records WHAT was
+ changed and WHY (commit refs + structural parameters), not how fast it is.
+================================================================================
+
+--------------------------------------------------------------------------------
+0. Pre-baseline optimizations (from the git history, before this log)
+--------------------------------------------------------------------------------
+  0.a ZKBoo -> KKW migration                                   [30202b6]
+      N becomes a parameter; rounds drop to tau = ceil(128/log2 N)+1.  The
+      foundational proof-size decision.
+  0.b OpenMP parallelisation                          [537d389, 3a3c261]
+      Prove pass 1/2 and the verifier (offline check + online rounds) use all
+      cores, per-thread aux buffers.
+  0.c Strict minimum M                                [25937bf, c040084]
+      Exact KKW soundness formula (params.py): smallest M per (N, tau).
+  0.d Proof-content trimming                          [2e606e9, decf48f]
+      Per-party broadcast pairs replace a global broadcast copy; hidden yp_e
+      duplicate removed.
+  0.e Offline-verify fast path                                [3378c32]
+      aux recomputed from tapes, skipping the per-instance circuit re-run
+      (later reshaped by 8).
+  0.f Library + in-memory pipeline                            [d34ce7c]
+      File-passing CLI binaries replaced by libblindmss.a + an in-memory test
+      suite.
+  (ZKBoo-era wins before 0.a are omitted: the KKW migration superseded them.)
+
+  Harness note: until the fix in "Audit notes", the e2e test double-ran
+  prove/verify via a double-evaluating CHECK macro (protocol unaffected).
+
+--------------------------------------------------------------------------------
+1. Remove redundant per-party H_com from the proof              [075d776]  KKW2
+--------------------------------------------------------------------------------
+  The per-round h[N][32] field was written and checked but never bound into h*
+  before the challenge, so it added no soundness (binding is already complete
+  via h_j, h', h_out).  Removed.  Also: error-path leak fixes; M x 32 tables
+  moved stack->heap.  Less data revealed; -N*32 B/round.
+
+--------------------------------------------------------------------------------
+2. Vectorised MPC gates (SUPERSEDED by 8)                       [be4850e]
+--------------------------------------------------------------------------------
+  mpc_ADD packed 4 parties per vector_size(16) lane (portable SSE/NEON).
+  Dropped by 8's masked-values rewrite (now scalar loops + -O3
+  auto-vectorisation); no net regression.
+
+--------------------------------------------------------------------------------
+3. Build flags                                                  [be4850e]
+--------------------------------------------------------------------------------
+  -O2 -> -O3; -march=native on Linux.  Enabler for 2.
+
+--------------------------------------------------------------------------------
+4. Single-shot AES-CTR tape expansion (SUPERSEDED by 14)        [729721d]
+--------------------------------------------------------------------------------
+  Replaced a 64-byte chunk loop (~28k EVP calls/tape) with one in-place update,
+  same keystream.  (AES itself removed in 14.)
+
+--------------------------------------------------------------------------------
+5. Per-thread scratch reuse in kkw_prove                        [918987f]
+--------------------------------------------------------------------------------
+  Pass-1 instances malloc/freed large scratch each (heavy allocator churn);
+  buffers now allocated once per OpenMP thread and reused.  Removes per-instance
+  OOM paths.
+
+--------------------------------------------------------------------------------
+6. Word-parallel mpc_ADD (no per-bit carry loop on prove)       [c4ade15]
+--------------------------------------------------------------------------------
+  Two facts kill the 31-bit loop: (a) the global carry word = (xg+yg)^xg^yg;
+  (b) each party's carry word is the prefix-XOR of its whole-word AND outputs
+  (5 shift/XOR pairs).  Verify keeps a 31-step scalar recurrence (it lacks the
+  hidden party) but per-slot work is word-parallel.  Transcript bit-identical.
+
+--------------------------------------------------------------------------------
+7. Grinding / proof-of-work on the Fiat-Shamir challenge        [a79a24e]  KKW3
+--------------------------------------------------------------------------------
+  FAESTER-style (eprint 2024/490 §4): the challenge hash must end in GRIND_W
+  zero bits (found by a counter ctr; ctr ships in the proof).  Every forger
+  pays 2^W/attempt, so the cut-and-choose target relaxes to 2^-(128-W), total
+  cost still 2^128.  tau = ceil((128-W)/log2 N)+1; M from params.py
+  (W in {0,16,24}).  Example N=4, W=16: tau 65->57, M 218->189.
+
+--------------------------------------------------------------------------------
+8. Masked-values online phase (original KKW formulation)        [20cf642]  KKW4
+--------------------------------------------------------------------------------
+  Every wire carries a PUBLIC masked value plus the parties' XOR-shares of the
+  mask.  Linear gates are public; each nonlinear gate broadcasts ONE word/party
+  instead of two Beaver openings.  Per gate the proof carries s_e + aux (aux
+  absent in the ~1/N rounds where party 0 is hidden, bound by com_{j,0}); the
+  masked witness d = w^lambda_w travels once/round; tapes shrink to 2
+  words/gate.  aux depends on the mask flow, so offline verify re-runs the
+  circuit with zero publics.  ASan+UBSan clean, gate count unchanged.
+
+--------------------------------------------------------------------------------
+9. Commitment randomiser r_j restored (KKW Fig. 2)              [73f91b5]  KKW5
+--------------------------------------------------------------------------------
+  h'_j = H(d || s_all) was a DETERMINISTIC commitment to the witness for opened
+  instances (seed*_j is published) -> an offline guess-and-check oracle on w:
+  the NIZK was NOT zero-knowledge.  KKW §3.1 drop r_j (fine when w is a
+  high-entropy key); a blind signature's distinguisher is the SIGNER, who knows
+  sigma/leaf/d, so only the HM opening retains entropy.  Restoring
+  h'_j = H(d || s_all || r_j), r_j revealed only for online rounds, gives a real
+  ZK simulator.  r_j MUST NOT be seed-derived (seed*_j is public).  +tau*32 B.
+
+--------------------------------------------------------------------------------
+10. Size-neutral cleanup: drop recomputable hashes from the wire        KKW6
+--------------------------------------------------------------------------------
+  (a) online h'_j no longer travels -> verifier recomputes it from d, s_slots,
+      msgs_e, r_j and folds it into the h* check (-tau*32 B, pays for 9).
+  (b) offline h_out_j no longer travels -> yp holds seed-derived output-mask
+      shares, recomputed in the zero-publics run (offline record 96 -> 64 B).
+  (c) verifier requires EOF after the online section -> canonical encoding, no
+      trailing-byte malleability.
+  Also: make SEC=256 selects the rho=256 (post-quantum) tables (default rho=128
+  is classical).  Guard tests added.
+
+--------------------------------------------------------------------------------
+11. BLAKE3 tweakable-hash migration (binius64 PR #1620)                 KKW7
+--------------------------------------------------------------------------------
+  Every IN-CIRCUIT SHA-256 replaced by Th on the raw BLAKE3 compression: fewer
+  nonlinear slots/compression (free message permutation, XOR feedforward, no SHA
+  padding, tweaks in the chaining value).  New 0x03 leaf separator (leaf/tree
+  domains collide under zero-padding otherwise).  Native xmss.c/commitment.c
+  follow the same layouts.  Gate model exact: predicted = measured circuit size
+  (ySize = 73096).  (KKW layer still SHA-256 at this point; see 13.)
+  Binius64 PR #1620 review items S1-S5 mapped: S1 leaf separator (done,
+  superseded by the domain_len binding in 12); S2 chain start<->endpoint
+  binding (present); S3 epoch binding (present); S4 zero-pinned padding (N/A in
+  KKW); S5 nonce widening 6->32 B (not taken, zero circuit cost).
+
+--------------------------------------------------------------------------------
+12. Th hardening + self-describing header                               KKW8
+--------------------------------------------------------------------------------
+  Zero gate cost: (a) cv[7] = domain_len in Th (else Th(D,l) == Th(D||0^k,l+k);
+  domain separation was implicit/fragile); (b) ROOT flag on the final
+  compression (Th was length-extendable at Th("HMd", com)).  Both are strict
+  strengthenings over PR #1620.  (c) SEC_TARGET added to the proof header
+  (hdr 20 -> 24 B).  (d) dead mpc_ADDK removed.  Guard tests in test_blake3.
+
+--------------------------------------------------------------------------------
+13. Full-BLAKE3 KKW layer                                               KKW9
+--------------------------------------------------------------------------------
+  Every remaining SHA-256 (preproc commitments, h'_j, h_out_j, h*, Fiat-Shamir
+  prefix + grinding, challenge PRG, public m_hat) replaced by the same Th, one
+  fixed ASCII domain per call site (KKW_DOM_* in shared.h; 5..9 bytes, never 16
+  = the witness-chosen chain-domain length).  Added an incremental Th context
+  (init/update/final) for the multi-block h'_j preimage; the one-shot Th is
+  reimplemented on top of it, so they cannot diverge.  Preimage layouts
+  unchanged (the old "ppcom" prefix moved into the Th domain).
+  test_blake3 extended: 12-tag domain table (pairwise-distinct cvs + adversarial
+  chain-node + length rule), incremental==one-shot, poisoned-path; frozen KAT.
+  (At this point OpenSSL still provided AES-256-CTR for tapes and RAND_bytes;
+  both removed in 14.)
+
+--------------------------------------------------------------------------------
+14. BLAKE3 keyed-XOF PRG + getentropy: OpenSSL removed        [branch remove-aes]
+    123caaa (PRG), c80ca0a (cmake), 178fe6b (bench)                     KKWP
+--------------------------------------------------------------------------------
+  What : the last non-BLAKE3 primitives are gone.
+         (a) AES-256-CTR (KKW tapes/party-seeds/witness-masks in shared.c, WOTS
+             secret keys in xmss.c) -> the OFFICIAL BLAKE3 keyed XOF
+             (blake3_keyed_xof.c: blake3_hasher_init_keyed(seed) then a
+             length-framed domain), one domain per stream (blake3_keyed_xof.h).
+             WOTS-sk: one XOF call keyed by sk_seed with the leaf index as
+             input, chain i at byte offset 16i (was per-index AES).
+         (b) OpenSSL RAND_bytes -> getentropy (randombytes.c), fail-closed
+             (zero the buffer + return 0 on failure; every caller aborts).
+         (c) src/blake3.{c,h} renamed blake3_th.{c,h} to free the name for the
+             upstream <blake3.h>.  The in-circuit Th (raw compression) is
+             UNCHANGED; only the PRG uses the official full-BLAKE3 library.
+         Build migrated to CMake (root Makefile is now a thin wrapper); the
+         official BLAKE3 is pulled via FetchContent, pinned to 1.8.5
+         (93a431c...).  Proof magic KKW9 -> KKWP.
+  Model: the PRG is keyed by SECRET seeds and never arithmetized, so it adds a
+         standard-model PRF assumption on the keyed XOF alongside the RO on Th
+         (keyed full BLAKE3 vs unkeyed raw compression = different constructions
+         -> no circularity).  Net vs 13: neutral (AES already needed a PRF
+         assumption) but a single primitive family, and no OpenSSL.  getentropy
+         (kernel CSPRNG, blocks until seeded) is a strict trust improvement over
+         userspace RAND_bytes.
+  Safety: test_blake3_keyed_xof (official 1.8.5 vector + frozen KAT for all four
+         PRG domains + separation), test_randombytes; full suite green at
+         N=4/N=8/SEC=256/W=0.
+
+--------------------------------------------------------------------------------
+Attempted and reverted / not taken
+--------------------------------------------------------------------------------
+  * compute_aux_from_seeds streaming restructure: no measurable gain (the gather
+    was already prefetcher-friendly); reverted.
+  * GGM / one-tree seed trees (eprint 2024/490 §3): seed openings are a
+    negligible fraction of our proof (dominated by the online transcript,
+    unlike Picnic/FAEST where seeds dominate).  The paper's grinding idea (7)
+    was the useful part.
+
+--------------------------------------------------------------------------------
+Audit notes
+--------------------------------------------------------------------------------
+  * Binding: h* = H(H(h_j)||H(h')||H(h_out)) commits, before the challenge, to
+    seeds+aux (h_j, aux inside com_{j,0}), the masked witness d and every
+    broadcast stream (h'), and the output-mask shares (h_out).  The verifier's
+    grinding check is mandatory and present.
+  * e2e tamper test: single-byte flips at targeted offsets (nonce, h*, ctr,
+    offline, com_hidden, yp, ke, r_j) must all be rejected.  Writing it exposed
+    a harness bug: the CHECK macro evaluated its condition twice, so e2e ran
+    prove/verify twice (protocol unaffected).
+  * ZK/soundness fixes found during audit: deterministic h'_j broke ZK (fixed
+    in 9); trailing proof bytes were accepted (fixed in 10).
+  * Protocol contracts (see xmss.h / README): XMSS is stateful — each leaf used
+    once, ever (W=2 leaf reuse -> ~2^36 forgery); m_hat = Th("KKWmhat", m) is a
+    required step; pk_seed/pubout/m_hat are out-of-band trust anchors.
+  * Known limitations: raw-struct serialisation is host-endian (proofs not
+    portable across byte order).
+
+--------------------------------------------------------------------------------
+Ideas not (yet) implemented
+--------------------------------------------------------------------------------
+  * Mask-flow aggregation for offline verify: recompute aux/h_out on the
+    XOR-aggregate of the N tapes (one synthetic party) instead of an N-party
+    run -> offline check N-independent (matters at larger N, where it dominates
+    verify).  Correctness validated: aux/h_out consume only XOR-aggregates and
+    the mask flow is F2-linear throughout.  Needs a single-party mask-flow
+    evaluator + a bit-exactness test vs compute_aux_from_seeds.
+================================================================================
