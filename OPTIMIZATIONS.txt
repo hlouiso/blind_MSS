@@ -211,14 +211,4 @@ Audit notes
     required step; pk_seed/pubout/m_hat are out-of-band trust anchors.
   * Known limitations: raw-struct serialisation is host-endian (proofs not
     portable across byte order).
-
---------------------------------------------------------------------------------
-Ideas not (yet) implemented
---------------------------------------------------------------------------------
-  * Mask-flow aggregation for offline verify: recompute aux/h_out on the
-    XOR-aggregate of the N tapes (one synthetic party) instead of an N-party
-    run -> offline check N-independent (matters at larger N, where it dominates
-    verify).  Correctness validated: aux/h_out consume only XOR-aggregates and
-    the mask flow is F2-linear throughout.  Needs a single-party mask-flow
-    evaluator + a bit-exactness test vs compute_aux_from_seeds.
 ================================================================================
