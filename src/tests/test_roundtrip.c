@@ -11,7 +11,7 @@
 #include "../xmss.h"
 #include "../commitment.h"
 
-#include <openssl/rand.h>
+#include "test_rng.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -35,15 +35,15 @@ static void build_witness(unsigned char *input_out, unsigned char *m_hat_out,
     memset(pubout_out, 0, 8 * sizeof(uint32_t));
 
     unsigned char sk_seed[32];
-    RAND_bytes(sk_seed, sizeof sk_seed);
-    RAND_bytes(pk_seed_out, XMSS_PK_SEED_BYTES);
+    test_random_bytes(sk_seed, sizeof sk_seed);
+    test_random_bytes(pk_seed_out, XMSS_PK_SEED_BYTES);
     xmss_node root;
     xmss_compute_root(sk_seed, pk_seed_out, root);
 
     unsigned char r[HM_R_BYTES], a_mat[HM_A_BYTES];
-    RAND_bytes(m_hat_out, 32);
-    RAND_bytes(r, sizeof r);
-    RAND_bytes(a_mat, sizeof a_mat);
+    test_random_bytes(m_hat_out, 32);
+    test_random_bytes(r, sizeof r);
+    test_random_bytes(a_mat, sizeof a_mat);
     unsigned char com[HM_COM_BYTES], d[32];
     hm_commit(m_hat_out, r, a_mat, com, d);
 
@@ -105,7 +105,7 @@ static void test_single_round(void)
     build_witness(input, m_hat, pk_seed, pubout);
 
     unsigned char seed_star[SEED_SIZE];
-    RAND_bytes(seed_star, SEED_SIZE);
+    test_random_bytes(seed_star, SEED_SIZE);
 
     unsigned char seeds[N_PARTIES][SEED_SIZE];
     unsigned char *lam[N_PARTIES], *tapes[N_PARTIES];
@@ -117,7 +117,7 @@ static void test_single_round(void)
     uint32_t *aux   = malloc(ySize * sizeof(uint32_t));
     uint32_t *s_all = malloc((size_t)N_PARTIES * ySize * sizeof(uint32_t));
     unsigned char r_j[32];
-    RAND_bytes(r_j, 32);
+    test_random_bytes(r_j, 32);
     a A;
     uint32_t zh[8];
     run_instance(seed_star, input, m_hat, pk_seed, seeds,
@@ -175,7 +175,7 @@ static void test_preproc_smoke(void)
     printf("--- Test 2: preprocessing smoke (expand/commit/aux/fiat-shamir) ---\n");
 
     unsigned char seed_star[SEED_SIZE];
-    RAND_bytes(seed_star, SEED_SIZE);
+    test_random_bytes(seed_star, SEED_SIZE);
 
     /* expand_seed_star: produces N_PARTIES distinct seeds */
     unsigned char seeds[N_PARTIES][SEED_SIZE];
@@ -255,7 +255,7 @@ static void test_preproc_smoke(void)
 
     /* different seeds → different commitment */
     unsigned char seed_star2[SEED_SIZE];
-    RAND_bytes(seed_star2, SEED_SIZE);
+    test_random_bytes(seed_star2, SEED_SIZE);
     unsigned char seeds3[N_PARTIES][SEED_SIZE];
     expand_seed_star(seed_star2, seeds3);
     uint32_t *aux3 = malloc(ySize * sizeof(uint32_t));
@@ -267,10 +267,10 @@ static void test_preproc_smoke(void)
     /* Fiat-Shamir with grinding: C sorted, distinct, in [0,M_KKW); p in [0,N) */
     unsigned char m_hat[32], h_star[32], pk_seed_fs[XMSS_PK_SEED_BYTES], nonce_fs[32];
     uint32_t pubout[8] = {0};
-    RAND_bytes(m_hat, 32);
-    RAND_bytes(h_star, 32);
-    RAND_bytes(pk_seed_fs, XMSS_PK_SEED_BYTES);
-    RAND_bytes(nonce_fs, 32);
+    test_random_bytes(m_hat, 32);
+    test_random_bytes(h_star, 32);
+    test_random_bytes(pk_seed_fs, XMSS_PK_SEED_BYTES);
+    test_random_bytes(nonce_fs, 32);
     unsigned char h_pre[32], seed_FS[32];
     kkw_fs_prefix(m_hat, pubout, pk_seed_fs, nonce_fs, h_star, h_pre);
     /* Grind until the predicate holds (as the prover does). */
@@ -313,7 +313,7 @@ static void test_tamper(void)
     build_witness(input, m_hat, pk_seed, pubout);
 
     unsigned char seed_star[SEED_SIZE];
-    RAND_bytes(seed_star, SEED_SIZE);
+    test_random_bytes(seed_star, SEED_SIZE);
 
     unsigned char seeds[N_PARTIES][SEED_SIZE];
     unsigned char *lam[N_PARTIES], *tapes[N_PARTIES];

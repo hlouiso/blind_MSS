@@ -1,43 +1,12 @@
 #include "xmss.h"
-#include "blake3.h"
+#include "blake3_th.h"
+#include "blake3_keyed_xof.h"
+#include "randombytes.h"
 
-#include <openssl/evp.h>
-#include <openssl/rand.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* ── Low-level primitives ─────────────────────────────────────────────────── */
-
-/* AES-256-CTR PRF used to derive WOTS+ secret keys from sk_seed.  Same IV
- * scheme as shared.c's aes_ctr_expand (domain byte replicated in iv[0..3],
- * counter in the low bytes).  The 0xA5 domain byte is also used there for
- * tape expansion — safe only because the keys differ (sk_seed here vs. the
- * KKW party seeds there); keep the domains distinct if that ever changes. */
-static void prf_sk(const uint8_t sk_seed[32], uint32_t leaf, uint32_t j, uint8_t out16[XMSS_NODE_BYTES])
-{
-    uint8_t iv[16] = {0};
-    iv[0] = iv[1] = iv[2] = iv[3] = 0xA5;
-    iv[4] = (uint8_t)(leaf >> 24);
-    iv[5] = (uint8_t)(leaf >> 16);
-    iv[6] = (uint8_t)(leaf >> 8);
-    iv[7] = (uint8_t)(leaf);
-    iv[8] = (uint8_t)(j >> 24);
-    iv[9] = (uint8_t)(j >> 16);
-    iv[10] = (uint8_t)(j >> 8);
-    iv[11] = (uint8_t)(j);
-
-    uint8_t zeros[32] = {0};
-    uint8_t full[32] = {0};
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) { memcpy(out16, full, XMSS_NODE_BYTES); return; }
-    int outl = 0, tmplen = 0;
-    int ok = EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, sk_seed, iv) == 1 &&
-             EVP_EncryptUpdate(ctx, full, &outl, zeros, sizeof zeros) == 1 &&
-             EVP_EncryptFinal_ex(ctx, full + outl, &tmplen) == 1;
-    EVP_CIPHER_CTX_free(ctx);
-    if (!ok) memset(full, 0, sizeof full);
-    memcpy(out16, full, XMSS_NODE_BYTES); /* first 16 bytes */
-}
 
 /* ── Tweaked hashes ───────────────────────────────────────────────────────── */
 
@@ -149,8 +118,15 @@ void xmss_extract_coords(const uint8_t *hash, int dimension, int res_bits, uint8
 
 void xmss_wots_gen_sk(const uint8_t sk_seed[32], uint32_t leaf_index, xmss_node sk_out[XMSS_WOTS_LEN])
 {
-    for (int i = 0; i < XMSS_WOTS_LEN; i++)
-        prf_sk(sk_seed, leaf_index, (uint32_t)i, sk_out[i]);
+    uint8_t leaf_be[4] = {
+        (uint8_t)(leaf_index >> 24), (uint8_t)(leaf_index >> 16),
+        (uint8_t)(leaf_index >> 8),  (uint8_t)leaf_index
+    };
+    /* One XOF call produces the chain starts consecutively; the chain index
+     * is therefore bound by its fixed byte offset in this stream. */
+    blake3_keyed_xof(sk_seed, BLAKE3_XOF_DOM_XMSS_WOTS_SK,
+                     leaf_be, sizeof leaf_be,
+                     (uint8_t *)sk_out, sizeof(xmss_node) * XMSS_WOTS_LEN);
 }
 
 void xmss_wots_pk_from_sk(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch,
@@ -275,7 +251,7 @@ static int grind_nonce(const uint8_t pk_seed[XMSS_PK_SEED_BYTES], uint32_t epoch
     for (uint32_t attempt = 0; attempt < (1u << 20); attempt++)
     {
         uint8_t nonce[XMSS_NONCE_LEN];
-        if (RAND_bytes(nonce, XMSS_NONCE_LEN) != 1)
+        if (!randombytes_fill(nonce, sizeof nonce))
             return 0;
         uint8_t mh[32];
         xmss_hash_message(pk_seed, epoch, nonce, XMSS_NONCE_LEN, message, message_len, mh);

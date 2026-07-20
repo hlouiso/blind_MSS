@@ -1,10 +1,7 @@
-/* Standalone self-test for the native target-sum WOTS+/XMSS module.
- * Build:  clang -O2 -Wall -Wextra -I/opt/homebrew/opt/openssl/include \
- *            xmss.c test_xmss.c -L/opt/homebrew/opt/openssl/lib -lcrypto -o test_xmss
- */
+/* Self-test for the native target-sum WOTS+/XMSS module (`make test`). */
 #include "xmss.h"
 
-#include <openssl/rand.h>
+#include "test_rng.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -25,8 +22,8 @@ int main(void)
 {
     uint8_t sk_seed[32];
     uint8_t pk_seed[XMSS_PK_SEED_BYTES];
-    RAND_bytes(sk_seed, sizeof sk_seed);
-    RAND_bytes(pk_seed, sizeof pk_seed);
+    test_random_bytes(sk_seed, sizeof sk_seed);
+    test_random_bytes(pk_seed, sizeof pk_seed);
 
     /* --- determinism of keygen --- */
     xmss_node root1, root2;
@@ -39,6 +36,18 @@ int main(void)
         nonzero |= root1[i];
     CHECK(nonzero != 0, "root is non-zero");
 
+    /* --- deterministic, leaf-separated WOTS secret-key expansion --- */
+    {
+        xmss_node sk_a[XMSS_WOTS_LEN], sk_b[XMSS_WOTS_LEN], sk_c[XMSS_WOTS_LEN];
+        xmss_wots_gen_sk(sk_seed, 7, sk_a);
+        xmss_wots_gen_sk(sk_seed, 7, sk_b);
+        xmss_wots_gen_sk(sk_seed, 8, sk_c);
+        CHECK(memcmp(sk_a, sk_b, sizeof sk_a) == 0,
+              "WOTS secret-key expansion is deterministic");
+        CHECK(memcmp(sk_a, sk_c, sizeof sk_a) != 0,
+              "WOTS secret-key expansion separates leaf indices");
+    }
+
     /* --- WOTS+ chain consistency: pk_from_sig(sign(sk,c),c) == pk_from_sk(sk) --- */
     {
         xmss_node sk[XMSS_WOTS_LEN], sig[XMSS_WOTS_LEN], pk_a[XMSS_WOTS_LEN], pk_b[XMSS_WOTS_LEN];
@@ -48,7 +57,7 @@ int main(void)
         for (int i = 0; i < XMSS_WOTS_LEN; i++)
         {
             uint8_t r;
-            RAND_bytes(&r, 1);
+            test_random_bytes(&r, 1);
             coords[i] = r & (uint8_t)(XMSS_WOTS_W - 1);
         }
         xmss_wots_sign(pk_seed, epoch, sk, coords, sig);
@@ -63,7 +72,7 @@ int main(void)
     for (size_t t = 0; t < sizeof leaves / sizeof leaves[0]; t++)
     {
         uint8_t msg[32];
-        RAND_bytes(msg, sizeof msg);
+        test_random_bytes(msg, sizeof msg);
         xmss_sig sig;
         int ok = xmss_sign(sk_seed, pk_seed, leaves[t], msg, sizeof msg, &sig);
         if (!ok)
@@ -90,7 +99,7 @@ int main(void)
     /* --- negative tests --- */
     {
         uint8_t msg[32];
-        RAND_bytes(msg, sizeof msg);
+        test_random_bytes(msg, sizeof msg);
         xmss_sig sig;
         if (!xmss_sign(sk_seed, pk_seed, 42, msg, sizeof msg, &sig))
         {

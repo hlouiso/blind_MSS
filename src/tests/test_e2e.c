@@ -16,7 +16,7 @@
 #include "../shared.h"
 #include "../xmss.h"
 
-#include <openssl/rand.h>
+#include "test_rng.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,16 +38,16 @@ static void run_parties(unsigned char input[W_END], unsigned char m_hat[32],
 {
     /* ── Signer: key generation ── */
     unsigned char sk_seed[32];
-    RAND_bytes(sk_seed, 32);
-    RAND_bytes(pk_seed, XMSS_PK_SEED_BYTES);
+    test_random_bytes(sk_seed, 32);
+    test_random_bytes(pk_seed, XMSS_PK_SEED_BYTES);
     xmss_node root;
     xmss_compute_root(sk_seed, pk_seed, root);
 
     /* ── Client: blind the message into a Halevi–Micali commitment ── */
-    RAND_bytes(m_hat, 32);
+    test_random_bytes(m_hat, 32);
     unsigned char r[HM_R_BYTES], a_mat[HM_A_BYTES];
-    RAND_bytes(r, sizeof r);
-    RAND_bytes(a_mat, sizeof a_mat);
+    test_random_bytes(r, sizeof r);
+    test_random_bytes(a_mat, sizeof a_mat);
     unsigned char com[HM_COM_BYTES], d[32];
     hm_commit(m_hat, r, a_mat, com, d);
 
@@ -130,7 +130,7 @@ int main(void)
         offsets[n_off++] = plen - 16;              /* r_j of the last round   */
         for (int i = 0; i < 5; i++) {              /* random online bytes     */
             uint32_t rnd;
-            RAND_bytes((unsigned char *)&rnd, 4);
+            test_random_bytes((unsigned char *)&rnd, 4);
             offsets[n_off++] = online_off + (long)(rnd % (uint32_t)(plen - online_off));
         }
 

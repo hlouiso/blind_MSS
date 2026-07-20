@@ -1,4 +1,4 @@
-#include "blake3.h"
+#include "blake3_th.h"
 
 #include <string.h>
 
@@ -77,7 +77,7 @@ void blake3_th_init(blake3_th_ctx *ctx, const uint8_t *domain, size_t domain_len
     ctx->poisoned = (domain_len > 28);
     if (ctx->poisoned) { memset(ctx->cv, 0, sizeof ctx->cv); return; }
     load_words_le(domain, domain_len, ctx->cv, 8);
-    ctx->cv[7] = (uint32_t)domain_len; /* binds the domain length (see blake3.h) */
+    ctx->cv[7] = (uint32_t)domain_len; /* binds domain length; see blake3_th.h */
 }
 
 void blake3_th_update(blake3_th_ctx *ctx, const void *data, size_t len)

@@ -1,44 +1,74 @@
-# Root Makefile — the build lives in src/; this just delegates to it.
-#
-# The project builds a single static library, libblindmss.a, plus an in-memory
-# regression test suite and two benchmark programs.  The build options
-#   N=<N>          parties (multiple of 4 in {4..32}, or 64/128/256; default 4)
-#   W=<W>          Fiat-Shamir grinding bits (0, 16 [default], 24)
-#   SEC=<128|256>  security target (128 classical [default], 256 post-quantum)
-# are command-line variables, so `make N=8 SEC=256` propagates them to src/.
+# Compatibility wrapper around the CMake build. CMakeLists.txt is the single
+# source of truth; these targets preserve the project's established commands.
 
-.PHONY: all lib test bench bench-pipeline clean help
+CMAKE ?= cmake
+N ?= 4
+W ?= 16
+SEC ?= 128
+BENCH_ITERS ?= 100
+PIPELINE_ITERS ?= 100
+BUILD_DIR = build/n$(N)-w$(W)-sec$(SEC)
+BENCH_NS := 4 8 16 32 64
 
-all lib:
-	$(MAKE) -C src lib
+CMAKE_CONFIGURE = $(CMAKE) -S . -B $(BUILD_DIR) \
+	-DBLIND_MSS_N=$(N) \
+	-DBLIND_MSS_GRIND_W=$(W) \
+	-DBLIND_MSS_SEC=$(SEC) \
+	-DBLIND_MSS_BENCH_ITERS=$(BENCH_ITERS) \
+	-DBLIND_MSS_PIPELINE_ITERS=$(PIPELINE_ITERS) \
+	$(CMAKE_ARGS)
 
-# Build and run the regression tests in src/tests/.
-test:
-	$(MAKE) -C src test
+.PHONY: all lib test bench bench-bin bench_bin bench-pipeline \
+	bench-pipeline-bin bench_pipeline_bin configure clean help _bench-build
 
-# Benchmark all supported N values (one result row per N).
+all: lib
+
+configure:
+	$(CMAKE_CONFIGURE)
+
+lib: configure
+	$(CMAKE) --build $(BUILD_DIR) --target blindmss --parallel
+
+test: configure
+	$(CMAKE) --build $(BUILD_DIR) --target check --parallel
+
+_bench-build: configure
+	$(CMAKE) --build $(BUILD_DIR) --target bench_bin --parallel
+
+bench-bin bench_bin: _bench-build
+
+# Run the full benchmark for the historical N = 4,8,16,32,64 matrix.
 bench:
-	$(MAKE) -C src bench
+	@$(MAKE) --no-print-directory N=4 _bench-build
+	@build/n4-w$(W)-sec$(SEC)/bench_bin --header
+	@for n in $(BENCH_NS); do \
+		$(MAKE) --no-print-directory N=$$n _bench-build; \
+		build/n$$n-w$(W)-sec$(SEC)/bench_bin; \
+	done
 
-# Full-pipeline benchmark (commitment / sign / prove / verify) for one N.
-bench-pipeline:
-	$(MAKE) -C src bench-pipeline
+bench-pipeline-bin bench_pipeline_bin: configure
+	$(CMAKE) --build $(BUILD_DIR) --target bench_pipeline_bin --parallel
 
-# Remove all build products (src/*.o, the library, benchmark and test binaries).
+bench-pipeline: bench-pipeline-bin
+	$(BUILD_DIR)/bench_pipeline_bin
+
 clean:
-	$(MAKE) -C src clean
+	$(CMAKE) -E remove_directory build
 
 help:
 	@echo "Usage: make <target> [N=<N>] [W=<W>] [SEC=<128|256>]"
 	@echo
 	@echo "Targets:"
-	@echo "  make            Build the static library libblindmss.a (default N=4)"
-	@echo "  test            Build and run the regression tests in src/tests/"
-	@echo "  bench           Benchmark all supported N values"
-	@echo "  bench-pipeline  Full-pipeline benchmark for one N"
-	@echo "  clean           Remove build products"
+	@echo "  make            Build libblindmss.a"
+	@echo "  test            Build and run the regression suite"
+	@echo "  bench           Benchmark N = 4,8,16,32,64"
+	@echo "  bench-bin       Build one benchmark executable"
+	@echo "  bench-pipeline-bin  Build the pipeline benchmark executable"
+	@echo "  bench-pipeline  Run the full-pipeline benchmark"
+	@echo "  clean           Remove the CMake build tree"
 	@echo
 	@echo "Options:"
-	@echo "  N=<N>           Parties: multiple of 4 in {4..32}, or 64, 128, 256 (default 4)"
-	@echo "  W=<W>           Fiat-Shamir grinding bits: 0, 16 (default), 24"
-	@echo "  SEC=<128|256>   Security target: 128 classical (default), 256 post-quantum"
+	@echo "  N=<N>           Parties: 4,8,...,32,64,128,256 (default 4)"
+	@echo "  W=<W>           Grinding bits: 0,16,24 (default 16)"
+	@echo "  SEC=<128|256>   Security target (default 128)"
+	@echo "  CMAKE_ARGS=...  Additional CMake configuration arguments"

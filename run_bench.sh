@@ -15,6 +15,7 @@
 #
 # Optional environment:
 #   OUT=/path/results.txt ./run_bench.sh 8 100   # choose the results file
+#   KEEP_BUILD=1          ./run_bench.sh 8 100   # retain the CMake build tree
 #   SHUTDOWN=1            ./run_bench.sh 64 100   # power off when finished
 #                                                 # (needs passwordless sudo)
 
@@ -54,19 +55,23 @@ echo "Pipeline benchmark — players=[$PLAYERS], loops=$LOOPS — $(date)" >> "$
 echo >> "$OUT"
 
 # ── Run ─────────────────────────────────────────────────────────────────────
-cd "$SCRIPT_DIR/src"
+cd "$SCRIPT_DIR"
+BENCH_BUILD_DIR="$SCRIPT_DIR/build/pipeline-bench"
 for n in $PLAYERS; do
     echo ">>> N=$n ($LOOPS iterations) ..." >&2
-    make --no-print-directory N="$n" PIPELINE_ITERS="$LOOPS" bench_pipeline_bin 2>/dev/null
+    make --no-print-directory N="$n" PIPELINE_ITERS="$LOOPS" \
+        BUILD_DIR="$BENCH_BUILD_DIR" bench_pipeline_bin
     start=$(date +%s)
-    ./bench_pipeline_bin >> "$OUT"
+    "$BENCH_BUILD_DIR/bench_pipeline_bin" >> "$OUT"
     end=$(date +%s)
     echo "  (wall time for the N=$n run: $((end - start)) s)" >> "$OUT"
     echo >> "$OUT"
 done
 
 echo "Done — $(date)" >> "$OUT"
-make --no-print-directory clean >/dev/null 2>&1 || true
+if [ "${KEEP_BUILD:-0}" != "1" ]; then
+    make --no-print-directory clean >/dev/null 2>&1 || true
+fi
 sync
 
 echo "" >&2

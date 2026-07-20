@@ -1,5 +1,5 @@
 /* bench.c — KKW end-to-end benchmark
- * Build via Makefile: make N=<N> bench_bin
+ * Build via Makefile: make N=<N> bench-bin
  * Run all N values:   make bench
  *
  * For each compiled N: runs BENCH_ITERS prove+verify pairs, records wall time
@@ -14,10 +14,11 @@
 #include "commitment.h"
 #include "kkw_prove.h"
 #include "kkw_verify.h"
+#include "randombytes.h"
 #include "shared.h"
 #include "xmss.h"
 
-#include <openssl/rand.h>
+#include <errno.h>
 #include <omp.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,6 +32,14 @@
 #ifndef BENCH_ITERS
 #define BENCH_ITERS 100
 #endif
+
+static void random_or_die(void *buffer, size_t length)
+{
+    if (!randombytes_fill(buffer, length)) {
+        fprintf(stderr, "OS random generator failed: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+}
 
 /* ── timing helpers ─────────────────────────────────────────────────────── */
 
@@ -108,20 +117,23 @@ static void build_witness(unsigned char *input,
                           uint32_t pubout[8])
 {
     unsigned char sk_seed[32];
-    RAND_bytes(sk_seed, 32);
-    RAND_bytes(pk_seed, XMSS_PK_SEED_BYTES);
+    random_or_die(sk_seed, 32);
+    random_or_die(pk_seed, XMSS_PK_SEED_BYTES);
     xmss_node root;
     xmss_compute_root(sk_seed, pk_seed, root);
 
-    RAND_bytes(m_hat, 32);
+    random_or_die(m_hat, 32);
     unsigned char r[HM_R_BYTES], a_mat[HM_A_BYTES];
-    RAND_bytes(r, sizeof r);
-    RAND_bytes(a_mat, sizeof a_mat);
+    random_or_die(r, sizeof r);
+    random_or_die(a_mat, sizeof a_mat);
     unsigned char com[HM_COM_BYTES], d[32];
     hm_commit(m_hat, r, a_mat, com, d);
 
     xmss_sig sig;
-    xmss_sign(sk_seed, pk_seed, 0, d, 32, &sig);
+    if (!xmss_sign(sk_seed, pk_seed, 0, d, 32, &sig)) {
+        fprintf(stderr, "xmss_sign failed while building the benchmark witness\n");
+        exit(EXIT_FAILURE);
+    }
 
     memcpy(input + W_R_OFF,   r,     HM_R_BYTES);
     memcpy(input + W_A_OFF,   a_mat, HM_A_BYTES);

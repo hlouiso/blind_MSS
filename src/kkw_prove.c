@@ -1,9 +1,10 @@
 #include "kkw_prove.h"
 #include "circuits.h"
 #include "commitment.h"
+#include "randombytes.h"
 #include "shared.h"
 
-#include <openssl/rand.h>
+#include <errno.h>
 #include <omp.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -78,14 +79,13 @@ int kkw_prove(const unsigned char *input,
      * deliberately NOT derived from seed_star: seed*_j is published for
      * opened instances, and a seed-derived r_j would make h'_j an offline-
      * checkable deterministic commitment to the witness (no ZK). */
-    for (int j = 0; j < M_KKW; j++) {
-        if (RAND_bytes(seed_stars[j], SEED_SIZE) != 1 ||
-            RAND_bytes(r_all[j], 32) != 1) {
-            fprintf(stderr, "kkw_prove: RAND_bytes failed\n");
-            free(seed_stars); free(r_all);
-            free(h_j_all); free(h_prime_all); free(h_out_all);
-            return -1;
-        }
+    if (!randombytes_fill(seed_stars, (size_t)M_KKW * SEED_SIZE) ||
+        !randombytes_fill(r_all, (size_t)M_KKW * 32)) {
+        fprintf(stderr, "kkw_prove: OS random generator failed: %s\n",
+                strerror(errno));
+        free(seed_stars); free(r_all);
+        free(h_j_all); free(h_prime_all); free(h_out_all);
+        return -1;
     }
 
     /* ── Per-thread scratch, reused across instances in both passes ──────── */
@@ -181,8 +181,9 @@ int kkw_prove(const unsigned char *input,
 
     /* ── Nonce (per-proof random salt) ──────────────────────────────────── */
     unsigned char nonce[32];
-    if (RAND_bytes(nonce, 32) != 1) {
-        fprintf(stderr, "kkw_prove: RAND_bytes failed (nonce)\n");
+    if (!randombytes_fill(nonce, sizeof nonce)) {
+        fprintf(stderr, "kkw_prove: OS random generator failed (nonce): %s\n",
+                strerror(errno));
         free_scratch(nthreads, xbufs, tbufs, auxbufs, sbufs, dbufs);
         free(seed_stars); free(r_all);
         free(h_j_all); free(h_prime_all); free(h_out_all);
@@ -276,11 +277,10 @@ int kkw_prove(const unsigned char *input,
     {
         bool write_ok = true;
 
-        /* Header: magic "KKW9" + N + M + tau + ySize + GRIND_W + SEC_TARGET
-         * (uint32_t, native byte order), then nonce, h*, and the grinding
-         * counter ctr.  KKW9 = the full-BLAKE3 KKW layer (proofs are not
-         * compatible with the SHA-256 KKW8 format). */
-        const unsigned char magic[4] = {'K','K','W','9'};
+        /* Header: non-versioned magic "KKWP" + N + M + tau + ySize +
+         * GRIND_W + SEC_TARGET (uint32_t, native byte order), then nonce,
+         * h*, and the grinding counter ctr. */
+        const unsigned char magic[4] = {'K','K','W','P'};
         uint32_t hdr[6] = { (uint32_t)N_PARTIES, (uint32_t)M_KKW,
                              (uint32_t)NUM_ROUNDS, (uint32_t)ySize,
                              (uint32_t)GRIND_W, (uint32_t)SEC_TARGET };
